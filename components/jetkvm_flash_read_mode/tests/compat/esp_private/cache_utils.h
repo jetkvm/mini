@@ -1,0 +1,3 @@
+#pragma once
+void spi_flash_disable_interrupts_caches_and_other_cpu(void);
+void spi_flash_enable_interrupts_caches_and_other_cpu(void);

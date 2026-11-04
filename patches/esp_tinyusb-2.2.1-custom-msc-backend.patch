@@ -1,0 +1,59 @@
+diff --git a/managed_components/espressif__esp_tinyusb/CMakeLists.txt b/managed_components/espressif__esp_tinyusb/CMakeLists.txt
+index cca621d..ab4f9f1 100644
+--- a/managed_components/espressif__esp_tinyusb/CMakeLists.txt
++++ b/managed_components/espressif__esp_tinyusb/CMakeLists.txt
+@@ -33,7 +33,7 @@ if(CONFIG_TINYUSB_CDC_ENABLED)
+     endif() # CONFIG_VFS_SUPPORT_IO
+ endif() # CONFIG_TINYUSB_CDC_ENABLED
+ 
+-if(CONFIG_TINYUSB_MSC_ENABLED)
++if(CONFIG_TINYUSB_MSC_ENABLED AND NOT CONFIG_TINYUSB_MSC_CUSTOM_BACKEND)
+     list(APPEND srcs
+         "tinyusb_msc.c"
+         "storage_spiflash.c"
+diff --git a/managed_components/espressif__esp_tinyusb/Kconfig b/managed_components/espressif__esp_tinyusb/Kconfig
+index 12342ec..93fcb2b 100644
+--- a/managed_components/espressif__esp_tinyusb/Kconfig
++++ b/managed_components/espressif__esp_tinyusb/Kconfig
+@@ -133,6 +133,14 @@ menu "TinyUSB"
+             help
+                 Enable TinyUSB MSC feature.
+ 
++        config TINYUSB_MSC_CUSTOM_BACKEND
++            depends on TINYUSB_MSC_ENABLED
++            bool "Application provides TinyUSB MSC callbacks"
++            default n
++            help
++                Compile the TinyUSB MSC class but omit esp_tinyusb's whole-media
++                SD/flash backend. The application must provide tud_msc_* callbacks.
++
+         config TINYUSB_MSC_BUFSIZE
+             depends on TINYUSB_MSC_ENABLED
+             int "MSC FIFO size"
+diff --git a/managed_components/espressif__esp_tinyusb/tinyusb.c b/managed_components/espressif__esp_tinyusb/tinyusb.c
+index 6625125..9c4666c 100644
+--- a/managed_components/espressif__esp_tinyusb/tinyusb.c
++++ b/managed_components/espressif__esp_tinyusb/tinyusb.c
+@@ -14,7 +14,7 @@
+ #include "tinyusb_vbus_monitor.h"
+ #include "tusb.h"
+ 
+-#if (CONFIG_TINYUSB_MSC_ENABLED)
++#if (CONFIG_TINYUSB_MSC_ENABLED && !CONFIG_TINYUSB_MSC_CUSTOM_BACKEND)
+ #include "tinyusb_msc.h"
+ #include "msc_storage.h"
+ #endif // CONFIG_TINYUSB_MSC_ENABLED
+@@ -53,5 +53,5 @@ void tud_mount_cb(void)
+ {
+-#if (CONFIG_TINYUSB_MSC_ENABLED)
++#if (CONFIG_TINYUSB_MSC_ENABLED && !CONFIG_TINYUSB_MSC_CUSTOM_BACKEND)
+     msc_storage_mount_to_usb();
+ #endif // CONFIG_TINYUSB_MSC_ENABLED
+     tinyusb_event_t event = {
+@@ -76,5 +76,5 @@ void tud_umount_cb(void)
+ {
+-#if (CONFIG_TINYUSB_MSC_ENABLED)
++#if (CONFIG_TINYUSB_MSC_ENABLED && !CONFIG_TINYUSB_MSC_CUSTOM_BACKEND)
+     msc_storage_mount_to_app();
+ #endif // CONFIG_TINYUSB_MSC_ENABLED
+     tinyusb_event_t event = {

@@ -1,0 +1,77 @@
+diff --git a/managed_components/espressif__esp_websocket_client/CMakeLists.txt b/managed_components/espressif__esp_websocket_client/CMakeLists.txt
+index d19a10d..4e60735 100644
+--- a/managed_components/espressif__esp_websocket_client/CMakeLists.txt
++++ b/managed_components/espressif__esp_websocket_client/CMakeLists.txt
+@@ -12,10 +12,10 @@ if(${IDF_TARGET} STREQUAL "linux")
+ 	idf_component_register(SRCS "esp_websocket_client.c"
+                     INCLUDE_DIRS "include"
+                     REQUIRES esp-tls tcp_transport http_parser esp_event
+-                    PRIV_REQUIRES esp_timer)
++                    PRIV_REQUIRES esp_timer heap)
+ else()
+     idf_component_register(SRCS "esp_websocket_client.c"
+                     INCLUDE_DIRS "include"
+                     REQUIRES lwip esp-tls tcp_transport http_parser esp_event
+-                    PRIV_REQUIRES esp_timer)
++                    PRIV_REQUIRES esp_timer heap)
+ endif()
+diff --git a/managed_components/espressif__esp_websocket_client/esp_websocket_client.c b/managed_components/espressif__esp_websocket_client/esp_websocket_client.c
+index 6a6bfcb..644d5e0 100644
+--- a/managed_components/espressif__esp_websocket_client/esp_websocket_client.c
++++ b/managed_components/espressif__esp_websocket_client/esp_websocket_client.c
+@@ -12,11 +12,13 @@
+ #include "esp_transport_ssl.h"
+ /* using uri parser */
+ #include "http_parser.h"
++#include "freertos/idf_additions.h"
+ #include "freertos/task.h"
+ #include "freertos/semphr.h"
+ #include "freertos/queue.h"
+ #include "freertos/event_groups.h"
+ #include "esp_log.h"
++#include "esp_heap_caps.h"
+ #include "esp_timer.h"
+ #include "esp_tls_crypto.h"
+ #include "esp_system.h"
+@@ -1168,7 +1170,6 @@ static void esp_websocket_client_task(void *pv)
+ {
+     const int lock_timeout = portMAX_DELAY;
+     esp_websocket_client_handle_t client = (esp_websocket_client_handle_t) pv;
+-    client->run = true;
+ 
+     //get transport by scheme
+     if (client->transport == NULL && client->config->ext_transport == NULL) {
+@@ -1450,7 +1451,7 @@ static void esp_websocket_client_task(void *pv)
+     } else {
+         xEventGroupSetBits(client->status_bits, STOPPED_BIT);
+     }
+-    vTaskDelete(NULL);
++    vTaskDeleteWithCaps(NULL);
+ }
+ 
+ esp_err_t esp_websocket_client_start(esp_websocket_client_handle_t client)
+@@ -1471,9 +1472,13 @@ esp_err_t esp_websocket_client_start(esp_websocket_client_handle_t client)
+         }
+     }
+ 
++    /* Publish run before task creation so an immediate stop cannot be lost. */
+     xEventGroupClearBits(client->status_bits, STOPPED_BIT | CLOSE_FRAME_SENT_BIT | REQUESTED_STOP_BIT | WAKEUP_BIT);
+-    if (xTaskCreatePinnedToCore(esp_websocket_client_task, client->config->task_name ? client->config->task_name : "websocket_task",
+-                                client->config->task_stack, client, client->config->task_prio, &client->task_handle, client->config->task_core_id) != pdTRUE) {
++    client->run = true;
++    if (xTaskCreatePinnedToCoreWithCaps(esp_websocket_client_task, client->config->task_name ? client->config->task_name : "websocket_task",
++                                        client->config->task_stack, client, client->config->task_prio, &client->task_handle,
++                                        client->config->task_core_id, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdTRUE) {
++        client->run = false;
+         ESP_LOGE(TAG, "Error create websocket task");
+         xEventGroupSetBits(client->status_bits, STOPPED_BIT);
+         return ESP_FAIL;
+@@ -1490,7 +1495,7 @@ esp_err_t esp_websocket_client_stop(esp_websocket_client_handle_t client)
+ 
+     if (xEventGroupGetBits(client->status_bits) & STOPPED_BIT) {
+         ESP_LOGW(TAG, "Client was not started");
+-        return ESP_FAIL;
++        return ESP_ERR_INVALID_STATE;
+     }
+ 
+     return stop_wait_task(client);

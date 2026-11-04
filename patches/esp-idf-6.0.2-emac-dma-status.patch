@@ -1,0 +1,115 @@
+From b5fb8a6d79ef85d3a2bcf74cd613156896ff3e4a Mon Sep 17 00:00:00 2001
+From: Ondrej Kosta <ondrej.kosta@espressif.com>
+Date: Wed, 19 Aug 2026 10:38:46 +0200
+Subject: [PATCH] fix(emac): correct DMA status interrupt bit masks
+
+Align fatal-bus-error through normal-summary status flags with
+dmastatus bit positions, and fix the FATAL_BUS_ERROR typo.
+---
+ components/esp_eth/Kconfig                       | 4 +++-
+ components/esp_eth/src/mac/esp_eth_mac_esp_dma.c | 9 ++++++++-
+ components/hal/esp32/include/hal/emac_ll.h       | 8 ++++----
+ components/hal/esp32p4/include/hal/emac_ll.h     | 8 ++++----
+ 4 files changed, 19 insertions(+), 10 deletions(-)
+
+diff --git a/components/esp_eth/Kconfig b/components/esp_eth/Kconfig
+index 1a83f8308144..d333fde3412b 100644
+--- a/components/esp_eth/Kconfig
++++ b/components/esp_eth/Kconfig
+@@ -19,7 +19,9 @@ menu "Ethernet"
+             default 512
+             help
+                 Set the size of each buffer used by Ethernet MAC DMA.
+-                !! Important !! Make sure it is 64B aligned for ESP32P4!
++                On targets where internal RAM is accessed through L1 cache (ESP32-P4),
++                this size must be a multiple of the cache line size (64 bytes), e.g.
++                256, 512, 1536.
+ 
+         config ETH_DMA_RX_BUFFER_NUM
+             int "Amount of Ethernet DMA Rx buffers"
+diff --git a/components/esp_eth/src/mac/esp_eth_mac_esp_dma.c b/components/esp_eth/src/mac/esp_eth_mac_esp_dma.c
+index 760145948af2..11b348710b64 100644
+--- a/components/esp_eth/src/mac/esp_eth_mac_esp_dma.c
++++ b/components/esp_eth/src/mac/esp_eth_mac_esp_dma.c
+@@ -5,6 +5,7 @@
+  */
+ 
+ #include "esp_check.h"
++#include "esp_assert.h"
+ #include "sdkconfig.h"
+ #include "soc/soc_caps.h"
+ #include "esp_cache.h"
+@@ -41,6 +42,11 @@
+ #define DMA_CACHE_INVALIDATE(addr, size)
+ #endif
+ 
++#if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
++ESP_STATIC_ASSERT((CONFIG_ETH_DMA_BUFFER_SIZE % CONFIG_CACHE_L1_CACHE_LINE_SIZE) == 0,
++                  "CONFIG_ETH_DMA_BUFFER_SIZE must be a multiple of the L1 cache line size");
++#endif
++
+ static const char *TAG = "esp.emac.dma";
+ 
+ struct emac_esp_dma_t {
+@@ -315,6 +321,7 @@ uint32_t emac_esp_dma_transmit_frame_ext(emac_esp_dma_handle_t emac_esp_dma, ema
+ 
+ static esp_err_t emac_esp_dma_get_valid_recv_len(emac_esp_dma_handle_t emac_esp_dma, uint32_t *ret_len)
+ {
++    *ret_len = 0;
+     eth_dma_rx_descriptor_t *desc_iter = emac_esp_dma->rx_desc;
+     uint32_t used_descs = 0;
+     DMA_CACHE_INVALIDATE(desc_iter, EMAC_HAL_DMA_DESC_SIZE);
+@@ -328,7 +335,6 @@ static esp_err_t emac_esp_dma_get_valid_recv_len(emac_esp_dma_handle_t emac_esp_
+             /* In addition, "Descriptor Error" (no free descriptors) may truncate a frame even if Store Forward is enabled */
+             if (desc_iter->RDES0.ErrSummary) {
+                 emac_esp_dma_flush_recv_frame(emac_esp_dma);
+-                *ret_len = 0;
+                 return ESP_FAIL;
+             }
+             /* Get the Frame Length of the received packet: substruct 4 bytes of the CRC */
+@@ -470,6 +476,7 @@ void emac_esp_dma_flush_recv_frame(emac_esp_dma_handle_t emac_esp_dma)
+         desc_iter->RDES0.Own = EMAC_LL_DMADESC_OWNER_DMA;
+         DMA_CACHE_WB(desc_iter, EMAC_HAL_DMA_DESC_SIZE);
+         desc_iter = (eth_dma_rx_descriptor_t *)(desc_iter->Buffer2NextDescAddr);
++        DMA_CACHE_INVALIDATE(desc_iter, EMAC_HAL_DMA_DESC_SIZE);
+     }
+     /* the last descriptor */
+     desc_iter->RDES0.Own = EMAC_LL_DMADESC_OWNER_DMA;
+diff --git a/components/hal/esp32/include/hal/emac_ll.h b/components/hal/esp32/include/hal/emac_ll.h
+index 0dd179583c9c..a148f1f78832 100644
+--- a/components/hal/esp32/include/hal/emac_ll.h
++++ b/components/hal/esp32/include/hal/emac_ll.h
+@@ -104,10 +104,10 @@ extern "C" {
+ #define EMAC_LL_DMA_RECEIVE_STOP_INTR                  0x00000100U
+ #define EMAC_LL_DMA_RECEIVE_TIMEOUT_INTR               0x00000200U
+ #define EMAC_LL_DMA_TRANSMIT_FIRST_BYTE_INTR           0x00000400U
+-#define EMAC_LL_DMA_FATAL_BUS_ERROR_INRT               0x00001000U
+-#define EMAC_LL_DMA_RECEIVE_FIRST_BYTE_INTR            0x00002000U
+-#define EMAC_LL_DMA_ABNORMAL_INTR_SUMMARY              0x00004000U
+-#define EMAC_LL_DMA_NORMAL_INTR_SUMMARY                0x00008000U
++#define EMAC_LL_DMA_FATAL_BUS_ERROR_INTR               0x00002000U
++#define EMAC_LL_DMA_RECEIVE_FIRST_BYTE_INTR            0x00004000U
++#define EMAC_LL_DMA_ABNORMAL_INTR_SUMMARY              0x00008000U
++#define EMAC_LL_DMA_NORMAL_INTR_SUMMARY                0x00010000U
+ #define EMAC_LL_DMA_POWER_MANAGE_INTR                  0x10000000U
+ #define EMAC_LL_DMA_TIMESTAMP_TRIGGER_INTR             0x20000000U
+ 
+diff --git a/components/hal/esp32p4/include/hal/emac_ll.h b/components/hal/esp32p4/include/hal/emac_ll.h
+index d910b0921c9a..f70e1cec81e2 100644
+--- a/components/hal/esp32p4/include/hal/emac_ll.h
++++ b/components/hal/esp32p4/include/hal/emac_ll.h
+@@ -112,10 +112,10 @@ extern "C" {
+ #define EMAC_LL_DMA_RECEIVE_STOP_INTR                  0x00000100U
+ #define EMAC_LL_DMA_RECEIVE_TIMEOUT_INTR               0x00000200U
+ #define EMAC_LL_DMA_TRANSMIT_FIRST_BYTE_INTR           0x00000400U
+-#define EMAC_LL_DMA_FATAL_BUS_ERROR_INRT               0x00001000U
+-#define EMAC_LL_DMA_RECEIVE_FIRST_BYTE_INTR            0x00002000U
+-#define EMAC_LL_DMA_ABNORMAL_INTR_SUMMARY              0x00004000U
+-#define EMAC_LL_DMA_NORMAL_INTR_SUMMARY                0x00008000U
++#define EMAC_LL_DMA_FATAL_BUS_ERROR_INTR               0x00002000U
++#define EMAC_LL_DMA_RECEIVE_FIRST_BYTE_INTR            0x00004000U
++#define EMAC_LL_DMA_ABNORMAL_INTR_SUMMARY              0x00008000U
++#define EMAC_LL_DMA_NORMAL_INTR_SUMMARY                0x00010000U
+ #define EMAC_LL_DMA_POWER_MANAGE_INTR                  0x10000000U
+ #define EMAC_LL_DMA_TIMESTAMP_TRIGGER_INTR             0x20000000U
+ 

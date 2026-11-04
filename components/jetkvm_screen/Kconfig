@@ -1,0 +1,35 @@
+menu "JetKVM screen"
+
+choice JETKVM_SCREEN_ROTATION
+    prompt "Display hardware rotation"
+    default JETKVM_SCREEN_ROTATION_0
+    help
+        Rotate the ST7789 display in hardware. This changes the controller's
+        MADCTL bits and GRAM window; it does not rotate pixels in software.
+
+config JETKVM_SCREEN_ROTATION_0
+    bool "0 degrees"
+
+config JETKVM_SCREEN_ROTATION_90
+    bool "90 degrees clockwise"
+
+config JETKVM_SCREEN_ROTATION_180
+    bool "180 degrees"
+
+config JETKVM_SCREEN_ROTATION_270
+    bool "270 degrees clockwise"
+
+endchoice
+
+config JETKVM_SCREEN_BUTTONS
+    bool "Drive the local UI with the SW2 and SW3 push buttons"
+    default n
+    help
+        The two push buttons beside the panel navigate the local display.
+        The upper button (SW3) goes back; the lower button (SW2) steps down
+        or scrolls on a tap and accepts on a hold. The confirmation screens
+        keep their hold countdown on the lower button. While this is enabled
+        the video component leaves SW3 alone, so the button does not toggle
+        the HDMI preview mode.
+
+endmenu

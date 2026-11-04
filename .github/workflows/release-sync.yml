@@ -1,0 +1,102 @@
+# Register a stable Mini release with cloud-api right after tools/release_r2.sh
+# uploads it and pushes the release/<version> tag.
+#
+# cloud-api registers new stable versions found on R2 on a 30 minute tick, and
+# defers a version whose objects changed in the last 10 minutes. POST
+# /releases/sync with the type and version that was just written skips both
+# waits for that one version. Prereleases are served to the dev channel
+# straight from R2 and are not registered, so the job skips them.
+#
+# The endpoint is fixed to production. A staging call is a curl with the
+# staging token, not a workflow run, so this secret never leaves this host.
+#
+# Secrets: RELEASE_SYNC_TOKEN, the bearer token cloud-api is deployed with.
+name: release-sync
+
+on:
+  push:
+    tags:
+      - "release/*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Stable version already uploaded to R2, for example 0.5.3
+        required: true
+        type: string
+
+permissions: {}
+
+# One run per version. GitHub keeps a single pending run per group, so a
+# shared group would drop the older of two releases tagged close together.
+concurrency:
+  group: release-sync-${{ github.event.inputs.version || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Register ${{ github.event.inputs.version || github.ref_name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RELEASE_TYPE: mini
+      VERSION: ${{ github.event.inputs.version || github.ref_name }}
+      API_URL: https://api.jetkvm.com
+    steps:
+      - name: Resolve the version
+        id: version
+        run: |
+          version="${VERSION#release/}"
+          if ! [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-dev[0-9]{12})?$ ]]; then
+            echo "::error::not a release version: $version"
+            exit 1
+          fi
+          if [[ "$version" == *-* ]]; then
+            echo "::notice::$version is a prerelease; the dev channel serves it from R2, nothing to register"
+            echo "stable=false" >>"$GITHUB_OUTPUT"
+          else
+            echo "stable=true" >>"$GITHUB_OUTPUT"
+          fi
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+
+      - name: POST /releases/sync
+        if: steps.version.outputs.stable == 'true'
+        env:
+          RELEASE_SYNC_TOKEN: ${{ secrets.RELEASE_SYNC_TOKEN }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if [[ -z "$RELEASE_SYNC_TOKEN" ]]; then
+            echo "::error::RELEASE_SYNC_TOKEN secret is not set"
+            exit 1
+          fi
+          body=$(jq -cn --arg type "$RELEASE_TYPE" --arg version "$RELEASE_VERSION" '{type: $type, version: $version}')
+          # 409 means this API instance is mid-run on its own tick; retry.
+          attempts=5
+          for attempt in $(seq 1 $attempts); do
+            status=$(curl -sS -o response.json -w '%{http_code}' \
+              -X POST "$API_URL/releases/sync" \
+              -H "Authorization: Bearer $RELEASE_SYNC_TOKEN" \
+              -H "Content-Type: application/json" \
+              --data "$body")
+            if [[ "$status" != 409 || "$attempt" == "$attempts" ]]; then
+              break
+            fi
+            echo "sync already running (attempt $attempt of $attempts); retrying in 15 s"
+            sleep 15
+          done
+          echo "HTTP $status"
+          cat response.json; echo
+          case "$status" in
+            200) ;;
+            401) echo "::error::cloud-api rejected RELEASE_SYNC_TOKEN"; exit 1 ;;
+            404) echo "::error::$API_URL has no /releases/sync; RELEASE_SYNC_TOKEN is not set on that deployment"; exit 1 ;;
+            409) echo "::error::sync still running after $attempts attempts"; exit 1 ;;
+            *)   echo "::error::sync failed with HTTP $status"; exit 1 ;;
+          esac
+          {
+            echo "## release-sync $RELEASE_TYPE $RELEASE_VERSION"
+            echo
+            echo '```json'
+            cat response.json
+            echo
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"

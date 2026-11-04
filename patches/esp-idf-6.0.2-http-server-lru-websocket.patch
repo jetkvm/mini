@@ -1,0 +1,25 @@
+diff -ruN a/components/esp_http_server/src/httpd_sess.c b/components/esp_http_server/src/httpd_sess.c
+--- a/components/esp_http_server/src/httpd_sess.c
++++ b/components/esp_http_server/src/httpd_sess.c
+@@ -110,6 +110,21 @@
+         }
+         // Only close sockets that are not in use
+         if (session->for_async_req == false) {
++#ifdef CONFIG_HTTPD_WS_SUPPORT
++            /* A WebSocket is long-lived by design (it carries the signaling
++             * session) and refreshes its counter, so it ties with fresh
++             * sessions and the lowest slot wins: purge a plain session first
++             * and take a WebSocket only when nothing else can go. */
++            bool candidate_ws = ctx->session && ctx->session->ws_handshake_done;
++            if (session->ws_handshake_done && ctx->session && !candidate_ws) {
++                return 1;
++            }
++            if (!session->ws_handshake_done && candidate_ws) {
++                ctx->lru_counter = session->lru_counter;
++                ctx->session = session;
++                return 1;
++            }
++#endif
+             // Check/update lowest lru
+             if (session->lru_counter < ctx->lru_counter) {
+                 ctx->lru_counter = session->lru_counter;

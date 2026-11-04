@@ -1,0 +1,141 @@
+diff --git a/managed_components/espressif__esp_h264/hw/src/esp_h264_enc_single_hw.c b/managed_components/espressif__esp_h264/hw/src/esp_h264_enc_single_hw.c
+--- a/managed_components/espressif__esp_h264/hw/src/esp_h264_enc_single_hw.c
++++ b/managed_components/espressif__esp_h264/hw/src/esp_h264_enc_single_hw.c
+@@ -303,6 +303,20 @@
+     esp_h264_enc_hw_get_mutex(hw_hd->param_hd, &mutex);
+     esp_h264_mutex_lock(mutex, ESP_H264_MAX_DELAY);
+     ret = h264_hw_enc_gop_mode_process(hw_hd, in_frame->raw_data.buffer, out_frame->raw_data.buffer, out_frame->raw_data.len, &out_frame->length);
++    /* Tell rate control whether the frame fit the output buffer. An overflow
++     * (ERR_MEM: the bitstream DMA ran out and the frame timed out;
++     * ERR_OVERFLOW: the overflow flag or length check) skips its RC update,
++     * so the next IDR would start from the same QP and overflow again. */
++    esp_h264_rc_hd_t rc_hd = NULL;
++    esp_h264_enc_hw_get_rc_hd(hw_hd->param_hd, &rc_hd);
++    if (rc_hd && (ret == ESP_H264_ERR_MEM || ret == ESP_H264_ERR_OVERFLOW)) {
++        uint8_t qp_min = esp_h264_rc_overflow(rc_hd);
++        ESP_LOGW(TAG, "Output overflow (%u bytes): minimum QP now %u",
++                 (unsigned)out_frame->raw_data.len, (unsigned)qp_min);
++    } else if (rc_hd && ret == ESP_H264_ERR_OK) {
++        esp_h264_rc_frame_fit(rc_hd, out_frame->frame_type == ESP_H264_FRAME_TYPE_IDR,
++                              out_frame->length, out_frame->raw_data.len);
++    }
+     esp_h264_mutex_unlock(mutex);
+     /** Any non-OK result -- including ESP_H264_ERR_OVERFLOW -- means the caller did not receive
+      *  a usable, complete bitstream for this frame. Even when the HW's own reconstruction
+diff --git a/managed_components/espressif__esp_h264/hw/src/h264_rc.h b/managed_components/espressif__esp_h264/hw/src/h264_rc.h
+--- a/managed_components/espressif__esp_h264/hw/src/h264_rc.h
++++ b/managed_components/espressif__esp_h264/hw/src/h264_rc.h
+@@ -77,6 +77,33 @@
+  * @param  rc_hd  Rate control handle
+  */
+ void esp_h264_enc_hw_rc_del(esp_h264_rc_hd_t rc_hd);
++
++/**
++ * @brief  Report that the last frame started did not fit the output buffer
++ *
++ *         Rate control skips esp_h264_rc_end() for such a frame. This raises
++ *         the minimum QP above the QP that overflowed, so the next frame
++ *         (an IDR) is coded with fewer bits.
++ *
++ * @param  rc_hd  Rate control handle
++ *
++ * @return The minimum QP now in force, or 0 without a handle
++ */
++uint8_t esp_h264_rc_overflow(esp_h264_rc_hd_t rc_hd);
++
++/**
++ * @brief  Report the size of a frame that fit the output buffer
++ *
++ *         An IDR that used at most a quarter of the buffer lowers a minimum
++ *         QP that esp_h264_rc_overflow() raised by one step, back toward the
++ *         configured minimum.
++ *
++ * @param  rc_hd      Rate control handle
++ * @param  is_iframe  The frame is an IDR
++ * @param  bytes      Bytes the frame used, headers included
++ * @param  capacity   Bytes in the output buffer
++ */
++void esp_h264_rc_frame_fit(esp_h264_rc_hd_t rc_hd, bool is_iframe, uint32_t bytes, uint32_t capacity);
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/managed_components/espressif__esp_h264/hw/src/h264_rc.c b/managed_components/espressif__esp_h264/hw/src/h264_rc.c
+--- a/managed_components/espressif__esp_h264/hw/src/h264_rc.c
++++ b/managed_components/espressif__esp_h264/hw/src/h264_rc.c
+@@ -10,6 +10,8 @@
+ typedef struct esp_h264_rc {
+     uint8_t  qp_max;
+     uint8_t  qp_min;
++    uint8_t  qp_min_base;   /* configured minimum; qp_min is raised above it after an overflow */
++    uint8_t  qp_last;       /* QP of the last frame started */
+     int8_t   qpm;
+     int8_t   eqp;
+     uint8_t  qp_average_frame;
+@@ -61,6 +63,7 @@
+     prc->frame_num = 0;
+     prc->qp_max = qp_max;
+     prc->qp_min = qp_min;
++    prc->qp_min_base = qp_min;
+     prc->qpm = (qp_max + qp_min) >> 1;
+     prc->qp_average_frame = (uint8_t)prc->qpm;
+     prc->bits_per_frame = bitrate / fps;
+@@ -89,6 +92,7 @@
+     }
+     prc->qp_max = qp_max;
+     prc->qp_min = qp_min;
++    prc->qp_min_base = qp_min;
+ }
+ 
+ void esp_h264_enc_hw_rc_set_bt_fps(esp_h264_rc_hd_t rc_hd, uint32_t bitrate, uint8_t fps)
+@@ -131,6 +135,7 @@
+     }
+     prc->qpm = (int8_t)((int)prc->qp_average_frame + (int)prc->eqp);
+     *qp = CLIP3(prc->qp_min, prc->qp_max, prc->qpm);
++    prc->qp_last = *qp;
+     *rate = 1;
+     *pred_mad = (uint32_t)prc->mad_frame_pred;
+     if (!is_iframe) {
+@@ -186,3 +191,43 @@
+     }
+     prc->frame_num++;
+ }
++
++/* A frame that does not fit the output buffer never reaches esp_h264_rc_end(),
++ * so without this the next IDR starts from the same QP and overflows again
++ * for as long as the picture stays as detailed. Six QP steps halve the bits. */
++#define RC_OVERFLOW_QP_STEP 6
++
++uint8_t esp_h264_rc_overflow(esp_h264_rc_hd_t rc_hd)
++{
++    esp_h264_rc_t *prc = (esp_h264_rc_t *)rc_hd;
++    if (prc == NULL) {
++        return 0;
++    }
++    int qp_min = prc->qp_last + RC_OVERFLOW_QP_STEP;
++    if (qp_min > prc->qp_max) {
++        qp_min = prc->qp_max;
++    }
++    if (qp_min > prc->qp_min) {
++        prc->qp_min = (uint8_t)qp_min;
++    }
++    if (prc->qp_average_frame < prc->qp_min) {
++        prc->qp_average_frame = prc->qp_min;
++    }
++    prc->eqp = 0;
++    prc->err_sum = 0;
++    return prc->qp_min;
++}
++
++/* One QP step is about 12% more bits, so an IDR needs twelve steps to grow
++ * from a quarter of the buffer to all of it. An IDR coded six steps above an
++ * overflow uses more than half the buffer and keeps the raised minimum. */
++void esp_h264_rc_frame_fit(esp_h264_rc_hd_t rc_hd, bool is_iframe, uint32_t bytes, uint32_t capacity)
++{
++    esp_h264_rc_t *prc = (esp_h264_rc_t *)rc_hd;
++    if (prc == NULL || !is_iframe || prc->qp_min <= prc->qp_min_base) {
++        return;
++    }
++    if ((uint64_t)bytes * 4U <= capacity) {
++        prc->qp_min--;
++    }
++}

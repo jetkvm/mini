@@ -1,0 +1,107 @@
+diff --git a/managed_components/espressif__esp_libsrtp/libsrtp/crypto/hash/hmac_esp_sha1.c b/managed_components/espressif__esp_libsrtp/libsrtp/crypto/hash/hmac_esp_sha1.c
+--- a/managed_components/espressif__esp_libsrtp/libsrtp/crypto/hash/hmac_esp_sha1.c
++++ b/managed_components/espressif__esp_libsrtp/libsrtp/crypto/hash/hmac_esp_sha1.c
+@@ -42,6 +42,15 @@
+ #define SHA1_BLOCK_SIZE 64
+ #define SHA1_DIGEST_SIZE 20
+ 
++#ifndef JETKVM_SRTP_HMAC_POLLING_UPDATE
++#define JETKVM_SRTP_HMAC_POLLING_UPDATE 0
++#endif
++
++#if JETKVM_SRTP_HMAC_POLLING_UPDATE
++#include "sha/sha_core.h"
++#include "hal/sha_hal.h"
++#endif
++
+ #if !CONFIG_IDF_TARGET_ESP32P4
+ #error "hmac_esp_sha1.c is an ESP32-P4-specific libsrtp backend"
+ #endif
+@@ -183,6 +192,73 @@
+     return status;
+ }
+ 
++#if JETKVM_SRTP_HMAC_POLLING_UPDATE
++/* Experimental body-update path: keep the SDK streaming context and shared
++ * lock, but feed blocks through registers instead of setting up SHA GDMA.
++ * Reuse the existing partial-block buffer for unaligned inputs; no packet
++ * buffer or allocation is introduced. Final suffix updates retain the SDK. */
++static void srtp_hmac_esp_sha1_update_polled(esp_sha1_context *work,
++                                          const uint8_t *message,
++                                          size_t msg_octets)
++{
++    if (msg_octets == 0) {
++        return;
++    }
++
++    size_t left = work->total[0] & (SHA1_BLOCK_SIZE - 1);
++    size_t fill = SHA1_BLOCK_SIZE - left;
++    bool buffered_block = false;
++    work->total[0] += (uint32_t)msg_octets;
++    if (work->total[0] < (uint32_t)msg_octets) {
++        work->total[1]++;
++    }
++
++    if (left != 0 && msg_octets >= fill) {
++        memcpy(work->buffer + left, message, fill);
++        message += fill;
++        msg_octets -= fill;
++        left = 0;
++        buffered_block = true;
++    }
++
++    size_t full_octets = msg_octets & ~(size_t)(SHA1_BLOCK_SIZE - 1);
++    if (buffered_block || full_octets != 0) {
++        bool first = work->sha_state == ESP_SHA1_STATE_INIT;
++        esp_sha_acquire_hardware();
++        esp_sha_set_mode(SHA1);
++        if (!first) {
++            esp_sha_write_digest_state(SHA1, work->state);
++        }
++        if (buffered_block) {
++            esp_sha_block(SHA1, work->buffer, first);
++            sha_hal_wait_idle();
++            first = false;
++        }
++        for (size_t offset = 0; offset < full_octets;
++             offset += SHA1_BLOCK_SIZE) {
++            const uint8_t *block = message + offset;
++            if (((uintptr_t)block & 3U) != 0) {
++                memcpy(work->buffer, block, SHA1_BLOCK_SIZE);
++                block = work->buffer;
++            }
++            esp_sha_block(SHA1, block, first);
++            sha_hal_wait_idle();
++            first = false;
++        }
++        /* Match the SDK update boundary, including its all-zero fault check. */
++        esp_sha_read_digest_state(SHA1, work->state);
++        esp_sha_release_hardware();
++        work->first_block = false;
++        work->sha_state = ESP_SHA1_STATE_IN_PROCESS;
++    }
++
++    size_t remaining = msg_octets - full_octets;
++    if (remaining != 0) {
++        memcpy(work->buffer + left, message + full_octets, remaining);
++    }
++}
++#endif
++
+ static srtp_err_status_t srtp_hmac_esp_sha1_update(void *statev,
+                                                    const uint8_t *message,
+                                                    size_t msg_octets)
+@@ -197,9 +273,13 @@
+     debug_print(srtp_mod_hmac, "input: %s",
+                 srtp_octet_string_hex_string(message, msg_octets));
+ 
++#if JETKVM_SRTP_HMAC_POLLING_UPDATE
++    srtp_hmac_esp_sha1_update_polled(&state->work, message, msg_octets);
++#else
+     if (esp_sha1_update(&state->work, message, msg_octets) != 0) {
+         return srtp_err_status_auth_fail;
+     }
++#endif
+     return srtp_err_status_ok;
+ }
+ 

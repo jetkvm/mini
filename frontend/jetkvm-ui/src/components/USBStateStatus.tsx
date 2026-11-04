@@ -1,0 +1,89 @@
+import React from "react";
+
+import { cx } from "@/cva.config";
+import KeyboardAndMouseConnectedIcon from "@assets/keyboard-and-mouse-connected.png";
+import { USBStates } from "@hooks/stores";
+import { m } from "@localizations/messages.js";
+import LoadingSpinner from "@components/LoadingSpinner";
+import StatusCard from "@components/StatusCards";
+
+type StatusProps = Record<
+  USBStates,
+  {
+    icon: React.FC<{ className: string | undefined }>;
+    iconClassName: string;
+    statusIndicatorClassName: string;
+  }
+>;
+
+const USBStateMap: Record<USBStates, string> = {
+  configured: m.usb_state_connected(),
+  attached: m.usb_state_connecting(),
+  addressed: m.usb_state_connecting(),
+  "not attached": m.usb_state_disconnected(),
+  suspended: m.usb_state_low_power_mode(),
+};
+const StatusCardProps: StatusProps = {
+  configured: {
+    icon: ({ className }) => (
+      <img className={cx(className)} src={KeyboardAndMouseConnectedIcon} alt="" />
+    ),
+    iconClassName: "h-5 w-5 shrink-0",
+    statusIndicatorClassName: "bg-green-500 border-green-600",
+  },
+  attached: {
+    icon: ({ className }) => <LoadingSpinner className={cx(className)} />,
+    iconClassName: "h-5 w-5 text-blue-500",
+    statusIndicatorClassName: "bg-slate-300 border-slate-400",
+  },
+  addressed: {
+    icon: ({ className }) => <LoadingSpinner className={cx(className)} />,
+    iconClassName: "h-5 w-5 text-blue-500",
+    statusIndicatorClassName: "bg-slate-300 border-slate-400",
+  },
+  "not attached": {
+    icon: ({ className }) => (
+      <img className={cx(className)} src={KeyboardAndMouseConnectedIcon} alt="" />
+    ),
+    iconClassName: "h-5 w-5 opacity-50 grayscale filter",
+    statusIndicatorClassName: "bg-slate-300 border-slate-400",
+  },
+  suspended: {
+    icon: ({ className }) => (
+      <img className={cx(className)} src={KeyboardAndMouseConnectedIcon} alt="" />
+    ),
+    iconClassName: "h-5 w-5 opacity-50 grayscale filter",
+    statusIndicatorClassName: "bg-green-500 border-green-600",
+  },
+};
+
+export default function USBStateStatus({
+  state,
+  peerConnectionState,
+}: {
+  state: USBStates;
+  peerConnectionState?: RTCPeerConnectionState | null;
+}) {
+  const props = StatusCardProps[state];
+  if (!props) {
+    console.warn("Unsupported USB state: ", state);
+    return;
+  }
+
+  // If the peer connection is not connected, show the USB cable as disconnected
+  if (peerConnectionState !== "connected") {
+    const { icon: Icon, iconClassName, statusIndicatorClassName } = StatusCardProps["not attached"];
+
+    return (
+      <StatusCard
+        title={m.usb()}
+        status={m.usb_state_disconnected()}
+        icon={Icon}
+        iconClassName={iconClassName}
+        statusIndicatorClassName={statusIndicatorClassName}
+      />
+    );
+  }
+
+  return <StatusCard title={m.usb()} status={USBStateMap[state]} {...StatusCardProps[state]} />;
+}

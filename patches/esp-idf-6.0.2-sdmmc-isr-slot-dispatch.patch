@@ -1,0 +1,51 @@
+diff --git a/components/esp_driver_sdmmc/src/sd_host_sdmmc.c b/components/esp_driver_sdmmc/src/sd_host_sdmmc.c
+--- a/components/esp_driver_sdmmc/src/sd_host_sdmmc.c
++++ b/components/esp_driver_sdmmc/src/sd_host_sdmmc.c
+@@ -788,6 +788,8 @@
+ static void sd_host_isr(void *arg)
+ {
+     sd_host_sdmmc_ctlr_t *ctlr = (sd_host_sdmmc_ctlr_t *)arg;
++    // Transfer and DMA events belong to the slot of the last transaction. That
++    // slot can have been removed since, while another slot stays in use.
+     sd_host_sdmmc_slot_t *slot = ctlr->slot[ctlr->cur_slot_id];
+ 
+     sd_host_sdmmc_event_t event = {};
+@@ -803,7 +805,7 @@
+ 
+     if (dma_pending & SDMMC_LL_EVENT_DMA_NI) {
+         // refill DMA descriptors
+-        size_t free_desc = sd_host_get_free_descriptors_count(slot);
++        size_t free_desc = slot ? sd_host_get_free_descriptors_count(slot) : 0;
+         if (free_desc > 0) {
+             sd_host_fill_dma_descriptors(slot, free_desc);
+             sd_host_dma_resume(slot);
+@@ -815,7 +817,7 @@
+ 
+     if (pending != 0 || dma_pending != 0) {
+         xQueueSendFromISR(ctlr->event_queue, &event, &higher_priority_task_awoken);
+-        if (slot->cbs.on_trans_done) {
++        if (slot && slot->cbs.on_trans_done) {
+             sd_host_evt_data_t edata = {};
+             if (slot->cbs.on_trans_done(&slot->drv, &edata, slot->user_data)) {
+                 need_yield |= true;
+@@ -828,10 +830,16 @@
+         // disable the interrupt (no need to clear here, this is done in sdmmc_host_io_int_wait)
+         sdmmc_ll_enable_interrupt(ctlr->hal.dev, sdio_pending, false);
+         xSemaphoreGiveFromISR(ctlr->io_intr_sem, &higher_priority_task_awoken);
+-        if (slot->cbs.on_io_interrupt) {
+-            sd_host_evt_data_t edata = {};
+-            if (slot->cbs.on_io_interrupt(&slot->drv, &edata, slot->user_data)) {
+-                need_yield |= true;
++        // An SDIO interrupt belongs to the slot that raised it, which need not
++        // be the slot of the last transaction.
++        for (int i = 0; i < SOC_SDMMC_NUM_SLOTS; i++) {
++            sd_host_sdmmc_slot_t *io_slot = ctlr->slot[i];
++            uint32_t io_mask = i == 0 ? SDMMC_INTMASK_IO_SLOT0 : SDMMC_INTMASK_IO_SLOT1;
++            if ((sdio_pending & io_mask) && io_slot && io_slot->cbs.on_io_interrupt) {
++                sd_host_evt_data_t edata = {};
++                if (io_slot->cbs.on_io_interrupt(&io_slot->drv, &edata, io_slot->user_data)) {
++                    need_yield |= true;
++                }
+             }
+         }
+     }

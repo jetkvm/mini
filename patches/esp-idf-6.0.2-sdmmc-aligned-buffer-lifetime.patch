@@ -1,0 +1,41 @@
+diff --git a/components/fatfs/vfs/vfs_fat_sdmmc.c b/components/fatfs/vfs/vfs_fat_sdmmc.c
+index 51b901a3..88f754b8 100644
+--- a/components/fatfs/vfs/vfs_fat_sdmmc.c
++++ b/components/fatfs/vfs/vfs_fat_sdmmc.c
+@@ -7,6 +7,7 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include "esp_check.h"
++#include "esp_heap_caps.h"
+ #include "esp_log.h"
+ #include "esp_vfs.h"
+ #include "esp_vfs_fat.h"
+@@ -280,7 +281,7 @@ esp_err_t esp_vfs_fat_sdmmc_mount(const char* base_path,
+     bool host_inited = false;
+ 
+     // not using ff_memalloc here, as allocation in internal RAM is preferred
+-    card = (sdmmc_card_t*) malloc(sizeof(sdmmc_card_t));
++    card = (sdmmc_card_t*) calloc(1, sizeof(sdmmc_card_t));
+     if (card == NULL) {
+         ESP_LOGD(TAG, "could not locate new sdmmc_card_t");
+         err = ESP_ERR_NO_MEM;
+@@ -299,6 +300,10 @@ cleanup:
+     if (host_inited) {
+         call_host_deinit(host_config);
+     }
++    if (card != NULL && card->host.dma_aligned_buffer != NULL) {
++        heap_caps_free(card->host.dma_aligned_buffer);
++        card->host.dma_aligned_buffer = NULL;
++    }
+     free(card);
+     return err;
+ }
+@@ -467,6 +472,8 @@ static esp_err_t unmount_card_core(const char *base_path, sdmmc_card_t *card)
+ 
+     if (pdrv_num == 1) {
+         call_host_deinit(&card->host);
++        heap_caps_free(card->host.dma_aligned_buffer);
++        card->host.dma_aligned_buffer = NULL;
+         free(card);
+     }
+ 

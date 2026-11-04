@@ -1,0 +1,85 @@
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react-swc";
+import tailwindcss from "@tailwindcss/vite";
+import basicSsl from "@vitejs/plugin-basic-ssl";
+import { paraglideVitePlugin } from "@inlang/paraglide-js";
+
+declare const process: {
+  env: {
+    JETKVM_PROXY_URL: string;
+    USE_SSL: string;
+  };
+};
+
+export default defineConfig(({ mode, command }) => {
+  const isCloud = mode.indexOf("cloud") !== -1;
+  const onDevice = mode === "device";
+  const { JETKVM_PROXY_URL, USE_SSL } = process.env;
+  const useSSL = USE_SSL === "true";
+
+  const plugins = [tailwindcss(), react()];
+
+  if (useSSL) {
+    plugins.push(basicSsl());
+  }
+
+  plugins.push(
+    paraglideVitePlugin({
+      project: "./localization/jetKVM.UI.inlang",
+      outdir: "./localization/paraglide",
+      outputStructure: "message-modules",
+      cookieName: "JETKVM_LOCALE",
+      strategy: ["cookie", "baseLocale"],
+    }),
+  );
+
+  return {
+    plugins,
+    resolve: {
+      tsconfigPaths: true,
+    },
+    oxc: {
+      pure: command === "build" ? ["console.debug"] : [],
+    },
+    assetsInclude: ["**/*.woff2"],
+    build: {
+      outDir: isCloud ? "dist" : "../static",
+      rolldownOptions: {
+        output: {
+          manualChunks: id => {
+            if (id.includes("node_modules")) {
+              // Let Rolldown handle tesseract.js naturally via dynamic import
+              // to avoid CommonJS/ESM interop issues across chunks
+              if (id.includes("tesseract")) return;
+              // Minified inside "vendor", the xterm addons can reference a
+              // renamed identifier from another module (Rolldown 1.0.0-rc.12);
+              // their own chunk keeps their names local.
+              if (id.includes("@xterm")) return "xterm";
+              return "vendor";
+            }
+            return null;
+          },
+          assetFileNames: "assets/immutable/[name]-[hash][extname]",
+          chunkFileNames: "assets/immutable/[name]-[hash].js",
+          entryFileNames: "assets/immutable/[name]-[hash].js",
+        },
+      },
+    },
+    server: {
+      host: "0.0.0.0",
+      https: useSSL,
+      proxy: JETKVM_PROXY_URL
+        ? {
+            "/me": JETKVM_PROXY_URL,
+            "/device": JETKVM_PROXY_URL,
+            "/webrtc": JETKVM_PROXY_URL,
+            "/auth": JETKVM_PROXY_URL,
+            "/storage": JETKVM_PROXY_URL,
+            "/cloud": JETKVM_PROXY_URL,
+            "/developer": JETKVM_PROXY_URL,
+          }
+        : undefined,
+    },
+    base: onDevice && command === "build" ? "/static" : "/",
+  };
+});

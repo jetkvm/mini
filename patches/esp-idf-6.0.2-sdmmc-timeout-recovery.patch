@@ -1,0 +1,217 @@
+diff --git a/components/esp_driver_sdmmc/Kconfig b/components/esp_driver_sdmmc/Kconfig
+--- a/components/esp_driver_sdmmc/Kconfig
++++ b/components/esp_driver_sdmmc/Kconfig
+@@ -9,4 +9,13 @@
+             Ensure the SD Host SDMMC driver ISR is Cache-Safe. When enabled,
+             the ISR handler will be available when the cache is disabled.
+ 
++    config SD_HOST_SDMMC_FAULT_INJECT_PERIOD_S
++        int "Stall one CMD53 write every N seconds (bench only, 0 = off)"
++        default 0
++        range 0 3600
++        help
++            Bench test of the transaction timeout recovery. Once per period,
++            the next CMD53 write runs without DMA, so its data phase does not
++            complete and the transaction times out. Keep 0 in release builds.
++
+ endmenu # SD Host Controller Configurations
+diff --git a/components/esp_driver_sdmmc/include/esp_private/sd_host_private.h b/components/esp_driver_sdmmc/include/esp_private/sd_host_private.h
+--- a/components/esp_driver_sdmmc/include/esp_private/sd_host_private.h
++++ b/components/esp_driver_sdmmc/include/esp_private/sd_host_private.h
+@@ -172,6 +172,7 @@
+     SemaphoreHandle_t              io_intr_sem;                      //io interrupt semaphore
+     SemaphoreHandle_t              mutex;                            //mutex
+     QueueHandle_t                  event_queue;                      //event queue
++    uint32_t                       lost_events;                      //events the ISR could not queue
+ 
+     intr_handle_t                  intr_handle;                      //interrupt handle
+     sd_host_evt_cbs_t              cbs;                              //user callbacks
+@@ -214,6 +215,21 @@
+  */
+ esp_err_t sd_host_slot_start_command(sd_host_sdmmc_slot_t *slot, sdmmc_hw_cmd_t cmd, uint32_t arg);
+ 
++/**
++ * @brief Return the controller to idle after a transaction timed out
++ *
++ * Resets the controller, its DMA and its FIFO, drops queued events and reloads
++ * the card clock settings. The caller holds the controller mutex, so no other
++ * slot has a transaction in flight.
++ *
++ * @param[in] slot       SD Host Slot handle of the transaction that timed out
++ *
++ * @return
++ *        - ESP_OK:              On success
++ *        - ESP_ERR_TIMEOUT:     The reset or the clock update did not complete
++ */
++esp_err_t sd_host_recover(sd_host_sdmmc_slot_t *slot);
++
+ /*---------------------------------------------------------------
+                 Configuration APIs
+ ---------------------------------------------------------------*/
+diff --git a/components/esp_driver_sdmmc/src/sd_host_sdmmc.c b/components/esp_driver_sdmmc/src/sd_host_sdmmc.c
+--- a/components/esp_driver_sdmmc/src/sd_host_sdmmc.c
++++ b/components/esp_driver_sdmmc/src/sd_host_sdmmc.c
+@@ -814,6 +814,11 @@
+         dma_pending &= ~(SDMMC_LL_EVENT_DMA_NI | SDMMC_LL_EVENT_DMA_TI | SDMMC_LL_EVENT_DMA_RI);
+     }
+     event.dma_status = dma_pending & SDMMC_LL_EVENT_DMA_MASK;
++    // This handler is the only producer, so a full queue loses this event and
++    // its transaction times out; sd_host_recover() reports the count.
++    if ((pending != 0 || dma_pending != 0) && xQueueIsQueueFullFromISR(ctlr->event_queue)) {
++        ctlr->lost_events++;
++    }
+ 
+     if (pending != 0 || dma_pending != 0) {
+         xQueueSendFromISR(ctlr->event_queue, &event, &higher_priority_task_awoken);
+@@ -958,6 +963,26 @@
+     return ESP_OK;
+ }
+ 
++esp_err_t sd_host_recover(sd_host_sdmmc_slot_t *slot)
++{
++    sd_host_sdmmc_ctlr_t *ctlr = slot->ctlr;
++    sdmmc_dev_t *dev = ctlr->hal.dev;
++    ESP_LOGW(TAG, "slot %d: transaction timed out, resetting the controller "
++             "(status=%08"PRIx32" rintsts=%08"PRIx32" idsts=%08"PRIx32" lost events=%"PRIu32")",
++             slot->slot_id, dev->status.val, dev->rintsts.val, dev->idsts.val, ctlr->lost_events);
++    // Stop the DMA first, so that it cannot refill the FIFO after the reset.
++    sdmmc_ll_stop_dma(dev);
++    ESP_RETURN_ON_ERROR(sd_host_reset(ctlr), TAG, "controller reset timed out");
++    // Drop what the abandoned transaction left behind. SDIO card interrupts are
++    // not part of it and stay pending.
++    sdmmc_ll_clear_interrupt(dev, SDMMC_LL_SD_EVENT_MASK);
++    sdmmc_ll_clear_idsts_interrupt(dev, sdmmc_ll_get_idsts_interrupt_raw(dev));
++    xQueueReset(ctlr->event_queue);
++    sdmmc_ll_init_dma(dev);
++    // The controller reset also clears the clock settings the card interface had loaded.
++    return sd_host_slot_clock_update_command(slot, false);
++}
++
+ /*---------------------------------------------------------------
+                     Static: Clock
+ ---------------------------------------------------------------*/
+diff --git a/components/esp_driver_sdmmc/src/sd_trans_sdmmc.c b/components/esp_driver_sdmmc/src/sd_trans_sdmmc.c
+--- a/components/esp_driver_sdmmc/src/sd_trans_sdmmc.c
++++ b/components/esp_driver_sdmmc/src/sd_trans_sdmmc.c
+@@ -12,6 +12,7 @@
+ #include "esp_log.h"
+ #include "esp_intr_alloc.h"
+ #include "esp_check.h"
++#include "esp_timer.h"
+ #include "soc/soc_caps.h"
+ #include "driver/sd_host.h"
+ #include "esp_private/sd_host_private.h"
+@@ -427,6 +428,42 @@
+     return ESP_OK;
+ }
+ 
++/* After a timed-out CMD53 the SDIO card can still be inside its data phase,
++ * where it does not answer the next CMD53. Writing the function number to the
++ * I/O abort register (CCCR 0x06) with CMD52 ends that transfer.
++ */
++static void abort_sdio_transfer(sd_host_sdmmc_slot_t *slot, const sdmmc_command_t *cmd)
++{
++    uint32_t func = (cmd->arg >> SD_ARG_CMD53_FUNC_SHIFT) & SD_ARG_CMD53_FUNC_MASK;
++    sdmmc_hw_cmd_t hw_cmd = {
++        .cmd_index = SD_IO_RW_DIRECT,
++        .response_expect = 1,
++        .check_response_crc = 1,
++        .stop_abort_cmd = 1,
++    };
++    uint32_t arg = SD_ARG_CMD52_WRITE | (SD_IO_CCCR_CTL << SD_ARG_CMD52_REG_SHIFT) | func;
++    uint32_t status = 0;
++    esp_err_t err = sd_host_slot_start_command(slot, hw_cmd, arg);
++    // A response error and CMD_DONE can come in separate events.
++    while (err == ESP_OK && !(status & SDMMC_INTMASK_CMD_DONE)) {
++        sd_host_sdmmc_event_t event = {};
++        err = sd_host_wait_for_event(slot, cmd->timeout_ms / portTICK_PERIOD_MS, &event);
++        status |= event.sdmmc_status;
++    }
++    if (err != ESP_OK || (status & SD_CMD_ERR_MASK)) {
++        ESP_LOGE(TAG, "SDIO abort of function %"PRIu32" failed: 0x%x, status %08"PRIx32, func, err, status);
++    }
++}
++
++/* Return the controller, and an SDIO card inside a CMD53, to idle after a timeout. */
++static void recover_transaction(sd_host_sdmmc_slot_t *slot, const sdmmc_command_t *cmd)
++{
++    slot->ctlr->is_app_cmd = false;
++    if (sd_host_recover(slot) == ESP_OK && cmd->opcode == SD_IO_RW_EXTENDED) {
++        abort_sdio_transfer(slot, cmd);
++    }
++}
++
+ static esp_err_t handle_event(sd_host_sdmmc_slot_t *slot, sdmmc_command_t* cmd, sdmmc_req_state_t *state,
+                               sd_host_sdmmc_event_t *unhandled_events)
+ {
+@@ -435,7 +472,7 @@
+     if (err != ESP_OK) {
+         ESP_LOGE(TAG, "sd_host_wait_for_event returned 0x%x", err);
+         if (err == ESP_ERR_TIMEOUT) {
+-            sd_host_dma_stop(slot);
++            recover_transaction(slot, cmd);
+         }
+         return err;
+     }
+@@ -449,6 +486,34 @@
+     return ESP_OK;
+ }
+ 
++/* Bench test of the timeout recovery (CONFIG_SD_HOST_SDMMC_FAULT_INJECT_PERIOD_S):
++ * once per period, the next CMD53 write runs without DMA. Its
++ * data phase never completes, as when a transfer stalls, and the transaction
++ * times out. Returns true when it has set up such a write.
++ */
++static bool inject_stall(sd_host_sdmmc_slot_t *slot, const sdmmc_command_t *cmd)
++{
++#if CONFIG_SD_HOST_SDMMC_FAULT_INJECT_PERIOD_S
++    static int64_t s_next_us;
++    int64_t now_us = esp_timer_get_time();
++    if (cmd->opcode != SD_IO_RW_EXTENDED || (cmd->flags & SCF_CMD_READ) || now_us < s_next_us) {
++        return false;
++    }
++    bool first = s_next_us == 0;
++    s_next_us = now_us + CONFIG_SD_HOST_SDMMC_FAULT_INJECT_PERIOD_S * 1000000LL;
++    if (first) {
++        return false;
++    }
++    ESP_LOGW(TAG, "fault injection: %d-byte CMD53 write on slot %d runs without DMA", (int)cmd->datalen, slot->slot_id);
++    sdmmc_ll_set_data_transfer_len(slot->ctlr->hal.dev, cmd->datalen);
++    sdmmc_ll_set_block_size(slot->ctlr->hal.dev, cmd->blklen);
++    sd_host_dma_stop(slot);
++    return true;
++#else
++    return false;
++#endif
++}
++
+ static bool sd_host_card_busy(sd_host_sdmmc_slot_t *slot)
+ {
+     return sdmmc_ll_is_card_data_busy(slot->ctlr->hal.dev);
+@@ -546,10 +611,15 @@
+         }
+ #endif
+         // write transfer info into hardware
+-        sd_host_dma_prepare(slot_ctx, cmdinfo->data, cmdinfo->datalen, cmdinfo->blklen);
++        if (!inject_stall(slot_ctx, cmdinfo)) {
++            sd_host_dma_prepare(slot_ctx, cmdinfo->data, cmdinfo->datalen, cmdinfo->blklen);
++        }
+     }
+     // write command into hardware, this also sends the command to the card
+     ret = sd_host_slot_start_command(slot_ctx, hw_cmd, cmdinfo->arg);
++    if (ret == ESP_ERR_TIMEOUT) {
++        recover_transaction(slot_ctx, cmdinfo);
++    }
+     if (ret != ESP_OK) {
+         goto out;
+     }
+@@ -563,7 +633,8 @@
+     while (state != SDMMC_IDLE) {
+         ret = handle_event(slot_ctx, cmdinfo, &state, &unhandled_events);
+         if (ret != ESP_OK) {
+-            break;
++            // The abandoned transfer leaves no data to sync.
++            goto out;
+         }
+     }
+     if (ret == ESP_OK && (cmdinfo->flags & SCF_WAIT_BUSY)) {

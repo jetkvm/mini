@@ -1,0 +1,31 @@
+diff --git a/components/lwip/Kconfig b/components/lwip/Kconfig
+--- a/components/lwip/Kconfig
++++ b/components/lwip/Kconfig
+@@ -380,6 +380,15 @@
+             options and values. If your code meets LWIP_ASSERT due to option value is too long.
+             Please increase the LWIP_DHCP_OPTIONS_LEN value.
+ 
++    config LWIP_ESP_NETIF_CLIENT_DATA
++        bool "Store esp-netif handles in a dedicated client-data slot"
++        default n
++        help
++            Enable when a raw lwIP interface uses netif->state for its own
++            driver state, such as WireGuard. ESP-NETIF callbacks then use
++            their client-data slot instead of treating raw driver state as
++            an esp-netif handle.
++
+     config LWIP_NUM_NETIF_CLIENT_DATA
+         int "Number of clients store data in netif"
+         default 0
+diff --git a/components/lwip/port/include/lwipopts.h b/components/lwip/port/include/lwipopts.h
+--- a/components/lwip/port/include/lwipopts.h
++++ b/components/lwip/port/include/lwipopts.h
+@@ -771,7 +771,7 @@
+ #ifndef CONFIG_LWIP_NUM_NETIF_CLIENT_DATA
+ #define CONFIG_LWIP_NUM_NETIF_CLIENT_DATA 0
+ #endif
+-#if defined(CONFIG_ESP_NETIF_BRIDGE_EN) || defined(CONFIG_LWIP_PPP_SUPPORT)
++#if defined(CONFIG_ESP_NETIF_BRIDGE_EN) || defined(CONFIG_LWIP_PPP_SUPPORT) || defined(CONFIG_LWIP_ESP_NETIF_CLIENT_DATA)
+ /*
+  * If special lwip interfaces (like bridge, ppp) enabled
+  * `netif->state` is used internally and we must store esp-netif ptr

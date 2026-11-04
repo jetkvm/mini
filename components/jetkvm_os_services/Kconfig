@@ -1,0 +1,23 @@
+menu "JetKVM OS Services"
+
+config JETKVM_OS_SERVICES
+    bool "IP-KVM OS Services over USB"
+    default y
+    help
+        Adds the IP-KVM OS Services vendor interface to the target USB
+        device, so the OS Services sender on the target can share its
+        clipboard, a shell, files and its screen with the KVM.
+
+config JETKVM_OS_SERVICES_USB_BUFFER_KIB
+    int "Size of each OS Services USB transfer buffer (KiB)"
+    depends on JETKVM_OS_SERVICES
+    range 2 32
+    default 16
+    help
+        Two OUT buffers and one IN buffer of this size live in DMA-capable
+        PSRAM, so they take no internal RAM from WebRTC and the Wi-Fi
+        driver. Larger buffers move more data per USB transfer: against
+        4 KiB, 16 KiB cut the time the sender takes to write a 1080p or
+        1440p service video frame by about a third.
+
+endmenu

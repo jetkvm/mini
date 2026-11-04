@@ -1,0 +1,12 @@
+menu "JetKVM identity"
+
+config JETKVM_BENCH_CUSTOM_MAC
+    bool "Bench only: pretend that eFuse holds the factory MAC 02:4a:4b:00:00:01"
+    default n
+    help
+        Report the locally administered address 02:4a:4b:00:00:01 as the
+        factory MAC of eFuse USER_DATA.MAC_CUSTOM, so that a bench Mini without
+        that field tests the MAC address setting. Bench builds only: the
+        release check (tools/release_config.py) refuses a build with it.
+
+endmenu

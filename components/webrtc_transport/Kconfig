@@ -1,0 +1,117 @@
+menu "Local WebRTC transport"
+
+config WEBRTC_TRANSPORT_HTTPS
+    bool "HTTPS listener and TLS settings"
+    default n
+    help
+        Start the HTTPS listener when the TLS setting is enabled and serve the
+        getTLSState/setTLSState RPCs. Off by default on the Mini: with the hot
+        video and transport paths placed in internal RAM, the HTTPS listener
+        (10 KiB task stack plus sockets and TLS context) leaves too little
+        internal RAM for peer setup while a browser holds its connections.
+        The device capabilities already report access.tls as unsupported,
+        and the upstream TLS test skips when the RPCs answer "Method not
+        found".
+
+config WEBRTC_TRANSPORT_WEBSOCKET
+    bool
+    default y
+    select HTTPD_WS_SUPPORT
+    select HTTPD_WS_PRE_HANDSHAKE_CB_SUPPORT
+    select HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT
+    help
+        The device UI requires the upstream WebSocket signaling endpoint.
+
+config WEBRTC_TRANSPORT_AGENT_RECV_TIMEOUT_MS
+    int "ICE agent receive poll timeout (milliseconds)"
+    range 1 1000
+    default 1
+    help
+        Receive timeout requested by the manually driven esp_peer event loop.
+        Handshakes use at least 100 ms per receive because the vendor DTLS
+        adapter treats eleven empty receives as peer close. This allows
+        delayed relay input. Gathering and connected peers use bounded
+        non-blocking receive slices for signaling and video.
+
+config WEBRTC_TRANSPORT_HTTP_PORT
+    int "Diagnostic HTTP server port"
+    range 1 65535
+    default 80
+
+config WEBRTC_TRANSPORT_TASK_STACK
+    int "Peer task stack (bytes)"
+    range 12288 65536
+    default 24576
+
+config WEBRTC_TRANSPORT_TASK_PRIORITY
+    int "Peer task priority"
+    range 1 20
+    default 6
+
+config WEBRTC_TRANSPORT_TASK_CORE
+    int "Peer task core (-1 for no affinity)"
+    range -1 1
+    default 1
+    help
+        A value of -1 lets the scheduler choose the initial CPU. On targets
+        with lazy coprocessor context switching, using FPU or vector
+        instructions may subsequently pin a task to its current CPU.
+
+config WEBRTC_TRANSPORT_AU_SLOTS
+    int "Preallocated Annex-B access-unit slots"
+    range 2 4
+    default 2
+    help
+        The encoder callback never waits for the network. Encoded access units
+        are sent in order. When all slots are busy, the new unit is rejected;
+        the sender detects the gap and requests an IDR before sending dependent
+        frames again.
+
+config WEBRTC_TRANSPORT_MAX_AU_BYTES
+    int "Maximum Annex-B access-unit bytes"
+    range 524288 2097152
+    default 524288
+    help
+        This matches the bounded 512 KiB encoder output allocation.  An
+        oversized access unit is rejected and counted instead of truncated.
+
+config WEBRTC_TRANSPORT_RTP_POOL_BYTES
+    int "esp_peer RTP send pool bytes"
+    range 262144 4194304
+    default 1048576
+
+config WEBRTC_TRANSPORT_RTP_QUEUE_PACKETS
+    int "esp_peer RTP send queue packet count"
+    range 128 4096
+    default 1536
+
+config WEBRTC_TRANSPORT_DATA_CHANNEL_SEND_CACHE_BYTES
+    int "DataChannel send cache bytes"
+    range 1536 1048576
+    default 262144
+    help
+        SCTP application-data cache for device-to-browser messages. Upload
+        acknowledgements are small, so this direction does not need to carry
+        the browser-to-device bandwidth-delay product.
+
+config WEBRTC_TRANSPORT_DATA_CHANNEL_RECEIVE_CACHE_BYTES
+    int "DataChannel receive cache bytes"
+    range 262144 4194304
+    default 262144
+    help
+        SCTP application-data cache for browser-to-device messages. SACKs
+        advertise it less a 164 KiB reserve for the chunk after the
+        cumulative acknowledgement (peer_sctp_receive.c). The allocation is
+        served from PSRAM.
+
+config WEBRTC_TRANSPORT_SESSION_TIMEOUT_MS
+    int "Browser polling timeout (milliseconds)"
+    range 5000 60000
+    default 15000
+
+config WEBRTC_TRANSPORT_RECONNECT_DELAY_MS
+    int "Peer reconnect delay (milliseconds)"
+    range 100 10000
+    default 1000
+
+endmenu

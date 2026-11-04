@@ -1,0 +1,16 @@
+diff --git a/components/esp_driver_spi/src/gpspi/spi_master.c b/components/esp_driver_spi/src/gpspi/spi_master.c
+index 2e53da055..f510f5970 100644
+--- a/components/esp_driver_spi/src/gpspi/spi_master.c
++++ b/components/esp_driver_spi/src/gpspi/spi_master.c
+@@ -1171,7 +1171,10 @@ static SPI_MASTER_ISR_ATTR void uninstall_priv_desc(spi_trans_priv_t* trans_buf)
+ 
+     // copy data from temporary DMA-capable buffer back to trans_desc buffer and free the temporary one.
+     void *orig_rx_buffer = (trans_desc->flags & SPI_TRANS_USE_RXDATA) ? trans_desc->rx_data : trans_desc->rx_buffer;
+-    if (trans_buf->buffer_to_rcv != orig_rx_buffer) {
++    /* A failed private RX allocation leaves buffer_to_rcv NULL.  Propagate
++     * ESP_ERR_NO_MEM instead of copying from NULL during setup cleanup. */
++    if (trans_buf->buffer_to_rcv != NULL &&
++            trans_buf->buffer_to_rcv != orig_rx_buffer) {
+         memcpy(orig_rx_buffer, trans_buf->buffer_to_rcv, (trans_desc->rxlength + 7) / 8);
+         free(trans_buf->buffer_to_rcv);
+     }

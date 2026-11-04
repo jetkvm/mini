@@ -1,0 +1,16 @@
+--- a/components/esp_driver_sdmmc/src/sd_trans_sdmmc.c
++++ b/components/esp_driver_sdmmc/src/sd_trans_sdmmc.c
+@@ -652,6 +652,13 @@
+         }
+     }
+ #endif
++    if (ret == ESP_OK && cmdinfo->data && cmdinfo->error != ESP_OK) {
++        /* A data transfer that failed (a card that left its slot answers
++         * with CRC errors) leaves the data path busy. The next transaction,
++         * on either slot, would wait for it and time out, so return the
++         * controller to idle now. */
++        recover_transaction(slot_ctx, cmdinfo);
++    }
+ 
+ out:
+ #if CONFIG_PM_ENABLE

@@ -1,0 +1,723 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+
+import { useCapability, useDeviceStore, useRTCStore, useSettingsStore } from "@hooks/stores";
+import { JsonRpcError, JsonRpcResponse, useJsonRpc } from "@hooks/useJsonRpc";
+import { useDeviceUiNavigation } from "@hooks/useAppNavigation";
+import { Button, LinkButton } from "@components/Button";
+import Checkbox, { CheckboxWithLabel } from "@components/Checkbox";
+import { ConfirmDialog } from "@components/ConfirmDialog";
+import { GridCard } from "@components/Card";
+import { SettingsItem } from "@components/SettingsItem";
+import { SettingsPageHeader } from "@components/SettingsPageheader";
+import { NestedSettingsGroup } from "@components/NestedSettingsGroup";
+import { TextAreaWithLabel } from "@components/TextArea";
+import { InputFieldWithLabel } from "@components/InputField";
+import { SelectMenuBasic } from "@components/SelectMenuBasic";
+import { isOnDevice } from "@/main";
+import notifications from "@/notifications";
+import { m } from "@localizations/messages.js";
+import { checkUpdateComponents, UpdateComponents } from "@/utils/jsonrpc";
+import { SystemVersionInfo } from "@hooks/useVersion";
+
+interface UsbDebuggingState {
+  enabled: boolean;
+  active: boolean;
+}
+
+export default function SettingsAdvancedRoute() {
+  const { send } = useJsonRpc();
+  const { navigateTo } = useDeviceUiNavigation();
+
+  const [sshKey, setSSHKey] = useState<string>("");
+  const { setDeveloperMode } = useSettingsStore();
+  const [devChannel, setDevChannel] = useState(false);
+  const [defaultLogLevel, setDefaultLogLevel] = useState<string>("WARN");
+  const [usbEmulationEnabled, setUsbEmulationEnabled] = useState(false);
+  const [showLoopbackWarning, setShowLoopbackWarning] = useState(false);
+  const [localLoopbackOnly, setLocalLoopbackOnly] = useState(false);
+  const [updateTarget, setUpdateTarget] = useState<string>("app");
+  const [appVersion, setAppVersion] = useState<string>("");
+  const [systemVersion, setSystemVersion] = useState<string>("");
+  const [resetConfig, setResetConfig] = useState(false);
+  const [showFactoryResetConfirm, setShowFactoryResetConfirm] = useState(false);
+  const [versionChangeAcknowledged, setVersionChangeAcknowledged] = useState(false);
+  const [customVersionUpdateLoading, setCustomVersionUpdateLoading] = useState(false);
+  const settings = useSettingsStore();
+  const shell = useCapability("shell");
+  // A device that keeps its image files on a removable card keeps them through a reset.
+  const removableStorage = useCapability("removable_storage");
+  const localLoopback = useCapability("local_loopback");
+  const logLevel = useCapability("log_level");
+  // The Mini's USB Serial/JTAG port: enabled is the stored setting, active
+  // the port's state. Off and on take effect at the next restart.
+  const usbDebugging = useCapability("usb_debugging");
+  const [usbDebuggingState, setUsbDebuggingState] = useState<UsbDebuggingState | null>(null);
+  // The value the switch asks for, until its restart is confirmed or cancelled.
+  const [usbDebuggingRequest, setUsbDebuggingRequest] = useState<boolean | null>(null);
+  const [usbDebuggingSaving, setUsbDebuggingSaving] = useState(false);
+  // Counts confirmations, so that the answers of one the user closed are ignored.
+  const usbDebuggingAttempt = useRef(0);
+  // A one-image firmware reports an empty appVersion and updates only its system.
+  const deviceAppVersion = useDeviceStore(state => state.appVersion);
+  const separateApp = deviceAppVersion !== "";
+  // Both arrive when the RPC channel opens; until then the device may have a shell.
+  const reported =
+    useDeviceStore(state => state.capabilities !== null) && deviceAppVersion !== null;
+
+  useEffect(() => {
+    if (!shell) return;
+    send("getDevModeState", {}, (resp: JsonRpcResponse) => {
+      if ("error" in resp) return;
+      const result = resp.result as { enabled: boolean };
+      setDeveloperMode(result.enabled);
+    });
+
+    send("getSSHKeyState", {}, (resp: JsonRpcResponse) => {
+      if ("error" in resp) return;
+      setSSHKey(resp.result as string);
+    });
+  }, [send, setDeveloperMode, shell]);
+
+  useEffect(() => {
+    send("getUsbEmulationState", {}, (resp: JsonRpcResponse) => {
+      if ("error" in resp) return;
+      setUsbEmulationEnabled(resp.result as boolean);
+    });
+
+    send("getDevChannelState", {}, (resp: JsonRpcResponse) => {
+      if ("error" in resp) return;
+      setDevChannel(resp.result as boolean);
+    });
+  }, [send]);
+
+  useEffect(() => {
+    if (!localLoopback) return;
+    send("getLocalLoopbackOnly", {}, (resp: JsonRpcResponse) => {
+      if ("error" in resp) return;
+      setLocalLoopbackOnly(resp.result as boolean);
+    });
+  }, [send, localLoopback]);
+
+  useEffect(() => {
+    if (!usbDebugging) return;
+    send("getUsbDebuggingState", {}, (resp: JsonRpcResponse) => {
+      if ("error" in resp) return;
+      setUsbDebuggingState(resp.result as UsbDebuggingState);
+    });
+  }, [send, usbDebugging]);
+
+  const closeUsbDebuggingConfirm = useCallback(() => {
+    usbDebuggingAttempt.current++;
+    setUsbDebuggingSaving(false);
+    setUsbDebuggingRequest(null);
+  }, []);
+
+  // Stores the setting, then restarts so that it takes effect. The device
+  // sends willReboot, which shows the rebooting overlay. send() drops a
+  // request without an answer when the channel is closed, so the dialog
+  // checks the channel first and can always be closed. The answer to the
+  // save is shown also after the dialog closed; only the restart waits for
+  // an open dialog, and until a restart the note below the switch says so.
+  const handleUsbDebuggingConfirm = useCallback(() => {
+    if (usbDebuggingRequest === null) return;
+    if (useRTCStore.getState().rpcDataChannel?.readyState !== "open") {
+      notifications.error(
+        m.advanced_error_set_usb_debugging({ error: m.advanced_usb_debugging_not_connected() }),
+      );
+      return;
+    }
+    const attempt = ++usbDebuggingAttempt.current;
+    const current = () => usbDebuggingAttempt.current === attempt;
+    setUsbDebuggingSaving(true);
+    send("setUsbDebuggingState", { enabled: usbDebuggingRequest }, (resp: JsonRpcResponse) => {
+      if ("error" in resp) {
+        if (current()) closeUsbDebuggingConfirm();
+        notifications.error(
+          m.advanced_error_set_usb_debugging({ error: resp.error.data || m.unknown_error() }),
+        );
+        return;
+      }
+      setUsbDebuggingState(resp.result as UsbDebuggingState);
+      if (!current()) return;
+      send("reboot", { force: true }, (rebootResp: JsonRpcResponse) => {
+        if (!current()) return;
+        closeUsbDebuggingConfirm();
+        if ("error" in rebootResp) {
+          notifications.error(
+            m.advanced_error_usb_debugging_restart({
+              error: rebootResp.error.data || m.unknown_error(),
+            }),
+          );
+        }
+      });
+    });
+  }, [send, usbDebuggingRequest, closeUsbDebuggingConfirm]);
+
+  useEffect(() => {
+    if (!logLevel) return;
+    send("getDefaultLogLevel", {}, (resp: JsonRpcResponse) => {
+      if ("error" in resp) return;
+      setDefaultLogLevel(resp.result as string);
+    });
+  }, [send, logLevel]);
+
+  const getUsbEmulationState = useCallback(() => {
+    send("getUsbEmulationState", {}, (resp: JsonRpcResponse) => {
+      if ("error" in resp) return;
+      setUsbEmulationEnabled(resp.result as boolean);
+    });
+  }, [send]);
+
+  const handleUsbEmulationToggle = useCallback(
+    (enabled: boolean) => {
+      send("setUsbEmulationState", { enabled: enabled }, (resp: JsonRpcResponse) => {
+        if ("error" in resp) {
+          notifications.error(
+            enabled
+              ? m.advanced_error_usb_emulation_enable({
+                  error: resp.error.data || m.unknown_error(),
+                })
+              : m.advanced_error_usb_emulation_disable({
+                  error: resp.error.data || m.unknown_error(),
+                }),
+          );
+          return;
+        }
+        setUsbEmulationEnabled(enabled);
+        getUsbEmulationState();
+      });
+    },
+    [getUsbEmulationState, send],
+  );
+
+  const handleFactoryReset = useCallback(() => {
+    send("factoryReset", {}, (resp: JsonRpcResponse) => {
+      if ("error" in resp) {
+        notifications.error(
+          m.advanced_factory_reset_error({ error: resp.error.data || m.unknown_error() }),
+        );
+        return;
+      }
+      notifications.success(m.advanced_factory_reset_success());
+    });
+  }, [send]);
+
+  const handleUpdateSSHKey = useCallback(() => {
+    send("setSSHKeyState", { sshKey }, (resp: JsonRpcResponse) => {
+      if ("error" in resp) {
+        notifications.error(
+          m.advanced_error_update_ssh_key({ error: resp.error.data || m.unknown_error() }),
+        );
+        return;
+      }
+      notifications.success(m.advanced_success_update_ssh_key());
+    });
+  }, [send, sshKey]);
+
+  const handleDevModeChange = useCallback(
+    (developerMode: boolean) => {
+      send("setDevModeState", { enabled: developerMode }, (resp: JsonRpcResponse) => {
+        if ("error" in resp) {
+          notifications.error(
+            m.advanced_error_set_dev_mode({ error: resp.error.data || m.unknown_error() }),
+          );
+          return;
+        }
+        setDeveloperMode(developerMode);
+      });
+    },
+    [send, setDeveloperMode],
+  );
+
+  const handleDevChannelChange = useCallback(
+    (enabled: boolean) => {
+      send("setDevChannelState", { enabled }, (resp: JsonRpcResponse) => {
+        if ("error" in resp) {
+          notifications.error(
+            m.advanced_error_set_dev_channel({ error: resp.error.data || m.unknown_error() }),
+          );
+          return;
+        }
+        setDevChannel(enabled);
+      });
+    },
+    [send, setDevChannel],
+  );
+
+  const applyLoopbackOnlyMode = useCallback(
+    (enabled: boolean) => {
+      send("setLocalLoopbackOnly", { enabled }, (resp: JsonRpcResponse) => {
+        if ("error" in resp) {
+          notifications.error(
+            enabled
+              ? m.advanced_error_loopback_enable({ error: resp.error.data || m.unknown_error() })
+              : m.advanced_error_loopback_disable({ error: resp.error.data || m.unknown_error() }),
+          );
+          return;
+        }
+        setLocalLoopbackOnly(enabled);
+        if (enabled) {
+          notifications.success(m.advanced_success_loopback_enabled());
+        } else {
+          notifications.success(m.advanced_success_loopback_disabled());
+        }
+      });
+    },
+    [send, setLocalLoopbackOnly],
+  );
+
+  const handleLoopbackOnlyModeChange = useCallback(
+    (enabled: boolean) => {
+      // If trying to enable loopback-only mode, show warning first
+      if (enabled) {
+        setShowLoopbackWarning(true);
+      } else {
+        // If disabling, just proceed
+        applyLoopbackOnlyMode(false);
+      }
+    },
+    [applyLoopbackOnlyMode, setShowLoopbackWarning],
+  );
+
+  const confirmLoopbackModeEnable = useCallback(() => {
+    applyLoopbackOnlyMode(true);
+    setShowLoopbackWarning(false);
+  }, [applyLoopbackOnlyMode, setShowLoopbackWarning]);
+
+  const handleVersionUpdateError = useCallback((error?: JsonRpcError | string) => {
+    notifications.error(
+      m.advanced_error_version_update({
+        error:
+          typeof error === "string" ? error : (error?.data ?? error?.message ?? m.unknown_error()),
+      }),
+      { duration: 1000 * 15 }, // 15 seconds
+    );
+    setCustomVersionUpdateLoading(false);
+  }, []);
+
+  const target = separateApp ? updateTarget : "system";
+
+  const handleCustomVersionUpdate = useCallback(async () => {
+    const components: UpdateComponents = {};
+    if (["app", "both"].includes(target) && appVersion) components.app = appVersion;
+    if (["system", "both"].includes(target) && systemVersion) components.system = systemVersion;
+    let versionInfo: SystemVersionInfo | undefined;
+
+    try {
+      // we do not need to set it to false if check succeeds,
+      // because it will be redirected to the update page later
+      setCustomVersionUpdateLoading(true);
+      versionInfo = await checkUpdateComponents({ components }, devChannel);
+    } catch (error: unknown) {
+      const jsonRpcError = error as JsonRpcError;
+      handleVersionUpdateError(jsonRpcError);
+      return;
+    }
+
+    let hasUpdate = false;
+
+    const pageParams = new URLSearchParams();
+    if (components.app && versionInfo?.remote?.appVersion && versionInfo?.appUpdateAvailable) {
+      hasUpdate = true;
+      pageParams.set("custom_app_version", versionInfo.remote?.appVersion);
+    }
+    if (
+      components.system &&
+      versionInfo?.remote?.systemVersion &&
+      versionInfo?.systemUpdateAvailable
+    ) {
+      hasUpdate = true;
+      pageParams.set("custom_system_version", versionInfo.remote?.systemVersion);
+    }
+    pageParams.set("reset_config", resetConfig.toString());
+
+    if (!hasUpdate) {
+      // The check reports its own failures, such as an unknown version, in `error`.
+      handleVersionUpdateError(versionInfo?.error ?? "No update available");
+      return;
+    }
+
+    // Navigate to update page
+    navigateTo(`/settings/general/update?${pageParams.toString()}`);
+  }, [
+    appVersion,
+    devChannel,
+    handleVersionUpdateError,
+    navigateTo,
+    resetConfig,
+    systemVersion,
+    target,
+  ]);
+
+  const versionUpdate = (
+    <div className="space-y-4">
+      <SettingsItem
+        title={m.advanced_version_update_title()}
+        description={m.advanced_version_update_description()}
+      />
+
+      {separateApp && (
+        <SelectMenuBasic
+          label={m.advanced_version_update_target_label()}
+          options={[
+            { value: "app", label: m.advanced_version_update_target_app() },
+            { value: "system", label: m.advanced_version_update_target_system() },
+            { value: "both", label: m.advanced_version_update_target_both() },
+          ]}
+          value={updateTarget}
+          onChange={e => setUpdateTarget(e.target.value)}
+        />
+      )}
+
+      {(target === "app" || target === "both") && (
+        <InputFieldWithLabel
+          label={m.advanced_version_update_app_label()}
+          placeholder="0.4.9"
+          value={appVersion}
+          onChange={e => setAppVersion(e.target.value)}
+        />
+      )}
+
+      {(target === "system" || target === "both") && (
+        <InputFieldWithLabel
+          label={m.advanced_version_update_system_label()}
+          placeholder="0.4.9"
+          value={systemVersion}
+          onChange={e => setSystemVersion(e.target.value)}
+        />
+      )}
+
+      {separateApp && (
+        <p className="text-xs text-slate-600 dark:text-slate-400">
+          {m.advanced_version_update_helper()}{" "}
+          <a
+            href="https://github.com/jetkvm/kvm/releases"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-medium text-blue-700 hover:underline dark:text-blue-500"
+          >
+            {m.advanced_version_update_github_link()}
+          </a>
+        </p>
+      )}
+
+      <div>
+        <CheckboxWithLabel
+          label={m.advanced_version_update_reset_config_label()}
+          description={m.advanced_version_update_reset_config_description()}
+          checked={resetConfig}
+          onChange={e => setResetConfig(e.target.checked)}
+        />
+      </div>
+
+      <div>
+        <CheckboxWithLabel
+          label={m.advanced_version_change_acknowledged_label()}
+          checked={versionChangeAcknowledged}
+          onChange={e => setVersionChangeAcknowledged(e.target.checked)}
+        />
+      </div>
+
+      <Button
+        size="SM"
+        theme="primary"
+        text={m.advanced_version_update_button()}
+        disabled={
+          (target === "app" && !appVersion) ||
+          (target === "system" && !systemVersion) ||
+          (target === "both" && (!appVersion || !systemVersion)) ||
+          !versionChangeAcknowledged ||
+          customVersionUpdateLoading
+        }
+        loading={customVersionUpdateLoading}
+        onClick={handleCustomVersionUpdate}
+      />
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
+      <SettingsPageHeader title={m.advanced_title()} description={m.advanced_description()} />
+
+      <div className="space-y-4">
+        <SettingsItem
+          title={m.advanced_dev_channel_title()}
+          description={m.advanced_dev_channel_description()}
+        >
+          <Checkbox
+            checked={devChannel}
+            onChange={e => {
+              handleDevChannelChange(e.target.checked);
+            }}
+          />
+        </SettingsItem>
+        {shell && (
+          <SettingsItem
+            title={m.advanced_developer_mode_title()}
+            description={m.advanced_developer_mode_description()}
+          >
+            <Checkbox
+              checked={settings.developerMode}
+              onChange={e => handleDevModeChange(e.target.checked)}
+            />
+          </SettingsItem>
+        )}
+        {usbDebugging && usbDebuggingState && (
+          <SettingsItem
+            title={m.advanced_usb_debugging_title()}
+            description={m.advanced_usb_debugging_description()}
+          >
+            <Checkbox
+              checked={usbDebuggingState.enabled}
+              onChange={e => setUsbDebuggingRequest(e.target.checked)}
+            />
+          </SettingsItem>
+        )}
+        {usbDebuggingState && usbDebuggingState.enabled !== usbDebuggingState.active && (
+          <p className="text-xs text-amber-600 dark:text-amber-500">
+            {usbDebuggingState.enabled
+              ? m.advanced_usb_debugging_on_after_restart()
+              : m.advanced_usb_debugging_off_after_restart()}
+          </p>
+        )}
+        {reported && !shell && versionUpdate}
+        {shell && settings.developerMode ? (
+          <NestedSettingsGroup>
+            <GridCard>
+              <div className="flex items-start gap-x-4 p-4 select-none">
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                  className="mt-1 h-8 w-8 shrink-0 text-amber-600 dark:text-amber-500"
+                >
+                  <path
+                    fillRule="evenodd"
+                    d="M9.401 3.003c1.155-2 4.043-2 5.197 0l7.355 12.748c1.154 2-.29 4.5-2.599 4.5H4.645c-2.309 0-3.752-2.5-2.598-4.5L9.4 3.003zM12 8.25a.75.75 0 01.75.75v3.75a.75.75 0 01-1.5 0V9a.75.75 0 01.75-.75zm0 8.25a.75.75 0 100-1.5.75.75 0 000 1.5z"
+                    clipRule="evenodd"
+                  />
+                </svg>
+                <div className="space-y-3">
+                  <div className="space-y-2">
+                    <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                      {m.advanced_developer_mode_enabled_title()}
+                    </h3>
+                    <div>
+                      <ul className="list-disc space-y-1 pl-5 text-xs text-slate-700 dark:text-slate-300">
+                        <li>{m.advanced_developer_mode_warning_security()}</li>
+                        <li>{m.advanced_developer_mode_warning_risks()}</li>
+                      </ul>
+                    </div>
+                  </div>
+                  <div className="text-xs text-slate-700 dark:text-slate-300">
+                    {m.advanced_developer_mode_warning_advanced()}
+                  </div>
+                </div>
+              </div>
+            </GridCard>
+
+            {isOnDevice && (
+              <div className="space-y-4">
+                <SettingsItem
+                  title={m.advanced_ssh_access_title()}
+                  description={m.advanced_ssh_access_description()}
+                />
+                <TextAreaWithLabel
+                  label={m.advanced_ssh_public_key_label()}
+                  value={sshKey || ""}
+                  rows={3}
+                  onChange={e => setSSHKey(e.target.value)}
+                  placeholder={m.advanced_ssh_public_key_placeholder()}
+                />
+                <p className="text-xs text-slate-600 dark:text-slate-400">
+                  {m.advanced_ssh_default_user()} <strong>root</strong>.
+                </p>
+                {!sshKey?.trim() && (
+                  <p className="text-xs text-amber-600 dark:text-amber-500">
+                    {m.advanced_ssh_key_required_warning()}
+                  </p>
+                )}
+                <div className="flex items-center gap-x-2">
+                  <Button
+                    size="SM"
+                    theme="primary"
+                    text={m.advanced_update_ssh_key_button()}
+                    onClick={handleUpdateSSHKey}
+                  />
+                </div>
+              </div>
+            )}
+
+            {versionUpdate}
+          </NestedSettingsGroup>
+        ) : null}
+
+        {localLoopback && (
+          <SettingsItem
+            title={m.advanced_loopback_only_title()}
+            description={m.advanced_loopback_only_description()}
+          >
+            <Checkbox
+              checked={localLoopbackOnly}
+              onChange={e => handleLoopbackOnlyModeChange(e.target.checked)}
+            />
+          </SettingsItem>
+        )}
+
+        <SettingsItem
+          title={m.advanced_troubleshooting_mode_title()}
+          description={m.advanced_troubleshooting_mode_description()}
+        >
+          <Checkbox
+            defaultChecked={settings.debugMode}
+            onChange={e => {
+              settings.setDebugMode(e.target.checked);
+            }}
+          />
+        </SettingsItem>
+
+        {settings.debugMode && (
+          <NestedSettingsGroup>
+            {logLevel && (
+              <SettingsItem
+                title={m.advanced_troubleshooting_log_level_title()}
+                description={m.advanced_troubleshooting_log_level_description()}
+              >
+                <SelectMenuBasic
+                  size="SM"
+                  value={defaultLogLevel}
+                  options={[
+                    { label: m.advanced_log_level_error(), value: "ERROR" },
+                    { label: m.advanced_log_level_warning(), value: "WARN" },
+                    { label: m.advanced_log_level_info(), value: "INFO" },
+                    { label: m.advanced_log_level_debug(), value: "DEBUG" },
+                    { label: m.advanced_log_level_trace(), value: "TRACE" },
+                  ]}
+                  onChange={e => {
+                    const level = e.target.value;
+                    const previousLevel = defaultLogLevel;
+                    setDefaultLogLevel(level);
+                    send("setDefaultLogLevel", { level }, (resp: JsonRpcResponse) => {
+                      if ("error" in resp) {
+                        setDefaultLogLevel(previousLevel);
+                        notifications.error(
+                          m.advanced_error_set_log_level({
+                            error: resp.error.data || m.unknown_error(),
+                          }),
+                        );
+                        return;
+                      }
+                    });
+                  }}
+                />
+              </SettingsItem>
+            )}
+
+            <SettingsItem
+              title={m.advanced_usb_emulation_title()}
+              description={m.advanced_usb_emulation_description()}
+            >
+              <Button
+                size="SM"
+                theme="light"
+                text={
+                  usbEmulationEnabled
+                    ? m.advanced_disable_usb_emulation()
+                    : m.advanced_enable_usb_emulation()
+                }
+                onClick={() => handleUsbEmulationToggle(!usbEmulationEnabled)}
+              />
+            </SettingsItem>
+
+            <SettingsItem
+              title={m.advanced_factory_reset_title()}
+              description={
+                removableStorage
+                  ? m.advanced_factory_reset_description_removable_storage()
+                  : m.advanced_factory_reset_description()
+              }
+            >
+              <Button
+                size="SM"
+                theme="danger"
+                text={m.advanced_factory_reset_button()}
+                onClick={() => setShowFactoryResetConfirm(true)}
+              />
+            </SettingsItem>
+
+            <SettingsItem
+              title={m.advanced_download_diagnostics_title()}
+              description={m.advanced_download_diagnostics_description()}
+            >
+              <LinkButton
+                to="/diagnostics"
+                reloadDocument
+                download
+                size="SM"
+                theme="light"
+                text={m.advanced_download_diagnostics_button()}
+              />
+            </SettingsItem>
+          </NestedSettingsGroup>
+        )}
+      </div>
+
+      <ConfirmDialog
+        open={usbDebuggingRequest !== null}
+        onClose={closeUsbDebuggingConfirm}
+        title={
+          usbDebuggingRequest
+            ? m.advanced_usb_debugging_confirm_on_title()
+            : m.advanced_usb_debugging_confirm_off_title()
+        }
+        description={m.advanced_usb_debugging_confirm_description()}
+        variant="warning"
+        confirmText={m.advanced_usb_debugging_confirm()}
+        isConfirming={usbDebuggingSaving}
+        onConfirm={handleUsbDebuggingConfirm}
+      />
+
+      <ConfirmDialog
+        open={showFactoryResetConfirm}
+        onClose={() => setShowFactoryResetConfirm(false)}
+        title={m.advanced_factory_reset_dialog_title()}
+        description={
+          removableStorage
+            ? m.advanced_factory_reset_dialog_description_removable_storage()
+            : m.advanced_factory_reset_dialog_description()
+        }
+        variant="danger"
+        confirmText={
+          removableStorage
+            ? m.advanced_factory_reset_confirm_removable_storage()
+            : m.advanced_factory_reset_confirm()
+        }
+        onConfirm={() => {
+          setShowFactoryResetConfirm(false);
+          handleFactoryReset();
+        }}
+      />
+
+      <ConfirmDialog
+        open={showLoopbackWarning}
+        onClose={() => {
+          setShowLoopbackWarning(false);
+        }}
+        title={m.advanced_loopback_warning_title()}
+        description={
+          <>
+            <p>{m.advanced_loopback_warning_description()}</p>
+            <p>{m.advanced_loopback_warning_before()}</p>
+            <ul className="list-disc space-y-1 pl-5 text-xs text-slate-700 dark:text-slate-300">
+              <li>{m.advanced_loopback_warning_ssh()}</li>
+              <li>{m.advanced_loopback_warning_cloud()}</li>
+            </ul>
+          </>
+        }
+        variant="warning"
+        confirmText={m.advanced_loopback_warning_confirm()}
+        onConfirm={confirmLoopbackModeEnable}
+      />
+    </div>
+  );
+}

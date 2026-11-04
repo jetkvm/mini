@@ -1,0 +1,20 @@
+diff --git a/components/sdmmc/sdmmc_common.c b/components/sdmmc/sdmmc_common.c
+index 498aac2206..e96a977a0d 100644
+--- a/components/sdmmc/sdmmc_common.c
++++ b/components/sdmmc/sdmmc_common.c
+@@ -209,8 +209,14 @@ esp_err_t sdmmc_init_sd_current_limit(sdmmc_card_t *card)
+ 
+ esp_err_t sdmmc_init_sd_timing_tuning(sdmmc_card_t *card)
+ {
++    /* CMD19 tuning blocks are defined for SDR50 and SDR104, not DDR50.
++     * Keep fixed-phase modes and UHS-I fallbacks at the host-selected phase. */
++    if (card->max_freq_khz != SDMMC_FREQ_SDR50 && card->max_freq_khz != SDMMC_FREQ_SDR104) {
++        return ESP_OK;
++    }
++
+     ESP_RETURN_ON_ERROR(sdmmc_do_timing_tuning(card, SDMMC_DELAY_MODE_PHASE), TAG, "failed to do phase timing tuning");
+-    if (card->host.max_freq_khz == SDMMC_FREQ_SDR104) {
++    if (card->max_freq_khz == SDMMC_FREQ_SDR104) {
+         ESP_RETURN_ON_ERROR(sdmmc_do_timing_tuning(card, SDMMC_DELAY_MODE_LINE), TAG, "failed to do delayline timing tuning");
+     }
+ 

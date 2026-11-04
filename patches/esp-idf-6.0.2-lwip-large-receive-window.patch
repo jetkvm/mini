@@ -1,0 +1,13 @@
+diff --git a/components/lwip/Kconfig b/components/lwip/Kconfig
+index 72a5439754..27404188c1 100644
+--- a/components/lwip/Kconfig
++++ b/components/lwip/Kconfig
+@@ -689,7 +689,7 @@ menu "LWIP"
+             int "Default receive window size"
+             default 5760 # 4 * default MSS
+             range 2440 65535 if !LWIP_WND_SCALE
+-            range 2440 1024000 if LWIP_WND_SCALE
++            range 2440 4194304 if LWIP_WND_SCALE
+             help
+                 Set default TCP receive window size for new TCP sockets.
+ 

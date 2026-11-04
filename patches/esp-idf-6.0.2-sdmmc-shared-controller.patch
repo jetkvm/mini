@@ -1,0 +1,35 @@
+diff --git a/components/esp_driver_sdmmc/legacy/src/sdmmc_host.c b/components/esp_driver_sdmmc/legacy/src/sdmmc_host.c
+index 9485a754b0..b589c72de9 100644
+--- a/components/esp_driver_sdmmc/legacy/src/sdmmc_host.c
++++ b/components/esp_driver_sdmmc/legacy/src/sdmmc_host.c
+@@ -77,6 +77,11 @@ esp_err_t sdmmc_host_set_input_delayline(int slot, sdmmc_delay_line_t delay_line
+ 
+ esp_err_t sdmmc_host_init(void)
+ {
++    if (s_ctlr) {
++        ESP_LOGI(TAG, "SDMMC host controller already created, returning existing handle");
++        return ESP_OK;
++    }
++
+     sd_host_sdmmc_cfg_t cfg = {
+         .event_queue_items = SDMMC_EVENT_QUEUE_LENGTH,
+     };
+@@ -158,6 +163,8 @@ esp_err_t sdmmc_host_deinit_slot(int slot)
+     //for backward compatibility, return ESP_OK when only slot is removed and host is still there
+     if (ret == ESP_ERR_INVALID_STATE) {
+         ret = ESP_OK;
++    } else if (ret == ESP_OK) {
++        s_ctlr = NULL;
+     }
+ 
+     return ret;
+@@ -176,6 +183,8 @@ esp_err_t sdmmc_host_deinit(void)
+         }
+     }
+     ESP_RETURN_ON_ERROR(sd_host_del_controller(s_ctlr), TAG, "failed to delete controller");
+
++    s_ctlr = NULL;
++
+     return ESP_OK;
+ }
+ 

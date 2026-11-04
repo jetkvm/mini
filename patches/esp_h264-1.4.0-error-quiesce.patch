@@ -1,0 +1,284 @@
+diff --git a/managed_components/espressif__esp_h264/hw/src/esp_h264_enc_single_hw.c b/managed_components/espressif__esp_h264/hw/src/esp_h264_enc_single_hw.c
+--- a/managed_components/espressif__esp_h264/hw/src/esp_h264_enc_single_hw.c
++++ b/managed_components/espressif__esp_h264/hw/src/esp_h264_enc_single_hw.c
+@@ -127,6 +127,33 @@
+     h264_hal_set_start(h264_hal);
+ }
+ 
++/* Error returns transfer both input and output buffers back to the caller.
++ * An overflow interrupt can precede FRAME_DONE, and a timeout proves neither
++ * read nor write DMA has finished. Quiesce all channels before cache access
++ * or returning ownership, then leave the encoder ready for a fresh IDR. */
++static void h264_hw_abort_frame(esp_h264_hw_handle_t *hw_hd)
++{
++    uint32_t enabled_intr = hw_hd->h264_hal.dev->int_ena.val;
++    ESP_ERROR_CHECK(esp_intr_disable(hw_hd->intr_hd));
++    h264_hal_ena_intr(&hw_hd->h264_hal, 0);
++    h264_hal_reset(&hw_hd->h264_hal);
++    h264_dma_hal_deinit(&hw_hd->dma2d_hal);
++    h264_dma_hal_reset_counter_dbtmp(&hw_hd->dma2d_hal);
++    h264_dma_hal_reset_counter_db(&hw_hd->dma2d_hal);
++    h264_dma_hal_reset_counter_ref(&hw_hd->dma2d_hal);
++    h264_dma_hal_clear_intr(&hw_hd->dma2d_hal);
++    h264_hal_clear_intr_status(&hw_hd->h264_hal, ~0);
++    /* Retire a completion that raced the timeout, so it cannot satisfy the
++     * next frame's wait before that frame's DMA has actually completed. */
++    while (esp_h264_mutex_lock(hw_hd->frame_done, 0) == pdTRUE) {
++    }
++#if HAL_CONFIG(CHIP_SUPPORT_MIN_REV) >= 300
++    hw_hd->bs_bit_overflow = false;
++#endif
++    h264_hal_ena_intr(&hw_hd->h264_hal, enabled_intr);
++    ESP_ERROR_CHECK(esp_intr_enable(hw_hd->intr_hd));
++}
++
+ static esp_h264_err_t h264_hw_enc_gop_mode_process(esp_h264_hw_handle_t *hw_hd, uint8_t *in_frame, uint8_t *out_frame, uint32_t out_frame_size, uint32_t *out_len)
+ {
+     esp_h264_rc_hd_t rc_hd = NULL;
+@@ -188,10 +215,7 @@
+     if (esp_h264_mutex_lock(hw_hd->frame_done, (TickType_t)H264_TIME_OUT) != pdTRUE) {
+         *out_len = 0;
+         uint32_t bs_intraw = h264_dma_hal_get_bs_intr(&hw_hd->dma2d_hal);
+-        h264_hal_reset(&hw_hd->h264_hal);
+-        h264_dma_hal_reset_counter_dbtmp(&hw_hd->dma2d_hal);
+-        h264_dma_hal_reset_counter_db(&hw_hd->dma2d_hal);
+-        h264_dma_hal_reset_counter_ref(&hw_hd->dma2d_hal);
++        h264_hw_abort_frame(hw_hd);
+         if ((bs_intraw & 0x3) == 1) {
+             ESP_H264_LOGE(TAG, "The out buffer is too small. \n");
+             return ESP_H264_ERR_MEM;
+@@ -206,6 +230,12 @@
+     bool bs_overflow = hw_hd->bs_bit_overflow;
+     hw_hd->bs_bit_overflow = false;
+ #endif
++    /* Stop a partial output before its cache lines become CPU-owned. Check
++     * both hardware overflow and the reported length, including either wake
++     * reason, before the existing output-length validation below. */
++    if (bs_overflow || *out_len + (uint32_t)out_frame_len > out_frame_size) {
++        h264_hw_abort_frame(hw_hd);
++    }
+     /* Safety net: the HW overflow interrupt/flag is not guaranteed to fire in every case
+      * where the coded bitstream exceeds the buffer (observed with margins close to the
+      * boundary). Enforce the documented contract - "coded length > out_frame.raw_data.len
+diff --git a/managed_components/espressif__esp_h264/hw/hal/esp32p4/h264_dma_hal.c b/managed_components/espressif__esp_h264/hw/hal/esp32p4/h264_dma_hal.c
+--- a/managed_components/espressif__esp_h264/hw/hal/esp32p4/h264_dma_hal.c
++++ b/managed_components/espressif__esp_h264/hw/hal/esp32p4/h264_dma_hal.c
+@@ -5,6 +5,9 @@
+  */
+ 
+ #include "h264_dma_hal.h"
++#include "esp_timer.h"
++#include "esp_rom_sys.h"
++#include <stdlib.h>
+ 
+ void h264_dma_hal_init(h264_dma_hal_context_t *hal, h264_hal_dma_context_cfg_t *cfg)
+ {
+@@ -20,9 +23,65 @@
+     h264_dma_ll_set_all_burst_size(hal->dev, cfg->burst_size);
+ }
+ 
++/* Block new commands before waiting for outstanding AXI accesses to drain.
++ * reset_avail is the hardware indication that toggling channel reset is safe.
++ * RX3 (motion vectors) and RX4 (bitstream) need the same protection as RX0..2;
++ * the old all-link-stop helper omitted both of those output destinations.
++ * TRM section 41.5.2.4: TX3, TX4 and RX5 share the RX5 reset controls.
++ * TX3/TX4 have no independent cmd_disable/reset_avail/reset bits: treating
++ * their reserved state bits as completion flags would always time out. */
++static bool h264_dma_stop_and_reset(h264_dma_hal_context_t *hal)
++{
++    h264_dma_dev_t *dma = hal->dev;
++    const int64_t deadline_us = esp_timer_get_time() + 20000;
++    for (uint8_t i = 0; i < H264_DMA_IN_OUT_CH_NUM; i++) {
++        dma->dma_in_ch[i].link_conf.inlink_stop = 1;
++        dma->dma_in_ch[i].conf0.in_cmd_disable = 1;
++        dma->dma_out_ch[i].link_conf.outlink_stop = 1;
++    }
++    for (uint8_t i = 0; i < 3; i++) {
++        dma->dma_out_ch[i].conf0.out_cmd_disable = 1;
++    }
++    dma->dma_in_ch5.conf0.in_cmd_disable = 1;
++    while (true) {
++        bool reset_safe = dma->dma_in_ch5.state.in_reset_avail;
++        for (uint8_t i = 0; i < H264_DMA_IN_OUT_CH_NUM; i++) {
++            reset_safe = reset_safe && dma->dma_in_ch[i].state.in_reset_avail;
++        }
++        for (uint8_t i = 0; i < 3; i++) {
++            reset_safe = reset_safe && dma->dma_out_ch[i].state.out_reset_avail;
++        }
++        if (reset_safe) {
++            break;
++        }
++        if (esp_timer_get_time() >= deadline_us) {
++            return false;
++        }
++        esp_rom_delay_us(1);
++    }
++    for (uint8_t i = 0; i < H264_DMA_IN_OUT_CH_NUM; i++) {
++        dma->dma_in_ch[i].conf0.in_rst = 1;
++        dma->dma_in_ch[i].conf0.in_rst = 0;
++        dma->dma_in_ch[i].conf0.in_cmd_disable = 0;
++    }
++    for (uint8_t i = 0; i < 3; i++) {
++        dma->dma_out_ch[i].conf0.out_rst = 1;
++        dma->dma_out_ch[i].conf0.out_rst = 0;
++        dma->dma_out_ch[i].conf0.out_cmd_disable = 0;
++    }
++    dma->dma_in_ch5.conf0.in_rst = 1;
++    dma->dma_in_ch5.conf0.in_rst = 0;
++    dma->dma_in_ch5.conf0.in_cmd_disable = 0;
++    return true;
++}
++
+ void h264_dma_hal_deinit(h264_dma_hal_context_t *hal)
+ {
+-    h264_dma_ll_set_all_link_stop(hal->dev);
++    /* Returning would let callers free/reuse memory that DMA still owns.
++     * A stuck bus is fatal; keep the wait bounded instead of spinning forever. */
++    if (!h264_dma_stop_and_reset(hal)) {
++        abort();
++    }
+ }
+ 
+ uint32_t h264_dma_hal_get_bs_intr(h264_dma_hal_context_t *hal)
+diff --git a/managed_components/espressif__esp_h264/CMakeLists.txt b/managed_components/espressif__esp_h264/CMakeLists.txt
+--- a/managed_components/espressif__esp_h264/CMakeLists.txt
++++ b/managed_components/espressif__esp_h264/CMakeLists.txt
+@@ -69,6 +69,9 @@
+ ENDIF ()
+ 
+ set(private_requires esp_hw_support efuse)
++if("${IDF_TARGET}" STREQUAL "esp32p4")
++    list(APPEND private_requires esp_timer)
++endif()
+ IF ("${IDF_VERSION_MAJOR}.${IDF_VERSION_MINOR}" VERSION_LESS "6.0")
+     list(APPEND private_requires bootloader_support)
+ ENDIF ()
+diff --git a/managed_components/espressif__esp_h264/test_apps/test_dma_quiesce_host.py b/managed_components/espressif__esp_h264/test_apps/test_dma_quiesce_host.py
+new file mode 100644
+--- /dev/null
++++ b/managed_components/espressif__esp_h264/test_apps/test_dma_quiesce_host.py
+@@ -0,0 +1,124 @@
++#!/usr/bin/env python3
++"""Exercise the production DMA abort sequence with delayed/broken AXI drains."""
++from pathlib import Path
++import subprocess
++import tempfile
++
++root = Path(__file__).resolve().parents[1]
++source = (root / "hw/hal/esp32p4/h264_dma_hal.c").read_text()
++begin = source.index("static bool h264_dma_stop_and_reset(")
++end = source.index("uint32_t h264_dma_hal_get_bs_intr(", begin)
++production = source[begin:end]
++
++harness = r"""
++#include <assert.h>
++#include <stdbool.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <string.h>
++#include <setjmp.h>
++#define H264_DMA_IN_OUT_CH_NUM 5
++typedef struct {
++    struct { int inlink_stop, outlink_stop; } link_conf;
++    struct { int in_cmd_disable, out_cmd_disable, in_rst, out_rst; } conf0;
++    struct { int in_reset_avail, out_reset_avail; } state;
++} channel_t;
++typedef struct { channel_t dma_in_ch[5], dma_out_ch[5], dma_in_ch5; } h264_dma_dev_t;
++typedef struct { h264_dma_dev_t *dev; } h264_dma_hal_context_t;
++static h264_dma_dev_t device;
++static int64_t fake_us;
++static int delay_calls, ready_after, stuck_channel;
++static jmp_buf abort_jump;
++static int64_t esp_timer_get_time(void) { return fake_us; }
++
++static void assert_commands_disabled(void)
++{
++    for (int i = 0; i < 5; ++i) {
++        assert(device.dma_in_ch[i].conf0.in_cmd_disable);
++        assert(device.dma_in_ch[i].link_conf.inlink_stop);
++        assert(device.dma_out_ch[i].conf0.out_cmd_disable == (i < 3));
++        assert(device.dma_out_ch[i].link_conf.outlink_stop);
++    }
++    assert(device.dma_in_ch5.conf0.in_cmd_disable);
++}
++
++static void set_available(void)
++{
++    for (int i = 0; i < 5; ++i) {
++        device.dma_in_ch[i].state.in_reset_avail = stuck_channel != i;
++        /* TRM 41.5.2.4: TX3/TX4 have no independent reset controls.
++         * Their reserved reset-available bits must stay zero, even idle. */
++        device.dma_out_ch[i].state.out_reset_avail =
++            i < 3 && stuck_channel != 5 + i;
++    }
++    device.dma_in_ch5.state.in_reset_avail = stuck_channel != 8;
++}
++
++static void esp_rom_delay_us(unsigned us)
++{
++    assert(us == 1);
++    assert_commands_disabled();
++    ++delay_calls;
++    /* Accelerate only the fake clock, preserving the production deadline. */
++    fake_us += 1000;
++    if (delay_calls >= ready_after) set_available();
++}
++
++static void test_abort(void)
++{
++    assert_commands_disabled();
++    longjmp(abort_jump, 1);
++}
++#define abort test_abort
++/* PRODUCTION */
++#undef abort
++
++static void setup(int stuck, int delay)
++{
++    memset(&device, 0, sizeof(device));
++    fake_us = 0;
++    delay_calls = 0;
++    stuck_channel = stuck;
++    ready_after = delay;
++    if (delay == 0) set_available();
++}
++
++int main(void)
++{
++    h264_dma_hal_context_t hal = { .dev = &device };
++    /* Normal drain and delayed drain both cover all channels, including the
++     * previously omitted RX3/RX4 and the shared TX3/TX4/RX5 reset group.
++     * Permanently zero reserved TX3/TX4 flags must not prevent success. */
++    for (int delay = 0; delay < 4; ++delay) {
++        setup(-1, delay);
++        h264_dma_hal_deinit(&hal);
++        assert(delay_calls == delay);
++        for (int i = 0; i < 5; ++i) {
++            assert(device.dma_in_ch[i].link_conf.inlink_stop);
++            assert(device.dma_out_ch[i].link_conf.outlink_stop);
++            assert(!device.dma_in_ch[i].conf0.in_cmd_disable);
++            assert(!device.dma_out_ch[i].conf0.out_cmd_disable);
++        }
++        assert(!device.dma_in_ch5.conf0.in_cmd_disable);
++    }
++    /* Every possible stuck channel must reach the finite deadline with all
++     * commands disabled; deinit must not return ownership to its caller. */
++    for (volatile int stuck = 0; stuck < 9; ++stuck) {
++        setup(stuck, 0);
++        if (setjmp(abort_jump) == 0) {
++            h264_dma_hal_deinit(&hal);
++            assert(!"deinit returned while DMA could still access memory");
++        }
++        assert(fake_us == 20000);
++        assert(delay_calls == 20);
++        assert_commands_disabled();
++    }
++    puts("H264 DMA quiesce: delayed completion, TX3/TX4 reserved bits and all 9 timeout groups PASS");
++}
++"""
++with tempfile.TemporaryDirectory(prefix="h264-quiesce-") as directory:
++    path = Path(directory)
++    (path / "test.c").write_text(harness.replace("/* PRODUCTION */", production))
++    subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-O2",
++                    str(path / "test.c"), "-o", str(path / "test")], check=True)
++    subprocess.run([str(path / "test")], check=True)

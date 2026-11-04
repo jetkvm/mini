@@ -1,0 +1,122 @@
+--- a/components/mbedtls/port/aes/dma/esp_aes_dma_core.c
++++ b/components/mbedtls/port/aes/dma/esp_aes_dma_core.c
+@@ -468,7 +468,7 @@
+         start_alignment_stream_buffer = aes_dma_calloc(alignment_buffer_size, sizeof(uint8_t), AES_DMA_ALLOC_CAPS | (esp_ptr_external_ram(buffer) ? MALLOC_CAP_SPIRAM : MALLOC_CAP_INTERNAL) , NULL);
+         if (start_alignment_stream_buffer == NULL) {
+             ESP_LOGE(TAG, "Failed to allocate memory for start alignment buffer");
+-            return ESP_FAIL;
++            goto fail;
+         }
+ 
+         memset(start_alignment_stream_buffer, 0, unaligned_start_bytes);
+@@ -490,7 +490,7 @@
+         end_alignment_stream_buffer = aes_dma_calloc(alignment_buffer_size, sizeof(uint8_t), AES_DMA_ALLOC_CAPS | (esp_ptr_external_ram(buffer) ? MALLOC_CAP_SPIRAM : MALLOC_CAP_INTERNAL), NULL);
+         if (end_alignment_stream_buffer == NULL) {
+             ESP_LOGE(TAG, "Failed to allocate memory for end alignment buffer");
+-            return ESP_FAIL;
++            goto fail;
+         }
+ 
+         memset(end_alignment_stream_buffer, 0, unaligned_end_bytes);
+@@ -504,7 +504,7 @@
+ 
+     if (dma_desc_link(dma_descriptors, dma_descs_needed, cache_line_size) != ESP_OK) {
+         ESP_LOGE(TAG, "DMA descriptors cache sync C2M failed");
+-        return ESP_FAIL;
++        goto fail;
+     }
+ 
+ ret:
+@@ -525,6 +525,12 @@
+     *end_alignment_buffer = end_alignment_stream_buffer;
+ 
+     return ESP_OK;
++
++fail:
++    free(start_alignment_stream_buffer);
++    free(end_alignment_stream_buffer);
++    free(dma_descriptors);
++    return ESP_FAIL;
+ }
+ 
+ int esp_aes_process_dma(esp_aes_context *ctx, const unsigned char *input, unsigned char *output, size_t len, uint8_t *stream_out)
+@@ -761,64 +767,61 @@
+     crypto_dma_desc_t *aad_desc = NULL, *len_desc = NULL;
+     crypto_dma_desc_t *input_desc = NULL;
+     crypto_dma_desc_t *output_desc = NULL;
++    uint8_t *aad_start_stream_buffer = NULL, *aad_end_stream_buffer = NULL;
++    uint8_t *input_start_stream_buffer = NULL, *input_end_stream_buffer = NULL;
++    uint8_t *output_start_stream_buffer = NULL, *output_end_stream_buffer = NULL;
++    uint32_t *len_buf = NULL;
+ 
+     size_t aad_alignment_buffer_size = MAX(2 * aad_cache_line_size, AES_BLOCK_BYTES);
+ 
+-    uint8_t *aad_start_stream_buffer = NULL;
+-    uint8_t *aad_end_stream_buffer = NULL;
+     size_t aad_dma_desc_num = 0;
+ 
+     if (generate_descriptor_list(aad, aad_len, &aad_start_stream_buffer, &aad_end_stream_buffer, aad_alignment_buffer_size, aad_cache_line_size, NULL, NULL, &aad_desc, &aad_dma_desc_num, false) != ESP_OK) {
+-        mbedtls_platform_zeroize(output, len);
+         ESP_LOGE(TAG, "Generating aad DMA descriptors failed");
+-        return -1;
++        ret = -1;
++        goto cleanup;
+     }
+ 
+     dma_desc_append(&in_desc_head, aad_desc);
+ 
+     size_t input_alignment_buffer_size = MAX(2 * input_cache_line_size, AES_BLOCK_BYTES);
+ 
+-    uint8_t *input_start_stream_buffer = NULL;
+-    uint8_t *input_end_stream_buffer = NULL;
+     size_t input_dma_desc_num = 0;
+ 
+     if (generate_descriptor_list(input, len, &input_start_stream_buffer, &input_end_stream_buffer, input_alignment_buffer_size, input_cache_line_size, NULL, NULL, &input_desc, &input_dma_desc_num, false) != ESP_OK) {
+-        mbedtls_platform_zeroize(output, len);
+         ESP_LOGE(TAG, "Generating input DMA descriptors failed");
+-        return -1;
++        ret = -1;
++        goto cleanup;
+     }
+ 
+     dma_desc_append(&in_desc_head, input_desc);
+ 
+     size_t output_alignment_buffer_size = MAX(2 * output_cache_line_size, AES_BLOCK_BYTES);
+ 
+-    uint8_t *output_start_stream_buffer = NULL;
+-    uint8_t *output_end_stream_buffer = NULL;
+-
+     size_t output_start_alignment = 0;
+     size_t output_end_alignment = 0;
+     size_t output_dma_desc_num = 0;
+ 
+     if (generate_descriptor_list(output, len, &output_start_stream_buffer, &output_end_stream_buffer, output_alignment_buffer_size, output_cache_line_size, &output_start_alignment, &output_end_alignment, &output_desc, &output_dma_desc_num, true) != ESP_OK) {
+-        mbedtls_platform_zeroize(output, len);
+         ESP_LOGE(TAG, "Generating output DMA descriptors failed");
+-        return -1;
++        ret = -1;
++        goto cleanup;
+     }
+ 
+     out_desc_tail = &output_desc[output_dma_desc_num - 1];
+ 
+     len_desc = aes_dma_calloc(1, sizeof(crypto_dma_desc_t), AES_DMA_ALLOC_CAPS, NULL);
+     if (len_desc == NULL) {
+-        mbedtls_platform_zeroize(output, len);
+         ESP_LOGE(TAG, "Failed to allocate memory for len descriptor");
+-        return -1;
++        ret = -1;
++        goto cleanup;
+     }
+ 
+-    uint32_t *len_buf = aes_dma_calloc(4, sizeof(uint32_t), AES_DMA_ALLOC_CAPS, NULL);
++    len_buf = aes_dma_calloc(4, sizeof(uint32_t), AES_DMA_ALLOC_CAPS, NULL);
+     if (len_buf == NULL) {
+-        mbedtls_platform_zeroize(output, len);
+         ESP_LOGE(TAG, "Failed to allocate memory for len buffer");
+-        return -1;
++        ret = -1;
++        goto cleanup;
+     }
+ 
+     len_buf[1] = __builtin_bswap32(aad_len * 8);

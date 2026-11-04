@@ -1,0 +1,5 @@
+# Bench builds only (JETKVM_MOCK_CLOUD_JWKS_URL in CMakeLists.txt): add the e2e
+# mock cloud's test CA to the certificate bundle, so the Mini reaches the mock
+# over HTTPS and wss through the same bundle check as the real cloud.
+CONFIG_MBEDTLS_CUSTOM_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CUSTOM_CERTIFICATE_BUNDLE_PATH="frontend/jetkvm-ui/e2e/mini/mock-cloud-ca.pem"

@@ -1,0 +1,4 @@
+#pragma once
+#include <stdbool.h>
+typedef enum { JETKVM_USB_SERVICE_CONFIGURATION_COMPLETED, JETKVM_USB_SERVICE_CONFIGURATION_FAILED } jetkvm_usb_service_configuration_result_t;
+jetkvm_usb_service_configuration_result_t jetkvm_usb_service_set_enabled(bool enabled);

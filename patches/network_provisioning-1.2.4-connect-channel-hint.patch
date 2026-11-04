@@ -1,0 +1,49 @@
+diff --git a/managed_components/espressif__network_provisioning/src/manager.c b/managed_components/espressif__network_provisioning/src/manager.c
+--- a/managed_components/espressif__network_provisioning/src/manager.c
++++ b/managed_components/espressif__network_provisioning/src/manager.c
+@@ -1334,6 +1334,34 @@
+     return (prov_ctx->prov_state == NETWORK_PROV_STATE_IDLE);
+ }
+ 
++/* Start the connect scan on the channel where the last provisioning scan saw
++ * this SSID. With WIFI_FAST_SCAN (CONFIG_NETWORK_PROV_WIFI_STA_FAST_SCAN) the
++ * station then joins the first match instead of walking every channel of
++ * both bands first. That walk takes about 20 s on ESP-Hosted C5 with the DFS
++ * channels passive, and on a shared BLE/Wi-Fi radio the BLE link gets too
++ * little airtime for that long: the central's status reads stall and the
++ * link can hit its supervision timeout. esp_wifi documents the channel as
++ * where the scan starts, so an AP that has moved is still found. The caller
++ * keeps the configuration it reports to the application unchanged, so no
++ * hint is stored. */
++static void wifi_connect_channel_hint(wifi_sta_config_t *sta)
++{
++    if (sta->channel != 0 || sta->bssid_set) {
++        return;
++    }
++    /* A 32-byte SSID fills sta->ssid with no terminator; compare a copy
++     * sized like the scan records' SSID so the match stops at its end. */
++    uint8_t ssid[sizeof(((wifi_ap_record_t *)0)->ssid)] = {0};
++    memcpy(ssid, sta->ssid, sizeof(sta->ssid));
++    uint16_t used = scan_list_used();
++    uint16_t match = scan_list_find_ssid(ssid, used);
++    if (match == used) {
++        return;
++    }
++    sta->channel = prov_ctx->ap_list_sorted[match]->primary;
++    ESP_LOGI(TAG, "Connect scan starts on channel %u", sta->channel);
++}
++
+ static void wifi_connect_timer_cb(void *arg)
+ {
+     if (esp_wifi_connect() != ESP_OK) {
+@@ -1385,7 +1413,9 @@
+     }
+     /* Configure Wi-Fi station with host credentials
+      * provided during provisioning */
+-    if (esp_wifi_set_config(WIFI_IF_STA, wifi_cfg) != ESP_OK) {
++    wifi_config_t connect_cfg = *wifi_cfg;
++    wifi_connect_channel_hint(&connect_cfg.sta);
++    if (esp_wifi_set_config(WIFI_IF_STA, &connect_cfg) != ESP_OK) {
+         ESP_LOGE(TAG, "Failed to set Wi-Fi configuration");
+         RELEASE_LOCK(prov_ctx_lock);
+         return ESP_FAIL;

@@ -1,0 +1,9 @@
+version: "0.1.0"
+description: "JetKVM composite USB HID device for the ESP32-P4 HS/UTMI port"
+targets:
+  - esp32p4
+dependencies:
+  espressif/esp_tinyusb: "==2.2.1"
+  # The project carries a reviewed MSC/write-cache patch stack for this
+  # TinyUSB release. Keep dependency re-solves from silently upgrading it.
+  espressif/tinyusb: "==0.19.0~3"

@@ -1,0 +1,25 @@
+# The encoder has only a fraction of a millisecond between 1080p frames.
+# Keep its bounded AU handoff in internal instruction RAM. The '+' entries
+# include compiler-generated .constprop/.part clones without moving the peer,
+# HTTP, signaling, or statistics implementation into internal RAM.
+[sections:webrtc_au_hot_text]
+entries:
+    .text.supported_mode+
+    .text.starts_with_annexb+
+    .text.inspect_annexb+
+    .text.reserve_slot_locked+
+    .text.reservation_matches_locked+
+    .text.finish_access_unit+
+    .text.notify_peer_task+
+    .text.webrtc_transport_reserve_access_unit+
+    .text.webrtc_transport_commit_access_unit+
+    .text.webrtc_transport_take_sync_idr_request+
+
+[scheme:webrtc_au_hot]
+entries:
+    webrtc_au_hot_text -> iram0_text
+
+[mapping:webrtc_au_hot]
+archive: libwebrtc_transport.a
+entries:
+    webrtc_transport (webrtc_au_hot)

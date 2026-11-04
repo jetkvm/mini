@@ -1,0 +1,375 @@
+@import "tailwindcss";
+@import "./assets/fonts/fonts.css";
+
+@config "../tailwind.config.js";
+
+@plugin "@tailwindcss/typography";
+@plugin "@tailwindcss/forms";
+@plugin "@headlessui/tailwindcss";
+
+/* Dark mode uses CSS selector instead of prefers-color-scheme */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-display: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-serif: "Inter", serif;
+  --font-mono: "Source Code Pro Variable", monospace;
+
+  --font-weight-bold: 650;
+  --font-weight-extrabold: 700;
+
+  --grid-layout: auto 1fr auto;
+  --grid-headerBody: auto 1fr;
+  --grid-bodyFooter: 1fr auto;
+  --grid-sidebar: 1fr minmax(360px, 25%);
+
+  --breakpoint-xs: 480px;
+  --breakpoint-2xl: 1440px;
+  --breakpoint-3xl: 1920px;
+  --breakpoint-4xl: 2560px;
+
+  /* Migrated animations */
+  --animate-enter: enter 0.2s ease-out;
+  --animate-leave: leave 0.15s ease-in forwards;
+  --animate-fadeInScale: fadeInScale 1s ease-out forwards;
+  --animate-fadeInScaleFloat: fadeInScaleFloat 1s ease-out forwards, float 3s ease-in-out infinite;
+  --animate-fadeIn: fadeIn 1s ease-out forwards;
+  --animate-slideUpFade: slideUpFade 1s ease-out forwards;
+
+  --container-8xl: 88rem;
+  --container-9xl: 96rem;
+  --container-10xl: 104rem;
+  --container-11xl: 112rem;
+  --container-12xl: 120rem;
+
+  /* Migrated keyframes */
+  @keyframes enter {
+    0% {
+      opacity: 0;
+      transform: scale(0.9);
+    }
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  @keyframes leave {
+    0% {
+      opacity: 1;
+      transform: scale(1);
+    }
+    100% {
+      opacity: 0;
+      transform: scale(0.9);
+    }
+  }
+
+  @keyframes fadeInScale {
+    0% {
+      opacity: 0;
+      transform: scale(0.98);
+    }
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  @keyframes fadeInScaleFloat {
+    0% {
+      opacity: 0;
+      transform: scale(0.98) translateY(10px);
+    }
+    100% {
+      opacity: 1;
+      transform: scale(1) translateY(0);
+    }
+  }
+
+  @keyframes float {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-10px);
+    }
+  }
+
+  @keyframes fadeIn {
+    0% {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    70% {
+      opacity: 0.8;
+      transform: translateY(1px);
+    }
+    100% {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes fadeInStill {
+    0% {
+      opacity: 0;
+    }
+    100% {
+      opacity: 1;
+    }
+  }
+
+  @keyframes slideUpFade {
+    0% {
+      opacity: 0;
+      transform: translateY(20px);
+    }
+    100% {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+}
+
+/* If we don't ignore this, Prettier will add a space between the value and the `ms`. Rendering the utility invalid. */
+/* prettier-ignore */
+@utility max-width-* {
+  max-width: --modifier(--container-*, [length], [*]);
+}
+
+/* If we don't ignore this, Prettier will add a space between the value and the `ms`. Rendering the utility invalid. */
+/* prettier-ignore */
+@utility animation-delay-* {
+  animation-delay: --value(integer)ms;
+}
+
+/* If we don't ignore this, Prettier will add a space between the value and the `ms`. Rendering the utility invalid. */
+/* prettier-ignore */
+@utility animation-duration-* {
+  animation-duration: --value(integer)ms;
+}
+
+html {
+  @apply scroll-smooth;
+  font-feature-settings: "liga" 1, "calt" 1, "cv11" 1, "ss01" 1, "ss03" 1;
+  font-optical-sizing: auto;
+}
+
+html,
+body {
+  height: 100%;
+  width: 100%;
+  overflow: auto;
+  overscroll-behavior: none;
+}
+
+@property --grid-color-start {
+  syntax: "<color>";
+  initial-value: oklch(97% 0.014 254.604 / 10); /* var(--color-blue-50/10) */
+  inherits: false;
+}
+
+@property --grid-color-end {
+  syntax: "<color>";
+  initial-value: oklch(97% 0.014 254.604 / 100); /* var(--color-blue-50/100) */
+  inherits: false;
+}
+
+.grid-card {
+  background-image: linear-gradient(to top right, var(--grid-color-start), var(--grid-color-end));
+  transition:
+    --grid-color-start 300ms cubic-bezier(0.4, 0, 0.2, 1),
+    --grid-color-end 300ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.group:hover .grid-card {
+  --grid-color-start: oklch(from var(--color-blue-100) l c h / 50);
+  --grid-color-end: oklch(from var(--color-blue-50) l c h / 50);
+}
+
+video::-webkit-media-controls {
+  display: none !important;
+}
+
+.hg-theme-default {
+  @apply font-display! font-normal;
+}
+
+.hg-theme-default .hg-button {
+  @apply border border-b! border-slate-800/25 border-b-slate-800/25! shadow-xs!;
+}
+
+.hg-theme-default .hg-button span {
+  @apply truncate;
+}
+
+.keyboardContainer {
+  display: flex;
+  background-color: rgba(0, 0, 0, 0.1);
+  justify-content: center;
+  width: 1024px;
+  margin: 0 auto;
+  border-radius: 5px;
+}
+
+.simple-keyboard.hg-theme-default {
+  display: inline-block;
+}
+
+.simple-keyboard-main.simple-keyboard {
+  @apply w-full md:w-[80%];
+  background: none;
+}
+
+.simple-keyboard-main.simple-keyboard .hg-row:first-child {
+  @apply mb-[10px];
+}
+
+.simple-keyboard-arrows.simple-keyboard {
+  @apply self-end;
+  background: none;
+}
+
+.simple-keyboard .hg-button.selectedButton {
+  background: rgba(5, 25, 70, 0.53);
+  @apply text-white;
+}
+
+.simple-keyboard .hg-button.emptySpace {
+  @apply pointer-events-none;
+  background: none;
+  border: none;
+  box-shadow: none;
+}
+
+.simple-keyboard-arrows .hg-row {
+  justify-content: center;
+}
+
+.simple-keyboard-arrows .hg-button {
+  @apply flex w-[50px] items-center justify-center;
+}
+
+.controlArrows {
+  @apply flex w-full items-center justify-between md:w-1/5;
+  flex-flow: column;
+}
+
+.simple-keyboard-control.simple-keyboard {
+  background: none;
+}
+
+.simple-keyboard-control.simple-keyboard .hg-row:first-child {
+  margin-bottom: 10px;
+}
+
+.controlArrows .simple-keyboard-control.simple-keyboard .hg-row:first-child {
+  @apply mb-[4px] md:mb-[10px];
+}
+
+.hg-button {
+  @apply dark:bg-slate-800! dark:text-white;
+}
+
+.simple-keyboard-control .hg-button {
+  @apply flex w-[50px] items-center justify-center;
+}
+
+.numPad {
+  @apply flex items-end;
+}
+
+.simple-keyboard-numpad.simple-keyboard {
+  background: none;
+}
+
+.simple-keyboard-numpad.simple-keyboard {
+  @apply w-[160px];
+}
+
+.simple-keyboard-numpad.simple-keyboard .hg-button {
+  @apply flex w-[50px] items-center justify-center;
+}
+
+.simple-keyboard-numpadEnd.simple-keyboard {
+  @apply w-[50px];
+  background: none;
+  margin: 0;
+  padding: 5px 5px 5px 0;
+}
+
+.simple-keyboard-numpadEnd.simple-keyboard .hg-button {
+  @apply flex items-center justify-center;
+}
+
+.simple-keyboard-numpadEnd .hg-button.hg-standardBtn.hg-button-plus {
+  @apply h-[85px];
+}
+
+.simple-keyboard-numpadEnd.simple-keyboard .hg-button.hg-button-enter {
+  @apply h-[85px];
+}
+
+.simple-keyboard.hg-theme-default .hg-button.hg-selectedButton {
+  background: rgba(5, 25, 70, 0.53);
+  @apply text-white;
+}
+
+.hg-button.hg-standardBtn[data-skbtn="Space"] {
+  @apply md:w-[350px]!;
+}
+
+.hg-theme-default .hg-row .combination-key {
+  @apply inline-flex h-auto! w-auto! grow-0 py-1 text-xs;
+}
+
+.hg-theme-default .hg-row .down-key {
+  background: rgb(28, 28, 28);
+  @apply font-bold! text-white!;
+}
+
+.hg-theme-default .hg-row .hg-button-container,
+.hg-theme-default .hg-row .hg-button:not(:last-child) {
+  @apply mr-[2px]! md:mr-[5px]!;
+}
+
+/* Reduce font size for selected keys when keyboard is detached */
+.keyboard-detached .simple-keyboard-main.simple-keyboard {
+  min-width: calc(14 * 7ch);
+}
+
+.keyboard-detached .simple-keyboard.hg-theme-default div.hg-button {
+  text-wrap: auto;
+  text-align: center;
+  min-width: 6ch;
+}
+.keyboard-detached .simple-keyboard.hg-theme-default .hg-button span {
+  font-size: 50%;
+}
+
+/* Hide the scrollbar by setting the scrollbar color to the background color */
+.xterm .xterm-viewport {
+  scrollbar-color: var(--color-gray-900) #002b36;
+  scrollbar-width: thin;
+}
+
+.hide-scrollbar {
+  overflow-y: scroll;
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* Internet Explorer 10+ */
+}
+
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.diagonal-stripes {
+  background: repeating-linear-gradient(
+    135deg,
+    rgba(255, 0, 0, 0.1) 0 12px,
+    /* red-50 with 20% opacity */ transparent 12px 24px
+  );
+}

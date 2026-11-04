@@ -1,0 +1,16 @@
+diff --git a/managed_components/espressif__esp_h264/hw/src/esp_h264_enc_hw_param.h b/managed_components/espressif__esp_h264/hw/src/esp_h264_enc_hw_param.h
+--- a/managed_components/espressif__esp_h264/hw/src/esp_h264_enc_hw_param.h
++++ b/managed_components/espressif__esp_h264/hw/src/esp_h264_enc_hw_param.h
+@@ -26,7 +26,11 @@
+ #define ESP_H264_MAX_WIDTH    (1920)
+ #define ESP_H264_MAX_HEIGHT   (2032)
+ #define HW_DMA_BUF_ALIGN_SIZE (7)
+-#define H264_TIME_OUT         (1000)
++/* Bound frame completion in wall time. A raw 1000-tick wait lasts 10 s at
++ * 100 Hz, preventing the owner's DMA reset from finishing before the
++ * application's 3 s mode-change drain deadline. Other mutex waits retain
++ * their existing semantics; this macro is used only for frame completion. */
++#define H264_TIME_OUT         pdMS_TO_TICKS(1000U)
+ 
+ /**
+  * @brief  Configure information

@@ -1,0 +1,20 @@
+# Buffers that only tasks read and write, placed in PSRAM:
+# TinyUSB audio's OUT software FIFO (8 KiB; endpoint DMA uses its own linear
+# buffer) and esp_peer's cached DTLS certificate and key PEM (4 KiB).
+# Each buffer is named, so state these files add later stays in internal RAM.
+# IDF defines its extram_bss scheme in esp_wifi, which the P4 does not build.
+[scheme:jetkvm_extram_bss]
+entries:
+    bss -> extern_ram
+    common -> extern_ram
+
+[mapping:jetkvm_usb_audio_extram_bss]
+archive: libespressif__tinyusb.a
+entries:
+    audio_device:ep_out_sw_buf (jetkvm_extram_bss)
+
+[mapping:jetkvm_peer_pem_extram_bss]
+archive: libesp_peer.a
+entries:
+    dtls_srtp_v6:s_cached_cert_pem (jetkvm_extram_bss)
+    dtls_srtp_v6:s_cached_key_pem (jetkvm_extram_bss)

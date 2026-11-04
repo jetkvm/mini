@@ -1,0 +1,18 @@
+diff --git a/managed_components/espressif__tinyusb/src/portable/synopsys/dwc2/dwc2_esp32.h b/managed_components/espressif__tinyusb/src/portable/synopsys/dwc2/dwc2_esp32.h
+--- a/managed_components/espressif__tinyusb/src/portable/synopsys/dwc2/dwc2_esp32.h
++++ b/managed_components/espressif__tinyusb/src/portable/synopsys/dwc2/dwc2_esp32.h
+@@ -121,8 +121,13 @@ TU_ATTR_ALWAYS_INLINE static inline void dwc2_int_set(uint8_t rhport, tusb_role
+ #define dwc2_dcd_int_enable(_rhport)  dwc2_int_set(_rhport, TUSB_ROLE_DEVICE, true)
+ #define dwc2_dcd_int_disable(_rhport) dwc2_int_set(_rhport, TUSB_ROLE_DEVICE, false)
+ 
+ TU_ATTR_ALWAYS_INLINE static inline void dwc2_remote_wakeup_delay(void) {
+-  vTaskDelay(pdMS_TO_TICKS(1));
++  // USB 2.0 requires a 1-15 ms resume signal. At the ESP-IDF default 100 Hz
++  // FreeRTOS tick rate pdMS_TO_TICKS(1) truncates to zero, which merely yields
++  // and may clear RWUSIG too early. Round up to one scheduler tick; at 100 Hz
++  // this is 10 ms and remains inside the permitted interval.
++  TickType_t const delay_ticks = pdMS_TO_TICKS(1) > 0 ? pdMS_TO_TICKS(1) : 1;
++  vTaskDelay(delay_ticks);
+ }
+ 
+ // MCU specific PHY init, called BEFORE core reset

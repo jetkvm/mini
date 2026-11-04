@@ -1,0 +1,246 @@
+diff --git a/managed_components/espressif__network_provisioning/src/manager.c b/managed_components/espressif__network_provisioning/src/manager.c
+--- a/managed_components/espressif__network_provisioning/src/manager.c
++++ b/managed_components/espressif__network_provisioning/src/manager.c
+@@ -37,6 +37,15 @@
+ #define WIFI_PROV_STORAGE_BIT       BIT0
+ #define WIFI_PROV_SETTING_BIT       BIT1
+ #define MAX_SCAN_RESULTS           CONFIG_NETWORK_PROV_SCAN_MAX_ENTRIES
++/* Scan slots: slot 0 is unused, slots 1..13 are the 2.4 GHz channels, and the
++ * next slots are the 5 GHz channels listed in scan_5g_channels[]. Every slot
++ * selects its channel by number; ESP-Hosted targets ignore channel_bitmap. */
++#define SCAN_SLOT_2G_COUNT         14
++#define SCAN_SLOT_5G_FIRST         SCAN_SLOT_2G_COUNT
++#define SCAN_SLOT_5G_COUNT         28
++#define SCAN_SLOT_COUNT            (SCAN_SLOT_5G_FIRST + SCAN_SLOT_5G_COUNT)
++/* Channels scanned between 120 ms pauses when a both-band request walks. */
++#define SCAN_WALK_GROUP            3
+ 
+ #define ACQUIRE_LOCK(mux)     assert(xSemaphoreTake(mux, portMAX_DELAY) == pdTRUE)
+ #define RELEASE_LOCK(mux)     assert(xSemaphoreGive(mux) == pdTRUE)
+@@ -154,9 +163,14 @@
+ 
+     /* Wi-Fi scan parameters and state variables */
+     uint8_t channels_per_group;
++    /* Slot in progress; see SCAN_SLOT_*. Every request scans one channel per
++     * esp_wifi scan. A both-band request walks the 5 GHz slots as well
++     * instead of issuing one all-channel scan: on a shared BLE/Wi-Fi radio
++     * that scan silences the BLE link for longer than the central's
++     * supervision timeout and the provisioning session drops. */
+     uint16_t curr_channel;
+-    uint16_t ap_list_len[14];   // 14 entries corresponding to each channel
+-    wifi_ap_record_t *ap_list[14];
++    uint16_t ap_list_len[SCAN_SLOT_COUNT];
++    wifi_ap_record_t *ap_list[SCAN_SLOT_COUNT];
+     wifi_ap_record_t *ap_list_sorted[MAX_SCAN_RESULTS];
+     wifi_scan_config_t scan_cfg;
+ 
+@@ -774,7 +788,7 @@
+ 
+ #ifdef CONFIG_NETWORK_PROV_NETWORK_TYPE_WIFI
+     /* Delete all scan results */
+-    for (uint16_t channel = 0; channel < 14; channel++) {
++    for (uint16_t channel = 0; channel < SCAN_SLOT_COUNT; channel++) {
+         free(prov_ctx->ap_list[channel]);
+         prov_ctx->ap_list[channel] = NULL;
+     }
+@@ -886,6 +900,67 @@
+ }
+ 
+ #ifdef CONFIG_NETWORK_PROV_NETWORK_TYPE_WIFI
++/* Non-DFS channels first: they are scanned actively (about 250 ms each) and
++ * carry phone hotspots, which avoid DFS. The DFS channels 52-144 are passive
++ * (about 740 ms each) and come last. */
++static const uint8_t scan_5g_channels[SCAN_SLOT_5G_COUNT] = {
++    36, 40, 44, 48, 149, 153, 157, 161, 165, 169, 173, 177,
++    52, 56, 60, 64,
++    100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144,
++};
++
++/* Point scan_cfg at the single channel of one slot. */
++static void scan_slot_configure(uint16_t slot)
++{
++    prov_ctx->scan_cfg.channel = slot < SCAN_SLOT_5G_FIRST ?
++                                 slot : scan_5g_channels[slot - SCAN_SLOT_5G_FIRST];
++}
++
++/* The first slot of a request. A grouped request covers 2.4 GHz only, as
++ * before. A full request (channels_per_group == 0) walks the 5 GHz slots
++ * first and 2.4 GHz last: clients such as the setup page run a grouped
++ * 2.4 GHz pass before the full one, so 5 GHz networks are the new results. */
++static uint16_t scan_slot_first(void)
++{
++    return prov_ctx->channels_per_group ? 1 : SCAN_SLOT_5G_FIRST;
++}
++
++/* The slot after `slot` in the order scan_slot_first() starts, or 0 when the
++ * walk is complete. */
++static uint16_t scan_slot_next(uint16_t slot)
++{
++    if (slot >= SCAN_SLOT_5G_FIRST) {
++        return slot < SCAN_SLOT_COUNT - 1 ? slot + 1 : 1;
++    }
++    return slot < SCAN_SLOT_5G_FIRST - 1 ? slot + 1 : 0;
++}
++
++/* Entries appended so far; appends are contiguous from index 0. */
++static uint16_t scan_list_used(void)
++{
++    uint16_t used = 0;
++    while (used < MAX_SCAN_RESULTS && prov_ctx->ap_list_sorted[used]) {
++        used++;
++    }
++    return used;
++}
++
++/* Index of the entry that carries this SSID, or `used` when none does.
++ * Hidden networks (empty SSID) are never merged. */
++static uint16_t scan_list_find_ssid(const uint8_t *ssid, uint16_t used)
++{
++    if (ssid[0] == 0) {
++        return used;
++    }
++    for (uint16_t i = 0; i < used; i++) {
++        if (strncmp((const char *)prov_ctx->ap_list_sorted[i]->ssid,
++                    (const char *)ssid, sizeof(prov_ctx->ap_list_sorted[i]->ssid)) == 0) {
++            return i;
++        }
++    }
++    return used;
++}
++
+ static esp_err_t update_wifi_scan_results(void)
+ {
+     if (!prov_ctx->scanning) {
+@@ -914,6 +989,18 @@
+         goto exit;
+     }
+ 
++    /* Fetch up to a full list of this slot's records; the driver frees the
++     * rest. A record whose SSID is already listed takes no entry, so
++     * fetching only the free entries' worth would drop new networks that
++     * follow known ones. The append loop below stops when the list is full. */
++    uint16_t used = scan_list_used();
++    if (used == MAX_SCAN_RESULTS) {
++        ESP_LOGW(TAG, "Scan result list full (%d entries); dropping %u from slot %u",
++                 MAX_SCAN_RESULTS, count, curr_channel);
++        esp_wifi_clear_ap_list();
++        ret = ESP_OK;
++        goto exit;
++    }
+     uint16_t get_count = MIN(count, MAX_SCAN_RESULTS);
+     prov_ctx->ap_list[curr_channel] = (wifi_ap_record_t *) calloc(get_count, sizeof(wifi_ap_record_t));
+     if (!prov_ctx->ap_list[curr_channel]) {
+@@ -946,52 +1033,54 @@
+                  prov_ctx->ap_list[curr_channel][i].authmode);
+     }
+ 
+-    /* Store results in sorted list */
+-    {
+-        int rc = get_count;
+-        int is = MAX_SCAN_RESULTS - rc - 1;
+-        while (rc > 0 && is >= 0) {
+-            if (prov_ctx->ap_list_sorted[is]) {
+-                if (prov_ctx->ap_list_sorted[is]->rssi > prov_ctx->ap_list[curr_channel][rc - 1].rssi) {
+-                    prov_ctx->ap_list_sorted[is + rc] = &prov_ctx->ap_list[curr_channel][rc - 1];
+-                    rc--;
+-                    continue;
+-                }
+-                prov_ctx->ap_list_sorted[is + rc] = prov_ctx->ap_list_sorted[is];
++    /* Append in discovery order. A client that reads results while the scan
++     * is still running fetches by index and only asks for indexes it has not
++     * seen; re-sorting by RSSI after every channel would move new, stronger
++     * entries below its cursor and they would never be delivered. One entry
++     * per SSID: a second BSSID of a known network upgrades that entry in
++     * place when it is stronger, so one band's BSSIDs cannot fill the list
++     * before the other band is reached. */
++    for (uint16_t i = 0; i < get_count; i++) {
++        wifi_ap_record_t *record = &prov_ctx->ap_list[curr_channel][i];
++        uint16_t match = scan_list_find_ssid(record->ssid, used);
++        if (match < used) {
++            if (record->rssi > prov_ctx->ap_list_sorted[match]->rssi) {
++                prov_ctx->ap_list_sorted[match] = record;
+             }
+-            is--;
+-        }
+-        while (rc > 0) {
+-            prov_ctx->ap_list_sorted[rc - 1] = &prov_ctx->ap_list[curr_channel][rc - 1];
+-            rc--;
++        } else if (used < MAX_SCAN_RESULTS) {
++            prov_ctx->ap_list_sorted[used++] = record;
+         }
+     }
+ 
+     ret = ESP_OK;
+ exit:
+ 
+-    if (!prov_ctx->channels_per_group) {
+-        /* All channel scan was performed
+-         * so nothing more to do */
+-        prov_ctx->scanning = false;
+-        goto final;
+-    }
+-
+-    curr_channel = prov_ctx->curr_channel = (prov_ctx->curr_channel + 1) % 14;
++    curr_channel = prov_ctx->curr_channel = scan_slot_next(prov_ctx->curr_channel);
+     if (ret != ESP_OK || curr_channel == 0) {
+         prov_ctx->scanning = false;
+         goto final;
+     }
+ 
+-    if ((curr_channel % prov_ctx->channels_per_group) == 0) {
+-        vTaskDelay(120 / portTICK_PERIOD_MS);
++    {
++        uint8_t group = prov_ctx->channels_per_group ? prov_ctx->channels_per_group
++                                                     : SCAN_WALK_GROUP;
++        if ((curr_channel % group) == 0) {
++            vTaskDelay(120 / portTICK_PERIOD_MS);
++        }
+     }
+ 
+-    ESP_LOGD(TAG, "Scan starting on channel %u...", curr_channel);
+-    prov_ctx->scan_cfg.channel = curr_channel;
+-    ret = esp_wifi_scan_start(&prov_ctx->scan_cfg, false);
++    /* Skip a slot whose channel the driver rejects; stop on any other error. */
++    do {
++        ESP_LOGD(TAG, "Scan starting on slot %u...", curr_channel);
++        scan_slot_configure(curr_channel);
++        ret = esp_wifi_scan_start(&prov_ctx->scan_cfg, false);
++        if (ret != ESP_ERR_INVALID_ARG) {
++            break;
++        }
++        ESP_LOGW(TAG, "Scan start rejected slot %u", curr_channel);
++        curr_channel = prov_ctx->curr_channel = scan_slot_next(curr_channel);
++    } while (curr_channel != 0);
+     if (ret != ESP_OK) {
+-        ESP_LOGE(TAG, "Failed to start scan");
+         prov_ctx->scanning = false;
+         goto final;
+     }
+@@ -1044,13 +1133,11 @@
+     }
+     prov_ctx->channels_per_group = group_channels;
+ 
+-    if (prov_ctx->channels_per_group) {
+-        ESP_LOGD(TAG, "Scan starting on channel 1...");
+-        prov_ctx->scan_cfg.channel = 1;
+-    } else {
+-        ESP_LOGD(TAG, "Scan starting...");
+-        prov_ctx->scan_cfg.channel = 0;
+-    }
++    /* Both request kinds scan one channel at a time; see scan_slot_next(). */
++    uint16_t first = scan_slot_first();
++    ESP_LOGD(TAG, "Scan starting on slot %u...", first);
++
++    scan_slot_configure(first);
+ 
+     if (esp_wifi_scan_start(&prov_ctx->scan_cfg, false) != ESP_OK) {
+         ESP_LOGE(TAG, "Failed to start scan");
+@@ -1060,7 +1147,7 @@
+ 
+     ESP_LOGD(TAG, "Scan started");
+     prov_ctx->scanning = true;
+-    prov_ctx->curr_channel = prov_ctx->scan_cfg.channel;
++    prov_ctx->curr_channel = first;
+     RELEASE_LOCK(prov_ctx_lock);
+ 
+     /* If scan is to be non-blocking, return immediately */

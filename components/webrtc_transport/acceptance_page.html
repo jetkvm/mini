@@ -1,0 +1,2440 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>KVM WebRTC acceptance</title>
+  <style>
+    :root { color-scheme: dark; --bg:#071019; --panel:#101d29; --line:#294056;
+      --text:#e8f2fa; --muted:#8fa9bc; --ok:#3ddc97; --bad:#ff6577; --warn:#f7c85c; }
+    * { box-sizing:border-box; }
+    body { margin:0; padding:20px; background:radial-gradient(circle at top,#123047,var(--bg) 42%);
+      color:var(--text); font:14px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace; }
+    header,main { width:min(1500px,100%); margin:auto; }
+    header { display:flex; gap:16px; align-items:center; justify-content:space-between; margin-bottom:16px; }
+    h1 { margin:0; font:600 22px/1.2 system-ui,sans-serif; letter-spacing:.02em; }
+    button { border:1px solid var(--line); border-radius:7px; padding:9px 13px; color:var(--text);
+      background:#163047; cursor:pointer; font:inherit; }
+    button:hover { background:#21445f; }
+    .layout { display:grid; grid-template-columns:minmax(0,2fr) minmax(330px,1fr); gap:16px; }
+    .panel { border:1px solid var(--line); border-radius:10px; background:rgba(16,29,41,.94);
+      box-shadow:0 10px 30px #0006; overflow:hidden; }
+    .video-wrap { position:relative; aspect-ratio:16/9; background:#000; }
+    video { width:100%; height:100%; display:block; object-fit:contain; }
+    .badge { display:inline-block; border:1px solid var(--line); border-radius:999px; padding:4px 10px; }
+    .ok { color:var(--ok); border-color:#277656; } .bad { color:var(--bad); border-color:#853948; }
+    .warn { color:var(--warn); border-color:#836b2f; }
+    .overlay { position:absolute; top:10px; left:10px; padding:6px 9px; border-radius:6px;
+      background:#02070bcc; backdrop-filter:blur(4px); }
+    .clock-overlay { position:absolute; top:10px; right:10px; min-width:320px; padding:8px 11px;
+      border:1px solid #49657b; border-radius:7px; background:#02070be8; text-align:right;
+      font-variant-numeric:tabular-nums; }
+    .clock-overlay span { color:var(--muted); }
+    .clock-overlay strong { display:inline-block; min-width:154px; color:#fff; font-size:17px;
+      font-weight:600; }
+    .clock-overlay .latency-value { color:var(--ok); }
+    .metrics { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1px; background:var(--line); }
+    .metric { background:var(--panel); padding:12px; min-height:77px; }
+    .metric span { display:block; color:var(--muted); font-size:11px; text-transform:uppercase; }
+    .metric strong { display:block; margin-top:5px; font-size:20px; font-weight:500; overflow-wrap:anywhere; }
+    section h2 { margin:0; padding:12px 14px; border-bottom:1px solid var(--line); color:var(--muted);
+      font-size:12px; font-weight:500; text-transform:uppercase; }
+    pre { margin:0; padding:12px 14px; max-height:260px; overflow:auto; white-space:pre-wrap; color:#bad0df; }
+    .fingerprint { padding:12px; display:grid; grid-template-columns:140px 1fr; gap:12px; align-items:start; }
+    #fingerprintCanvas { width:128px; height:72px; image-rendering:pixelated; border:1px solid var(--line); }
+    #screenshotPreview { display:block; width:100%; max-height:210px; object-fit:contain; background:#000; }
+    .hint { color:var(--muted); font-size:12px; }
+    .controls { display:flex; flex-wrap:wrap; gap:8px; }
+    @media (max-width:900px) { .layout{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,1fr)} }
+    html.bare-receiver, html.bare-receiver body { width:100%; height:100%; overflow:hidden; background:#000; }
+    html.bare-receiver header,
+    html.bare-receiver .metrics,
+    html.bare-receiver main.layout > div:first-child > section:not(:first-child),
+    html.bare-receiver main.layout > div:nth-child(2),
+    html.bare-receiver .overlay,
+    html.bare-receiver .clock-overlay { visibility:hidden !important; }
+    html.bare-fill-receiver body { padding:0; }
+    html.bare-fill-receiver header,
+    html.bare-fill-receiver .metrics,
+    html.bare-fill-receiver main.layout > div:first-child > section:not(:first-child),
+    html.bare-fill-receiver main.layout > div:nth-child(2),
+    html.bare-fill-receiver .overlay,
+    html.bare-fill-receiver .clock-overlay { display:none !important; }
+    html.bare-fill-receiver main.layout,
+    html.bare-fill-receiver main.layout > div:first-child,
+    html.bare-fill-receiver main.layout > div:first-child > section:first-child,
+    html.bare-fill-receiver .video-wrap { width:100%; height:100%; max-width:none; margin:0; }
+    html.bare-fill-receiver main.layout { display:block; }
+    html.bare-fill-receiver main.layout > div:first-child > section:first-child {
+      border:0; border-radius:0; box-shadow:none; background:#000;
+    }
+    html.bare-fill-receiver .video-wrap { aspect-ratio:auto; }
+  </style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>ESP32-P4 local WebRTC acceptance</h1>
+    <div class="hint">Allowed tracks: 1920×1080@30, 1280×720@30, and 1280×720@60 · required browser decode/render depends on the selected mode</div>
+    <div class="hint">Clock metric: same-host source-to-browser-compositor frame-age proxy; it is not optical glass-to-glass latency.</div>
+  </div>
+  <div class="controls">
+    <button id="startButton">Restart run</button>
+    <button id="stopButton">Stop</button>
+    <button id="snapshotButton">Snapshot + screenshot</button>
+    <button id="exportButton">Export evidence JSON</button>
+  </div>
+</header>
+<main class="layout">
+  <div>
+    <section class="panel">
+      <div class="video-wrap">
+        <video id="video" autoplay playsinline muted></video>
+        <div id="connectionBadge" class="overlay badge warn">starting</div>
+        <div class="clock-overlay" aria-label="Same-host source-to-compositor frame-age clock">
+          <div><span>LOCAL HOST&nbsp;</span><strong id="localClock">--:--:--.---</strong></div>
+          <div><span>DECODED SOURCE&nbsp;</span><strong id="sourceClock">--:--:--.---</strong></div>
+          <div><span>FRAME AGE PROXY&nbsp;</span><strong id="latencyLive" class="latency-value">waiting</strong></div>
+        </div>
+      </div>
+      <div class="metrics">
+        <div class="metric"><span>Decoded resolution</span><strong id="resolution">0×0</strong></div>
+        <div class="metric"><span>Decode FPS</span><strong id="decodeFps">0.00</strong></div>
+        <div class="metric"><span>Render FPS (rVFC)</span><strong id="renderFps">0.00</strong></div>
+        <div class="metric"><span>Received bitrate</span><strong id="bitrate">0 kbps</strong></div>
+        <div class="metric"><span>Browser drops</span><strong id="drops">0</strong></div>
+        <div class="metric"><span>Freeze count</span><strong id="freezes">0</strong></div>
+        <div class="metric"><span>H.264 codec</span><strong id="codec">waiting</strong></div>
+        <div class="metric"><span>ICE candidate pair</span><strong id="candidate">waiting</strong></div>
+        <div class="metric"><span>Run / reconnects</span><strong id="elapsed">0:00 / 0</strong></div>
+        <div class="metric"><span>Frame-age proxy min / p50</span><strong id="latencyMinP50">- / - ms</strong></div>
+        <div class="metric"><span>Frame-age proxy p95 / p99</span><strong id="latencyP95P99">- / - ms</strong></div>
+        <div class="metric"><span>Frame-age samples / invalid</span><strong id="latencySamples">0 / 0</strong></div>
+      </div>
+    </section>
+    <section class="panel" style="margin-top:16px">
+      <h2>Decoded-frame fingerprint visualization</h2>
+      <div class="fingerprint">
+        <canvas id="fingerprintCanvas" width="64" height="36"></canvas>
+        <div>
+          <div id="fingerprintText">No presented frame yet.</div>
+          <div class="hint">Each observed presentation asynchronously copies one 1px × width VideoFrame row: 32 Gray frame bits, 32 Gray clock bits, and raw CRC-32C over KVM2/mode/rate/the first 64 wire bits. Integer-centered cells remain 12 px wide at 720p; black/white pilots provide contrast confidence. No full-frame Canvas readback is used.</div>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div>
+    <section class="panel">
+      <h2>Acceptance state</h2>
+      <pre id="acceptance">Waiting for samples.</pre>
+    </section>
+    <section class="panel" style="margin-top:16px">
+      <h2>Firmware transport counters</h2>
+      <pre id="firmwareStats">Waiting for /webrtc/stats.</pre>
+    </section>
+    <section class="panel" style="margin-top:16px">
+      <h2>Browser receive → decode → presentation ledger</h2>
+      <pre id="presentationLedger">Waiting for a presented WebRTC frame.</pre>
+    </section>
+    <section class="panel" style="margin-top:16px">
+      <h2>JetKVM frontend control channels</h2>
+      <pre id="jetkvmControl">Waiting for the JetKVM rpc DataChannel.</pre>
+    </section>
+    <section class="panel" style="margin-top:16px">
+      <h2>Last captured screenshot</h2>
+      <img id="screenshotPreview" alt="No screenshot captured">
+    </section>
+    <section class="panel" style="margin-top:16px">
+      <h2>Event log</h2>
+      <pre id="eventLog"></pre>
+    </section>
+  </div>
+</main>
+<canvas id="screenshotCanvas" hidden></canvas>
+<script>
+(() => {
+  'use strict';
+
+  const $ = id => document.getElementById(id);
+  const video = $('video');
+  const fingerprintCanvas = $('fingerprintCanvas');
+  const fingerprintContext = fingerprintCanvas.getContext('2d', {willReadFrequently:true});
+  const screenshotCanvas = $('screenshotCanvas');
+  const screenshotContext = screenshotCanvas.getContext('2d');
+  const MAX_SAMPLES = 3600;
+  const UINT32_MODULUS = 0x100000000;
+  const TELEMETRY_ROW_FRACTION = 0.62;
+  const TELEMETRY_CELL_COUNT = 96;
+  const TIMECODE_MAGIC = 0x4b564d32;
+  const telemetryModeQueryValue = new URLSearchParams(location.search).get('mode');
+  let telemetryFps = telemetryModeQueryValue === '720p60' ? 60 : 30;
+  const TELEMETRY_MIN_CONTRAST = 96;
+  const TELEMETRY_MIN_CELL_DISTANCE = 12;
+  const LATENCY_CLOCK_QUANTIZATION_MS = 1;
+  const MAX_VALID_LATENCY_MS = 60000;
+  const MAX_SOURCE_CLOCK_ADVANCE_MS = 10000;
+  const MAX_PRESENTATION_LEDGER_SAMPLES = 20000;
+  const MAX_PRESENTATION_STATS_INTERVALS = 3600;
+  const VSYNC_CALIBRATION_SAMPLES = 240;
+  const displayProfileQueryValue = new URLSearchParams(location.search).get('display');
+  const DISPLAY_PROFILE = Object.freeze(describeDisplayProfile(displayProfileQueryValue));
+  document.documentElement.classList.toggle('bare-receiver', DISPLAY_PROFILE.bare);
+  document.documentElement.classList.toggle(
+    'bare-fill-receiver', DISPLAY_PROFILE.fillViewport);
+  const receiverLatencyQueryValue = new URLSearchParams(location.search).get('lowLatency');
+  const RECEIVER_LATENCY_EXPERIMENT = Object.freeze(
+    describeReceiverLatencyExperiment(receiverLatencyQueryValue));
+  const senderPlayoutDelayQueryValue =
+    new URLSearchParams(location.search).get('senderPlayoutDelay');
+  const SENDER_PLAYOUT_DELAY_POLICY = Object.freeze({
+    queryParameter:'senderPlayoutDelay',
+    queryValue:senderPlayoutDelayQueryValue,
+    defaultEnabled:true,
+    explicitOptOut:senderPlayoutDelayQueryValue === '0' ||
+      senderPlayoutDelayQueryValue === 'off',
+    requested:senderPlayoutDelayQueryValue !== '0' &&
+      senderPlayoutDelayQueryValue !== 'off',
+    method:'negotiated sender RTP playout-delay extension, MIN=0 MAX=0',
+  });
+  const identityCaptureQueryValue =
+    new URLSearchParams(location.search).get('identityCapture');
+  const IDENTITY_CAPTURE_POLICY = Object.freeze({
+    queryParameter:'identityCapture',
+    queryValue:identityCaptureQueryValue,
+    defaultEnabled:true,
+    requested:!DISPLAY_PROFILE.bare && identityCaptureQueryValue !== '0' &&
+      identityCaptureQueryValue !== 'off',
+    suppressedByDisplayProfile:DISPLAY_PROFILE.bare,
+    purpose:'per-presented-frame VideoFrame telemetry-row copy for identity acceptance',
+  });
+  const LATENCY_METHOD = Object.freeze({
+    version:'kvm-same-host-gray32-frame-age/v3',
+    telemetryLayoutVersion:'packed-gray96-crc32c/v1',
+    measurementOnly:true,
+    measurementName:'source-to-receiver-compositor frame-age proxy',
+    clockDomain:'same-host performance.timeOrigin + DOMHighResTimeStamp',
+    sourceTimestamp:'floor(performance.timeOrigin + source requestAnimationFrame timestamp)',
+    receiverTimestamp:'floor(performance.timeOrigin + rVFC metadata.expectedDisplayTime)',
+    encoding:`one 96-cell row: Gray(frameId32), Gray(clockMs32), raw CRC-32C(KVM2 || mode || ${telemetryFps}fps || first64WireBits)`,
+    integrity:'CRC-32C/Castagnoli over big-endian words, reflected polynomial 0x82f63b78, init/xorout 0xffffffff',
+    telemetryCellCount:TELEMETRY_CELL_COUNT,
+    minimumTelemetryCellWidthAt720p:Math.floor(
+      (1280 - 2 * Math.floor(1280 * 0.02)) / TELEMETRY_CELL_COUNT),
+    telemetryPilot:'left black / right white',
+    telemetryMinimumContrast:TELEMETRY_MIN_CONTRAST,
+    telemetryMinimumCellDistance:TELEMETRY_MIN_CELL_DISTANCE,
+    identityScope:'marker-row identity only; whole-frame tearing remains a dynamic-pattern visual/screenshot check',
+    subtraction:'unsigned modulo-2^32 receiver minus source',
+    wrapPeriodMs:UINT32_MODULUS,
+    percentileDefinition:'nearest-rank over all valid 1 ms histogram samples in this run',
+    quantizationMs:LATENCY_CLOCK_QUANTIZATION_MS,
+    decoderSanityWindowMs:MAX_VALID_LATENCY_MS,
+    decoderSanityWindowIsNotAcceptanceThreshold:true,
+    visualStopwatchRole:'corroborative screenshot frame-age evidence; automated rVFC samples are authoritative',
+    visualStopwatchUncertainty:'bounded by source and receiver display refresh/compositor phase',
+    glassToGlass:false,
+    glassToGlassRequirement:'requires an external camera observing both physical displays',
+  });
+  const PRESENTATION_LEDGER_METHOD = Object.freeze({
+    version:'webrtc-rvfc-presentation-ledger/v1',
+    measurementOnly:true,
+    perFrameSource:'requestVideoFrameCallback metadata',
+    receiveTime:'platform receipt of the last RTP packet belonging to the frame',
+    processingDuration:'encoded-frame submission to decoder until decoded frame is ready for presentation; may include YUV/GPU staging',
+    presentationTime:'frame submitted by the user agent for composition',
+    expectedDisplayTime:'user-agent estimate of when the frame becomes visible',
+    callbackNow:'rendering-step timestamp passed to requestVideoFrameCallback',
+    directlyObservedStages:[
+      'receiveTime→presentationTime',
+      'presentationTime→expectedDisplayTime',
+      'receiveTime→expectedDisplayTime',
+      'processingDuration',
+      'presentationTime→callbackNow',
+      'callbackNow→expectedDisplayTime',
+    ],
+    residualDefinition:'(presentationTime - receiveTime) - processingDuration',
+    residualMeaning:'combined last-packet→decoder-submit plus decoded-ready→compositor-submit; the Web API cannot split these two queues per frame',
+    statsIntervals:'getStats cumulative counters are differenced over an interval and are not attributed to an individual rVFC frame',
+    opticalDisplayMeasured:false,
+    displayCaveat:'expectedDisplayTime is a browser estimate, not an optical scanout measurement',
+  });
+  const pageLifecycleId = globalThis.crypto?.randomUUID ?
+    globalThis.crypto.randomUUID() :
+    `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  const state = {
+    pageLifecycleId, startInvocationCount:0,
+    running:false, runEpoch:0, runStartedAt:0, session:null, generation:0,
+    candidatePolicy:null, deviceAddress:null,
+    senderPlayoutDelaySessions:[],
+    peerGeneration:0, peerInstanceSequence:0, peer:null,
+    trackEventSequence:0, trackEvents:[], activeTrack:null, activeTrackRef:null,
+    remoteStream:null, reconnectRequested:false,
+    reconnects:0, samples:[], sampleTimer:null, sampling:false, rvfcId:null,
+    previousInbound:null, previousRender:null, latest:null, firmware:null,
+    decodedCompleted:0, decodedActive:0, decodedActivePeerInstance:0,
+    decodedFinalizedPeerInstances:new Set(),
+    // The host runner obtains its own one-second snapshots.  Keep the visual
+    // dashboard sampler infrequent so duplicate getStats/DOM work cannot
+    // interfere with requestVideoFrameCallback delivery.
+    options:{sampleIntervalMs:10000, pollIntervalMs:120, maxSamples:MAX_SAMPLES},
+    pendingCandidates:new Map(), pendingLocalCandidates:new Map(),
+    answerPostedGeneration:0, localCandidates:[], logs:[],
+    identityTrackToken:0, identityResults:new Map(), identityNextSequence:1,
+    fingerprint:{count:0, duplicateCount:0, duplicateMediaTimeCount:0,
+      currentRun:0, longestRun:0, lastHash:null, lastMediaTime:null,
+      lastPresentationTime:0, lastCallbackTime:0, freezeGaps:0,
+      longestGapMs:0, longestCallbackDispatchGapMs:0, lastHashHex:null,
+      callbackWorkTotalMs:0, callbackWorkMaxMs:0, callbackWorkLastMs:0,
+      identityCopyTotalMs:0, identityCopyMaxMs:0, identityPending:0,
+      identityFailures:0, identityDecodeAnomalies:0, identityTrackResets:0,
+      unclassifiedCount:0,
+      callbackCount:0, compositorPresentedCount:0,
+      lastPresentedFrames:null, callbackObservedFrameSkips:0,
+      lastGrayCode:null, lastSourceFrameId:null, sourceFrameIdGaps:0,
+      lastTelemetryConfidence:null, telemetryLowConfidenceCount:0},
+    latency:createLatencyState(),
+    presentationLedger:createPresentationLedgerState(),
+    jetkvmControlSessions:[], jetkvmControl:null,
+  };
+  let latencyOverlayTimer = null;
+
+  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const nowIso = () => new Date().toISOString();
+  const round = (value, places=2) => Number.isFinite(value) ? Number(value.toFixed(places)) : 0;
+
+  function createLatencyState() {
+    return {
+      validSampleCount:0, invalidSampleCount:0,
+      invalidReasons:{copyFailure:0, identityAnomaly:0, missingExpectedDisplayTime:0,
+        telemetryLowConfidence:0, timecodeIntegrity:0,
+        sourceClockProgression:0, frameClockMismatch:0,
+        outsideValidWindow:0},
+      totalMs:0, minMs:null, maxMs:null, latestMs:null,
+      latestSourceClockMs32:null, latestReceiverClockMs32:null,
+      latestSourceEpochMs:null, latestReceiverEpochMs:null,
+      lastSourceClockMs32:null, sourceClockWraps:0, trackResets:0,
+      histogram:new Uint32Array(MAX_VALID_LATENCY_MS + 1),
+    };
+  }
+
+  function createJetKvmControlState(generation, peerInstanceSequence) {
+    const channel = label => ({label, ordered:true, state:'connecting',
+      id:null, openedAt:null, closedAt:null, error:null, messagesSent:0,
+      messagesReceived:0, bytesSent:0, bytesReceived:0, probePassed:false,
+      probeRttMs:null, lastResponse:null});
+    return {
+      protocol:'JetKVM frontend compatibility spike/v1',
+      scope:'video-stage rpc only; USB/HID channels intentionally not created',
+      generation, peerInstanceSequence, createdAt:nowIso(), closedAt:null,
+      rpc:{...channel('rpc'), probes:{}},
+    };
+  }
+
+  function byteLength(value) {
+    if (typeof value === 'string') return new TextEncoder().encode(value).byteLength;
+    if (value instanceof ArrayBuffer) return value.byteLength;
+    if (ArrayBuffer.isView(value)) return value.byteLength;
+    return 0;
+  }
+
+  function setupJetKvmControlChannels(peer, epoch, generation,
+                                      peerInstanceSequence, offerIsCurrent) {
+    const control = createJetKvmControlState(generation, peerInstanceSequence);
+    state.jetkvmControl = control;
+    state.jetkvmControlSessions.push(control);
+    if (state.jetkvmControlSessions.length > 128) state.jetkvmControlSessions.shift();
+
+    const rpc = peer.createDataChannel('rpc', {ordered:true});
+    peer.acceptanceDataChannels = [rpc];
+
+    const current = () => offerIsCurrent(peer) && state.running &&
+      epoch === state.runEpoch && state.jetkvmControl === control;
+    const closeRecord = (record, channel) => {
+      if (!current()) return;
+      record.state = channel.readyState;
+      record.closedAt = nowIso();
+    };
+    const errorRecord = (record, event) => {
+      if (!current()) return;
+      record.error = event?.error?.message || event?.message || event?.type || 'datachannel error';
+    };
+
+    const probeSpecs = [
+      ['ping', {}, value => value === 'pong'],
+      ['getVideoState', {}, value => value?.ready === true &&
+        value?.streaming === 'active' && Number(value?.width) > 0 &&
+        Number(value?.height) > 0 && Number(value?.fps) > 0],
+      ['getLocalVersion', {}, value => typeof value?.appVersion === 'string' &&
+        typeof value?.systemVersion === 'string'],
+      ['getNetworkSettings', {}, value => typeof value?.hostname === 'string' &&
+        value.hostname.length > 0],
+      ['getAudioConfig', {}, value => value?.enabled === false],
+      ['getStreamQualityFactor', {}, value => Number(value) > 0],
+      ['getVideoCodecPreference', {}, value => value === 'h264'],
+    ].map(([method, params, validate], index) => ({
+      method, params, validate,
+      id:`p4-${pageLifecycleId}-${peerInstanceSequence}-${index}`,
+    }));
+    const pendingProbes = new Map();
+    rpc.onopen = () => {
+      if (!current()) return;
+      control.rpc.state = rpc.readyState;
+      control.rpc.id = rpc.id;
+      control.rpc.openedAt = nowIso();
+      for (const spec of probeSpecs) {
+        const request = JSON.stringify({jsonrpc:'2.0', method:spec.method,
+          params:spec.params, id:spec.id});
+        const startedAt = performance.now();
+        pendingProbes.set(spec.id, {...spec, startedAt});
+        control.rpc.probes[spec.method] = {
+          id:spec.id, state:'pending', rttMs:null, result:null, error:null,
+        };
+        rpc.send(request);
+        control.rpc.messagesSent++;
+        control.rpc.bytesSent += byteLength(request);
+      }
+      log(`JetKVM rpc channel open stream=${rpc.id}; ${probeSpecs.length} video-stage probes sent`);
+    };
+    rpc.onmessage = event => {
+      if (!current()) return;
+      control.rpc.messagesReceived++;
+      control.rpc.bytesReceived += byteLength(event.data);
+      try {
+        const response = JSON.parse(String(event.data));
+        control.rpc.lastResponse = response;
+        const pending = pendingProbes.get(response?.id);
+        if (response?.jsonrpc === '2.0' && pending) {
+          pendingProbes.delete(response.id);
+          const record = control.rpc.probes[pending.method];
+          record.rttMs = round(performance.now() - pending.startedAt, 3);
+          record.result = response.result ?? null;
+          record.error = response.error ?? null;
+          record.state = !response.error && pending.validate(response.result) ?
+            'passed' : 'failed';
+          control.rpc.probePassed = Object.values(control.rpc.probes)
+            .every(probe => probe.state === 'passed');
+          const rtts = Object.values(control.rpc.probes)
+            .map(probe => probe.rttMs).filter(Number.isFinite);
+          control.rpc.probeRttMs = rtts.length ? round(Math.max(...rtts), 3) : null;
+        }
+      } catch (error) {
+        control.rpc.error = `invalid JSON-RPC response: ${error.message}`;
+      }
+    };
+    rpc.onclose = () => closeRecord(control.rpc, rpc);
+    rpc.onerror = event => errorRecord(control.rpc, event);
+
+    return control;
+  }
+
+  function createPresentationLedgerState() {
+    return {
+      observedCallbacks:0,
+      validSamples:0,
+      invalidSamples:0,
+      invalidReasons:{missingReceiveTime:0, missingPresentationTime:0,
+        missingExpectedDisplayTime:0, missingProcessingDuration:0,
+        nonFiniteDerivedValue:0},
+      samples:[], evictedSamples:0,
+      statsIntervals:[], evictedStatsIntervals:0,
+      latest:null, trackResets:0,
+      vsyncDeltasMs:[], vsyncCalibrationComplete:false,
+      vsyncCalibrationStartedAt:null, vsyncCalibrationCompletedAt:null,
+      lastRafTime:null, rafId:null,
+    };
+  }
+
+  function finiteTimestamp(value) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  function observePresentationLedger(callbackNow, metadata) {
+    const ledger = state.presentationLedger;
+    ledger.observedCallbacks++;
+    const receiveTime = finiteTimestamp(metadata.receiveTime);
+    const presentationTime = finiteTimestamp(metadata.presentationTime);
+    const expectedDisplayTime = finiteTimestamp(metadata.expectedDisplayTime);
+    const processingDurationSeconds = finiteTimestamp(metadata.processingDuration);
+    const processingDurationMs = processingDurationSeconds === null ? null :
+      processingDurationSeconds * 1000;
+    const captureTime = finiteTimestamp(metadata.captureTime);
+    const required = [receiveTime, presentationTime, expectedDisplayTime,
+      processingDurationMs];
+    if (receiveTime === null) ledger.invalidReasons.missingReceiveTime++;
+    if (presentationTime === null) ledger.invalidReasons.missingPresentationTime++;
+    if (expectedDisplayTime === null) {
+      ledger.invalidReasons.missingExpectedDisplayTime++;
+    }
+    if (processingDurationMs === null) {
+      ledger.invalidReasons.missingProcessingDuration++;
+    }
+
+    const receiveToPresentationMs = receiveTime !== null && presentationTime !== null ?
+      presentationTime - receiveTime : null;
+    const presentationToExpectedDisplayMs =
+      presentationTime !== null && expectedDisplayTime !== null ?
+        expectedDisplayTime - presentationTime : null;
+    const receiveToExpectedDisplayMs = receiveTime !== null && expectedDisplayTime !== null ?
+      expectedDisplayTime - receiveTime : null;
+    const callbackAfterPresentationMs = presentationTime === null ? null :
+      Number(callbackNow) - presentationTime;
+    const callbackToExpectedDisplayMs = expectedDisplayTime === null ? null :
+      expectedDisplayTime - Number(callbackNow);
+    const receiveToCallbackMs = receiveTime === null ? null :
+      Number(callbackNow) - receiveTime;
+    const nonDecodeResidualToPresentationMs =
+      receiveToPresentationMs === null || processingDurationMs === null ? null :
+        receiveToPresentationMs - processingDurationMs;
+    const captureToReceiveMs = captureTime === null || receiveTime === null ? null :
+      receiveTime - captureTime;
+    const captureToExpectedDisplayMs = captureTime === null || expectedDisplayTime === null ?
+      null : expectedDisplayTime - captureTime;
+    const derived = [receiveToPresentationMs, presentationToExpectedDisplayMs,
+      receiveToExpectedDisplayMs, callbackAfterPresentationMs,
+      callbackToExpectedDisplayMs, receiveToCallbackMs,
+      nonDecodeResidualToPresentationMs, captureToReceiveMs,
+      captureToExpectedDisplayMs].filter(value => value !== null);
+    const valid = required.every(value => value !== null) &&
+      derived.every(Number.isFinite);
+    if (valid) ledger.validSamples++;
+    else {
+      ledger.invalidSamples++;
+      if (derived.some(value => !Number.isFinite(value))) {
+        ledger.invalidReasons.nonFiniteDerivedValue++;
+      }
+    }
+
+    const sample = {
+      sequence:ledger.observedCallbacks,
+      peerInstanceSequence:state.activeTrack?.peerInstanceSequence ||
+        state.peerInstanceSequence || 0,
+      rtpTimestamp:finiteNumberOrNull(metadata.rtpTimestamp),
+      presentedFrames:finiteNumberOrNull(metadata.presentedFrames),
+      mediaTime:finiteNumberOrNull(metadata.mediaTime),
+      width:finiteNumberOrNull(metadata.width),
+      height:finiteNumberOrNull(metadata.height),
+      callbackNowMs:round(Number(callbackNow), 3),
+      captureTimeMs:captureTime === null ? null : round(captureTime, 3),
+      receiveTimeMs:receiveTime === null ? null : round(receiveTime, 3),
+      presentationTimeMs:presentationTime === null ? null : round(presentationTime, 3),
+      expectedDisplayTimeMs:expectedDisplayTime === null ? null :
+        round(expectedDisplayTime, 3),
+      processingDurationMs:processingDurationMs === null ? null :
+        round(processingDurationMs, 3),
+      captureToReceiveMs:captureToReceiveMs === null ? null :
+        round(captureToReceiveMs, 3),
+      captureToExpectedDisplayMs:captureToExpectedDisplayMs === null ? null :
+        round(captureToExpectedDisplayMs, 3),
+      receiveToPresentationMs:receiveToPresentationMs === null ? null :
+        round(receiveToPresentationMs, 3),
+      nonDecodeResidualToPresentationMs:
+        nonDecodeResidualToPresentationMs === null ? null :
+          round(nonDecodeResidualToPresentationMs, 3),
+      presentationToExpectedDisplayMs:
+        presentationToExpectedDisplayMs === null ? null :
+          round(presentationToExpectedDisplayMs, 3),
+      receiveToExpectedDisplayMs:receiveToExpectedDisplayMs === null ? null :
+        round(receiveToExpectedDisplayMs, 3),
+      receiveToCallbackMs:receiveToCallbackMs === null ? null :
+        round(receiveToCallbackMs, 3),
+      callbackAfterPresentationMs:callbackAfterPresentationMs === null ? null :
+        round(callbackAfterPresentationMs, 3),
+      callbackToExpectedDisplayMs:callbackToExpectedDisplayMs === null ? null :
+        round(callbackToExpectedDisplayMs, 3),
+      valid,
+    };
+    ledger.latest = sample;
+    ledger.samples.push(sample);
+    if (ledger.samples.length > MAX_PRESENTATION_LEDGER_SAMPLES) {
+      ledger.samples.shift();
+      ledger.evictedSamples++;
+    }
+  }
+
+  function numericDistribution(samples, key) {
+    const values = samples.map(sample => sample[key])
+      .filter(value => value !== null && value !== undefined)
+      .map(Number).filter(Number.isFinite).sort((left, right) => left - right);
+    if (!values.length) return {sampleCount:0, minMs:null, meanMs:null,
+      p50Ms:null, p95Ms:null, p99Ms:null, maxMs:null};
+    const percentile = value => values[Math.max(0,
+      Math.ceil(values.length * value) - 1)];
+    const total = values.reduce((sum, value) => sum + value, 0);
+    return {sampleCount:values.length, minMs:round(values[0], 3),
+      meanMs:round(total / values.length, 3),
+      p50Ms:round(percentile(0.50), 3), p95Ms:round(percentile(0.95), 3),
+      p99Ms:round(percentile(0.99), 3), maxMs:round(values.at(-1), 3)};
+  }
+
+  function estimatedVsyncMs() {
+    const values = state.presentationLedger.vsyncDeltasMs
+      .filter(value => Number.isFinite(value) && value > 0 && value < 50)
+      .sort((left, right) => left - right);
+    return values.length ? round(values[Math.ceil(values.length / 2) - 1], 3) : null;
+  }
+
+  function presentationLedgerSummary(includeRaw=false) {
+    const ledger = state.presentationLedger;
+    const metrics = {};
+    for (const key of ['processingDurationMs', 'receiveToPresentationMs',
+      'nonDecodeResidualToPresentationMs', 'presentationToExpectedDisplayMs',
+      'receiveToExpectedDisplayMs', 'callbackAfterPresentationMs',
+      'callbackToExpectedDisplayMs', 'captureToReceiveMs',
+      'captureToExpectedDisplayMs']) {
+      metrics[key] = numericDistribution(ledger.samples, key);
+    }
+    const vsyncMs = estimatedVsyncMs();
+    const compositorValues = ledger.samples
+      .map(sample => sample.presentationToExpectedDisplayMs)
+      .filter(value => value !== null && value !== undefined)
+      .map(Number).filter(Number.isFinite);
+    const callbackToDisplayValues = ledger.samples
+      .map(sample => sample.callbackToExpectedDisplayMs)
+      .filter(value => value !== null && value !== undefined)
+      .map(Number).filter(Number.isFinite);
+    const overOneVsyncThresholdMs = vsyncMs === null ? null : vsyncMs + 1;
+    const compositorOverOneVsyncCount = vsyncMs === null ? null :
+      compositorValues.filter(value => value > overOneVsyncThresholdMs).length;
+    const callbackAlreadyRenderedCount = vsyncMs === null ? null :
+      callbackToDisplayValues.filter(value => Math.abs(value) <= 1).length;
+    const callbackNextVsyncCount = vsyncMs === null ? null :
+      callbackToDisplayValues.filter(value => Math.abs(value - vsyncMs) <= 1.5).length;
+    return {
+      ...PRESENTATION_LEDGER_METHOD,
+      observedCallbacks:ledger.observedCallbacks,
+      validSamples:ledger.validSamples,
+      invalidSamples:ledger.invalidSamples,
+      invalidReasons:{...ledger.invalidReasons},
+      retainedSamples:ledger.samples.length,
+      evictedSamples:ledger.evictedSamples,
+      latest:ledger.latest ? {...ledger.latest} : null,
+      metrics,
+      displayTiming:{estimatedVsyncMs:vsyncMs,
+        calibrationSampleCount:ledger.vsyncDeltasMs.length,
+        calibrationComplete:ledger.vsyncCalibrationComplete,
+        calibrationStartedAt:ledger.vsyncCalibrationStartedAt,
+        calibrationCompletedAt:ledger.vsyncCalibrationCompletedAt,
+        overOneVsyncThresholdMs,
+        compositorOverOneVsyncCount,
+        compositorMeasuredSampleCount:compositorValues.length,
+        compositorOverOneVsyncRatio:
+          compositorOverOneVsyncCount === null || !compositorValues.length ? null :
+            round(compositorOverOneVsyncCount / compositorValues.length, 5)},
+        rVfcCallbackTiming:{
+          interpretation:'expectedDisplayTime≈callbackNow means the frame is already rendered; expectedDisplayTime≈callbackNow+vsync means it is expected on the next refresh',
+          measuredSampleCount:callbackToDisplayValues.length,
+          alreadyRenderedCount:callbackAlreadyRenderedCount,
+          nextVsyncCount:callbackNextVsyncCount,
+          otherCount:vsyncMs === null ? null : callbackToDisplayValues.length -
+            callbackAlreadyRenderedCount - callbackNextVsyncCount,
+        },
+      trackResets:ledger.trackResets,
+      statsIntervals:[...ledger.statsIntervals],
+      evictedStatsIntervals:ledger.evictedStatsIntervals,
+      samples:includeRaw ? ledger.samples.map(sample => ({...sample})) : undefined,
+    };
+  }
+
+  function startVsyncCalibration(epoch) {
+    const ledger = state.presentationLedger;
+    ledger.vsyncCalibrationStartedAt = nowIso();
+    const onAnimationFrame = timestamp => {
+      if (!state.running || epoch !== state.runEpoch ||
+          ledger !== state.presentationLedger) return;
+      if (ledger.lastRafTime !== null) {
+        const delta = timestamp - ledger.lastRafTime;
+        if (Number.isFinite(delta) && delta > 0 && delta < 50) {
+          ledger.vsyncDeltasMs.push(delta);
+        }
+      }
+      ledger.lastRafTime = timestamp;
+      if (ledger.vsyncDeltasMs.length >= VSYNC_CALIBRATION_SAMPLES) {
+        ledger.vsyncCalibrationComplete = true;
+        ledger.vsyncCalibrationCompletedAt = nowIso();
+        ledger.rafId = null;
+        return;
+      }
+      ledger.rafId = requestAnimationFrame(onAnimationFrame);
+    };
+    ledger.rafId = requestAnimationFrame(onAnimationFrame);
+  }
+
+  function clockMs32(epochMs) {
+    return Number.isFinite(epochMs) ? (Math.floor(epochMs) >>> 0) : null;
+  }
+
+  function browserClockSample() {
+    // This synchronous sample can be bracketed by host CLOCK_MONOTONIC_RAW
+    // reads. Date.now is calibration metadata only; frame-age samples below
+    // remain on the performance.timeOrigin + DOMHighResTimeStamp timeline.
+    const performanceNow = performance.now();
+    const epochMs = performance.timeOrigin + performanceNow;
+    const dateNowMs = Date.now();
+    return {
+      performanceTimeOrigin:performance.timeOrigin,
+      performanceNow,
+      epochMs,
+      dateNowMs,
+      epochMinusDateMs:epochMs - dateNowMs,
+      clockMs32:Math.floor(epochMs) >>> 0,
+      clockDomain:LATENCY_METHOD.clockDomain,
+    };
+  }
+
+  function unsignedDelta32(later, earlier) {
+    return ((Number(later) >>> 0) - (Number(earlier) >>> 0)) >>> 0;
+  }
+
+  function formatHostClock(epochMs) {
+    return Number.isFinite(epochMs) ?
+      new Date(epochMs).toISOString().slice(11, 23) : '--:--:--.---';
+  }
+
+  function rejectLatency(reason) {
+    const latency = state.latency;
+    latency.invalidSampleCount++;
+    if (!(reason in latency.invalidReasons)) latency.invalidReasons[reason] = 0;
+    latency.invalidReasons[reason]++;
+  }
+
+  function scheduleLatencyOverlayUpdate() {
+    if (!DISPLAY_PROFILE.domTelemetryUpdatesEnabled) return;
+    if (latencyOverlayTimer !== null) return;
+    latencyOverlayTimer = setTimeout(() => {
+      latencyOverlayTimer = null;
+      const latency = state.latency;
+      $('sourceClock').textContent = formatHostClock(latency.latestSourceEpochMs);
+      $('latencyLive').textContent = latency.latestMs === null ?
+        'waiting' : `${latency.latestMs} ms`;
+    }, 100);
+  }
+
+  function observeLatency(result, sourceFrameAdvance) {
+    const latency = state.latency;
+    if (!Number.isFinite(result.sourceClockMs32) ||
+        !Number.isFinite(result.receiverClockMs32) ||
+        !Number.isFinite(result.receiverEpochMs)) {
+      rejectLatency('missingExpectedDisplayTime');
+      return;
+    }
+
+    const sourceClockMs32 = Number(result.sourceClockMs32) >>> 0;
+    const receiverClockMs32 = Number(result.receiverClockMs32) >>> 0;
+    if (latency.lastSourceClockMs32 !== null) {
+      const sourceAdvanceMs = unsignedDelta32(
+        sourceClockMs32, latency.lastSourceClockMs32);
+      if (sourceAdvanceMs > MAX_SOURCE_CLOCK_ADVANCE_MS) {
+        rejectLatency('sourceClockProgression');
+        return;
+      }
+      if ((sourceFrameAdvance === 0 && sourceAdvanceMs !== 0) ||
+          (sourceFrameAdvance > 0 && sourceAdvanceMs === 0)) {
+        rejectLatency('frameClockMismatch');
+        return;
+      }
+      if (sourceClockMs32 < latency.lastSourceClockMs32 && sourceAdvanceMs > 0) {
+        latency.sourceClockWraps++;
+      }
+    }
+    latency.lastSourceClockMs32 = sourceClockMs32;
+
+    const latencyMs = unsignedDelta32(receiverClockMs32, sourceClockMs32);
+    if (latencyMs > MAX_VALID_LATENCY_MS) {
+      rejectLatency('outsideValidWindow');
+      return;
+    }
+
+    latency.validSampleCount++;
+    latency.totalMs += latencyMs;
+    latency.minMs = latency.minMs === null ? latencyMs : Math.min(latency.minMs, latencyMs);
+    latency.maxMs = latency.maxMs === null ? latencyMs : Math.max(latency.maxMs, latencyMs);
+    latency.latestMs = latencyMs;
+    latency.latestSourceClockMs32 = sourceClockMs32;
+    latency.latestReceiverClockMs32 = receiverClockMs32;
+    latency.latestReceiverEpochMs = Math.floor(result.receiverEpochMs);
+    latency.latestSourceEpochMs = latency.latestReceiverEpochMs - latencyMs;
+    latency.histogram[latencyMs]++;
+    scheduleLatencyOverlayUpdate();
+  }
+
+  function histogramPercentile(histogram, sampleCount, percentile) {
+    if (!sampleCount) return null;
+    const rank = Math.max(1, Math.ceil(sampleCount * percentile));
+    let cumulative = 0;
+    for (let value=0; value<histogram.length; value++) {
+      cumulative += histogram[value];
+      if (cumulative >= rank) return value;
+    }
+    return null;
+  }
+
+  function latencyPercentile(percentile) {
+    const latency = state.latency;
+    return histogramPercentile(
+      latency.histogram, latency.validSampleCount, percentile);
+  }
+
+  function sparseHistogramSummary(histogram, sampleCount) {
+    const histogramMs = [];
+    let histogramSampleCount = 0;
+    let histogramWeightedSumMs = 0;
+    const ranks = [0.50, 0.95, 0.99].map(percentile =>
+      Math.max(1, Math.ceil(sampleCount * percentile)));
+    const values = [null, null, null];
+    for (let ms=0; ms<histogram.length; ms++) {
+      const count = Number(histogram[ms]) || 0;
+      if (!count) continue;
+      histogramMs.push([ms, count]);
+      histogramSampleCount += count;
+      histogramWeightedSumMs += ms * count;
+      for (let index=0; index<ranks.length; index++) {
+        if (values[index] === null && histogramSampleCount >= ranks[index]) {
+          values[index] = ms;
+        }
+      }
+    }
+    return {
+      histogramMs, histogramSampleCount, histogramWeightedSumMs,
+      p50Ms:sampleCount ? values[0] : null,
+      p95Ms:sampleCount ? values[1] : null,
+      p99Ms:sampleCount ? values[2] : null,
+    };
+  }
+
+  function latencySummary() {
+    const latency = state.latency;
+    const distribution = sparseHistogramSummary(
+      latency.histogram, latency.validSampleCount);
+    return {
+      ...LATENCY_METHOD,
+      encoding:`one 96-cell row: Gray(frameId32), Gray(clockMs32), raw CRC-32C(KVM2 || mode || ${telemetryFps}fps || first64WireBits)`,
+      sameHostRequired:true,
+      validSampleCount:latency.validSampleCount,
+      invalidSampleCount:latency.invalidSampleCount,
+      invalidReasons:{...latency.invalidReasons},
+      latestMs:latency.latestMs,
+      minMs:latency.minMs,
+      totalMs:latency.totalMs,
+      meanMs:latency.validSampleCount ?
+        round(latency.totalMs / latency.validSampleCount, 2) : null,
+      p50Ms:distribution.p50Ms,
+      p95Ms:distribution.p95Ms,
+      p99Ms:distribution.p99Ms,
+      maxMs:latency.maxMs,
+      histogramMs:distribution.histogramMs,
+      histogramSampleCount:distribution.histogramSampleCount,
+      histogramWeightedSumMs:distribution.histogramWeightedSumMs,
+      histogramCountMatches:
+        distribution.histogramSampleCount === latency.validSampleCount,
+      histogramSumMatches:
+        distribution.histogramWeightedSumMs === latency.totalMs,
+      latestSourceClockMs32:latency.latestSourceClockMs32,
+      latestReceiverClockMs32:latency.latestReceiverClockMs32,
+      latestSourceEpochMs:latency.latestSourceEpochMs,
+      latestReceiverEpochMs:latency.latestReceiverEpochMs,
+      sourceClockWraps:latency.sourceClockWraps,
+      trackResets:latency.trackResets,
+      receiverPerformanceTimeOrigin:performance.timeOrigin,
+      interpretation:'Source-to-compositor frame-age proxy only, not glass-to-glass. Automated rVFC measurement is primary; visible clocks are screenshot corroboration.',
+    };
+  }
+
+  function log(message) {
+    const line = `${nowIso()} ${message}`;
+    state.logs.push(line);
+    if (state.logs.length > 180) state.logs.shift();
+    if (DISPLAY_PROFILE.domTelemetryUpdatesEnabled) {
+      $('eventLog').textContent = state.logs.join('\n');
+      $('eventLog').scrollTop = $('eventLog').scrollHeight;
+    }
+  }
+
+  function setConnection(text, kind='warn') {
+    if (!DISPLAY_PROFILE.domTelemetryUpdatesEnabled) return;
+    const badge = $('connectionBadge');
+    badge.textContent = text;
+    badge.className = `overlay badge ${kind}`;
+  }
+
+  async function fetchJson(url, options={}) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    try {
+      const response = await fetch(url, {...options, cache:'no-store', signal:controller.signal});
+      if (!response.ok) {
+        const body = await response.text().catch(() => '');
+        const error = new Error(`${response.status} ${response.statusText}: ${body}`);
+        error.status = response.status;
+        throw error;
+      }
+      return await response.json();
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  async function postSignal(type, payload={}, generation=state.peerGeneration,
+                            session=state.session) {
+    if (!session) return;
+    return fetchJson('/webrtc/signal', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({session, generation, type, ...payload}),
+    });
+  }
+
+  function invalidateIdentityTrack() {
+    // VideoFrame.copyTo() is asynchronous.  Advancing this token before a peer
+    // is replaced makes every completion from the old track observationally
+    // stale, even though the acceptance run itself keeps the same runEpoch.
+    state.identityTrackToken++;
+    state.identityResults.clear();
+    const fp = state.fingerprint;
+    state.identityNextSequence = fp.callbackCount + 1;
+    fp.identityPending = 0;
+    fp.currentRun = 0;
+    fp.lastHash = null;
+    fp.lastHashHex = null;
+    fp.lastGrayCode = null;
+    fp.lastSourceFrameId = null;
+    fp.lastMediaTime = null;
+    fp.lastPresentationTime = 0;
+    fp.lastCallbackTime = 0;
+    fp.lastPresentedFrames = null;
+    fp.lastTelemetryConfidence = null;
+    state.latency.lastSourceClockMs32 = null;
+    return state.identityTrackToken;
+  }
+
+  function beginIdentityTrack() {
+    const token = invalidateIdentityTrack();
+    state.fingerprint.identityTrackResets++;
+    state.latency.trackResets++;
+    state.presentationLedger.trackResets++;
+    return token;
+  }
+
+  async function closePeer(reason='replace', expectedPeer=state.peer) {
+    const peer = expectedPeer;
+    const wasCurrent = state.peer === peer;
+    const peerInstanceSequence = Number(peer?.acceptancePeerInstanceSequence ||
+      (wasCurrent ? state.activeTrack?.peerInstanceSequence : 0) ||
+      state.peerInstanceSequence);
+    if (peer) {
+      // Detach callbacks synchronously.  getStats() may resolve after a newer
+      // start/reconnect has installed another RTCPeerConnection.
+      peer.ontrack = null;
+      peer.ondatachannel = null;
+      peer.onicecandidate = null;
+      peer.onconnectionstatechange = null;
+      peer.oniceconnectionstatechange = null;
+      for (const channel of peer.acceptanceDataChannels || []) {
+        channel.onopen = null;
+        channel.onmessage = null;
+        channel.onclose = null;
+        channel.onerror = null;
+      }
+    }
+    if (wasCurrent) {
+      if (state.rvfcId !== null && video.cancelVideoFrameCallback) {
+        video.cancelVideoFrameCallback(state.rvfcId);
+      }
+      state.rvfcId = null;
+      invalidateIdentityTrack();
+    }
+    let finalReport = null;
+    if (peer) {
+      try {
+        finalReport = await peer.getStats();
+      } catch (_error) {
+        // The last successfully observed high-water mark remains valid evidence.
+      }
+    }
+    // A stale close owns only its captured peer.  In particular it must not
+    // clear a track/srcObject created while getStats() was pending.
+    if (state.peer !== peer) {
+      if (peer) peer.close();
+      return;
+    }
+    if (finalReport) {
+      observeDecodedCounter(findVideoInbound(finalReport), peerInstanceSequence);
+    }
+    if (peer) {
+      peer.close();
+    }
+    if (state.jetkvmControl?.peerInstanceSequence === peerInstanceSequence) {
+      state.jetkvmControl.closedAt = nowIso();
+      for (const record of [state.jetkvmControl.rpc]) {
+        if (record.state !== 'closed') record.state = 'closed';
+        if (!record.closedAt) record.closedAt = state.jetkvmControl.closedAt;
+      }
+    }
+    finalizeActiveDecodedCounter();
+    state.activeTrack = null;
+    state.activeTrackRef = null;
+    state.peer = null;
+    state.peerGeneration = 0;
+    state.answerPostedGeneration = 0;
+    state.pendingCandidates.clear();
+    state.pendingLocalCandidates.clear();
+    state.remoteStream = null;
+    video.srcObject = null;
+    state.previousInbound = null;
+    state.previousRender = null;
+    if (reason) log(`peer closed (${reason})`);
+  }
+
+  function requestReconnect(reason) {
+    if (!state.running || state.reconnectRequested) return;
+    state.reconnectRequested = true;
+    log(`reconnect requested: ${reason}`);
+    setConnection(`reconnecting: ${reason}`, 'warn');
+  }
+
+  function normalizeRemoteCandidate(candidate) {
+    let value = String(candidate || '').trim();
+    if (value.startsWith('a=')) value = value.slice(2);
+    return {candidate:value, sdpMid:'0', sdpMLineIndex:0};
+  }
+
+  function parseIpv4(value) {
+    const parts = String(value || '').split('.');
+    if (parts.length !== 4 || parts.some(part => !/^\d{1,3}$/.test(part))) return null;
+    const octets = parts.map(Number);
+    return octets.every(octet => octet >= 0 && octet <= 255) ? octets : null;
+  }
+
+  function isMdnsHostname(value) {
+    return value.length > 6 && value.length <= 253 &&
+      value.toLowerCase().endsWith('.local') &&
+      /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/i.test(value) &&
+      !value.includes('..');
+  }
+
+  function filterLocalCandidate(candidate) {
+    const value = String(candidate || '').trim();
+    const fields = value.split(/\s+/);
+    const typeIndex = fields.indexOf('typ');
+    const address = fields[4] || '';
+    const type = typeIndex >= 0 ? fields[typeIndex + 1] : '';
+    const target = parseIpv4(state.deviceAddress || location.hostname);
+    const local = parseIpv4(address);
+    let reason = 'accepted-same-ipv4-/24-host';
+    let accepted = true;
+    if (value.length === 0 || value.length > 1024 || /[^\x20-\x7e]/.test(value) ||
+        !/^candidate:[^\s:]+$/.test(fields[0] || '') || fields[1] !== '1' ||
+        fields[2]?.toLowerCase() !== 'udp' || !/^\d+$/.test(fields[3] || '') ||
+        Number(fields[3]) > 0xffffffff || !/^\d+$/.test(fields[5] || '') ||
+        Number(fields[5]) < 1 || Number(fields[5]) > 65535 || typeIndex !== 6) {
+      accepted = false; reason = 'candidate-is-not-component-1-udp';
+    } else if (type !== 'host') {
+      accepted = false; reason = `candidate-type-${type || 'missing'}`;
+    } else if (!local && !isMdnsHostname(address)) {
+      accepted = false; reason = 'candidate-address-is-not-ipv4-or-mdns';
+    } else if (state.candidatePolicy === 'http-peer-ipv4-rewrite-v1') {
+      reason = 'submitted-for-http-peer-ipv4-rewrite';
+    } else if (!target) {
+      accepted = false; reason = 'page-hostname-is-not-ipv4';
+    } else if (!local) {
+      accepted = false; reason = 'candidate-address-is-not-ipv4';
+    } else if (local.slice(0, 3).some((octet, index) => octet !== target[index])) {
+      accepted = false; reason = 'candidate-is-outside-device-/24';
+    }
+    return {candidate:value, address, type, accepted, reason, observedAt:nowIso()};
+  }
+
+  function stripUnfilteredCandidates(sdp) {
+    const lines = String(sdp || '').split(/\r?\n/).filter(line =>
+      !line.startsWith('a=candidate:') && line !== 'a=end-of-candidates');
+    return `${lines.join('\r\n').replace(/(?:\r\n)+$/, '')}\r\n`;
+  }
+
+  async function postApprovedCandidate(decision, generation, session=state.session) {
+    await postSignal('candidate', {candidate:decision.candidate}, generation, session);
+    log(`local ICE POST accepted address=${decision.address} generation=${generation}`);
+  }
+
+  async function addRemoteCandidate(message) {
+    const generation = Number(message.generation);
+    const candidate = normalizeRemoteCandidate(message.candidate);
+    if (!candidate.candidate) return;
+    const peer = state.peer;
+    if (!peer || state.peerGeneration !== generation || !peer.remoteDescription) {
+      const list = state.pendingCandidates.get(generation) || [];
+      list.push(candidate);
+      state.pendingCandidates.set(generation, list.slice(-32));
+      return;
+    }
+    await peer.addIceCandidate(candidate);
+  }
+
+  function grayToBinary(gray) {
+    let value = gray >>> 0;
+    value ^= value >>> 16;
+    value ^= value >>> 8;
+    value ^= value >>> 4;
+    value ^= value >>> 2;
+    value ^= value >>> 1;
+    return value >>> 0;
+  }
+
+  function crc32cWords(words) {
+    let crc = 0xffffffff;
+    for (const word of words) {
+      for (let shift=24; shift>=0; shift-=8) {
+        crc ^= (word >>> shift) & 0xff;
+        for (let bit=0; bit<8; bit++) {
+          crc = ((crc >>> 1) ^ (crc & 1 ? 0x82f63b78 : 0)) >>> 0;
+        }
+      }
+    }
+    return (crc ^ 0xffffffff) >>> 0;
+  }
+
+  function telemetryModeWord(width, height) {
+    return (((width & 0xffff) << 16) | (height & 0xffff)) >>> 0;
+  }
+
+  function telemetryCrc32c(width, height, frameGray, clockGray) {
+    return crc32cWords([
+      TIMECODE_MAGIC, telemetryModeWord(width, height), telemetryFps,
+      frameGray >>> 0, clockGray >>> 0,
+    ]);
+  }
+
+  function telemetryGeometry(width) {
+    const requestedMargin = Math.max(16, Math.floor(width * 0.02));
+    const cellWidth = Math.max(1,
+      Math.floor((width - 2 * requestedMargin) / TELEMETRY_CELL_COUNT));
+    const rowWidth = cellWidth * TELEMETRY_CELL_COUNT;
+    const startX = Math.floor((width - rowWidth) / 2);
+    return {startX, cellWidth, rowWidth, pilotWidth:startX};
+  }
+
+  function pixelLuma(pixels, plane, x) {
+    const offset = Number(plane.offset || 0) + x * 4;
+    return (pixels[offset] + pixels[offset + 1] + pixels[offset + 2]) / 3;
+  }
+
+  function median(values) {
+    const sorted = [...values].sort((left, right) => left - right);
+    return sorted[Math.floor(sorted.length / 2)];
+  }
+
+  function median3(first, second, third) {
+    return Math.max(Math.min(first, second),
+      Math.min(Math.max(first, second), third));
+  }
+
+  function decodeTelemetryRow(pixels, layout, width) {
+    const plane = layout?.[0] || {offset:0, stride:width * 4};
+    const geometry = telemetryGeometry(width);
+    const pilotInset = Math.max(3, Math.floor(geometry.pilotWidth * 0.18));
+    const pilotSpan = Math.max(1, geometry.pilotWidth - 2 * pilotInset);
+    const blackPilot = median([0.15, 0.35, 0.5, 0.65, 0.85].map(fraction =>
+      pixelLuma(pixels, plane, Math.min(width - 1,
+        Math.floor(pilotInset + pilotSpan * fraction)))));
+    const whitePilotStart = geometry.startX + geometry.rowWidth;
+    const whitePilot = median([0.15, 0.35, 0.5, 0.65, 0.85].map(fraction =>
+      pixelLuma(pixels, plane, Math.min(width - 1,
+        Math.floor(whitePilotStart + pilotInset + pilotSpan * fraction)))));
+    const contrast = whitePilot - blackPilot;
+    const threshold = (whitePilot + blackPilot) / 2;
+    const words = [0, 0, 0];
+    let minimumCellDistance = Infinity;
+    const quarter = Math.max(1, Math.floor(geometry.cellWidth / 4));
+    for (let cell=0; cell<TELEMETRY_CELL_COUNT; cell++) {
+      const center = geometry.startX + cell * geometry.cellWidth +
+        Math.floor((geometry.cellWidth - 1) / 2);
+      const luma = median3(
+        pixelLuma(pixels, plane, Math.max(0, center - quarter)),
+        pixelLuma(pixels, plane, center),
+        pixelLuma(pixels, plane, Math.min(width - 1, center + quarter)));
+      const wordIndex = Math.floor(cell / 32);
+      words[wordIndex] =
+        (words[wordIndex] * 2 + (luma >= threshold ? 1 : 0)) >>> 0;
+      minimumCellDistance = Math.min(
+        minimumCellDistance, Math.abs(luma - threshold));
+    }
+    const confidencePass = contrast >= TELEMETRY_MIN_CONTRAST &&
+      minimumCellDistance >= TELEMETRY_MIN_CELL_DISTANCE;
+    return {
+      frameGray:words[0], clockGray:words[1], wireCrc32c:words[2],
+      telemetryConfidence:{blackPilot, whitePilot, contrast, threshold,
+        minimumCellDistance, confidencePass, ...geometry},
+    };
+  }
+
+  function prepareTelemetryRowCopy(frame, visible, width, height) {
+    const rect = {
+      x:Math.floor(visible.x),
+      y:Math.min(Math.floor(visible.y + height - 1),
+        Math.max(Math.floor(visible.y),
+          Math.floor(visible.y + height * TELEMETRY_ROW_FRACTION))),
+      width,
+      height:1,
+    };
+    const copyOptions = {rect, format:'RGBA'};
+    return {
+      pixels:new Uint8Array(frame.allocationSize(copyOptions)),
+      copyOptions,
+    };
+  }
+
+  function drainIdentityResults(epoch, identityTrackToken) {
+    if (!state.running || epoch !== state.runEpoch ||
+        identityTrackToken !== state.identityTrackToken) return;
+    const fp = state.fingerprint;
+    while (state.identityResults.has(state.identityNextSequence)) {
+      const result = state.identityResults.get(state.identityNextSequence);
+      state.identityResults.delete(state.identityNextSequence++);
+      if (result.error) {
+        fp.identityFailures++;
+        fp.unclassifiedCount++;
+        rejectLatency('copyFailure');
+        continue;
+      }
+
+      fp.lastTelemetryConfidence = result.telemetryConfidence ?
+        {...result.telemetryConfidence} : null;
+      if (!result.telemetryConfidence?.confidencePass) {
+        fp.identityDecodeAnomalies++;
+        fp.unclassifiedCount++;
+        fp.telemetryLowConfidenceCount++;
+        rejectLatency('telemetryLowConfidence');
+        continue;
+      }
+      const expectedClockCheck = telemetryCrc32c(
+        result.width, result.height, result.frameGray, result.clockGray);
+      // CRC validates the actual first 64 wire bits before Gray decode.
+      // Failure must not manufacture unique progress or move either baseline.
+      if ((result.wireCrc32c >>> 0) !== expectedClockCheck) {
+        fp.identityDecodeAnomalies++;
+        fp.unclassifiedCount++;
+        rejectLatency('timecodeIntegrity');
+        continue;
+      }
+      const sourceFrameId = grayToBinary(result.frameGray);
+      const sourceClockMs32 = grayToBinary(result.clockGray);
+      const advance = fp.lastSourceFrameId === null ? 1 :
+        ((sourceFrameId - fp.lastSourceFrameId) >>> 0);
+      // A corrupt Gray-code sample normally decodes to a very large jump.  Do
+      // not let such a sample manufacture a unique frame.  Four seconds of
+      // forward progress is already beyond any acceptable 30 Hz display gap.
+      if (fp.lastSourceFrameId !== null && advance > 120) {
+        fp.identityDecodeAnomalies++;
+        fp.unclassifiedCount++;
+        rejectLatency('identityAnomaly');
+        continue;
+      }
+
+      fp.count++;
+      if (advance === 0) {
+        fp.duplicateCount++;
+        fp.currentRun++;
+        fp.longestRun = Math.max(fp.longestRun, fp.currentRun);
+      } else {
+        fp.currentRun = 0;
+        if (fp.lastSourceFrameId !== null && advance > 1) {
+          fp.sourceFrameIdGaps += advance - 1;
+        }
+        fp.lastSourceFrameId = sourceFrameId;
+      }
+      if (fp.lastMediaTime === result.mediaTime) fp.duplicateMediaTimeCount++;
+      fp.lastHash = result.frameGray;
+      fp.lastHashHex = result.frameGray.toString(16).padStart(8, '0');
+      fp.lastGrayCode = result.frameGray;
+      fp.lastMediaTime = result.mediaTime;
+      observeLatency({...result, sourceClockMs32}, advance);
+    }
+  }
+
+  function recordIdentityResult(epoch, identityTrackToken, sequence, result) {
+    if (!state.running || epoch !== state.runEpoch ||
+        identityTrackToken !== state.identityTrackToken) return;
+    state.identityResults.set(sequence, result);
+    drainIdentityResults(epoch, identityTrackToken);
+  }
+
+  function attachFrameCallbacks(epoch, identityTrackToken) {
+    if (!video.requestVideoFrameCallback) {
+      log('rVFC is unavailable; render and presentation-ledger measurement cannot run');
+      return;
+    }
+    if (IDENTITY_CAPTURE_POLICY.requested && typeof VideoFrame !== 'function') {
+      log('VideoFrame is unavailable; presentation ledger remains active but render identity acceptance cannot pass');
+    }
+    const onFrame = (callbackNow, metadata) => {
+      if (!state.running || epoch !== state.runEpoch || !state.peer ||
+          identityTrackToken !== state.identityTrackToken) return;
+      const workStartedAt = performance.now();
+      // rVFC is one-shot. Keep a successor pending before any identity work.
+      state.rvfcId = video.requestVideoFrameCallback(onFrame);
+      observePresentationLedger(callbackNow, metadata);
+      const fp = state.fingerprint;
+      fp.callbackCount++;
+      const sequence = fp.callbackCount;
+
+      const callbackGap = fp.lastCallbackTime ? callbackNow - fp.lastCallbackTime : 0;
+      fp.longestCallbackDispatchGapMs = Math.max(
+        fp.longestCallbackDispatchGapMs, callbackGap);
+      fp.lastCallbackTime = callbackNow;
+
+      const presentationTime = Number(
+        metadata.presentationTime ?? metadata.expectedDisplayTime);
+      if (Number.isFinite(presentationTime)) {
+        if (fp.lastPresentationTime) {
+          const gap = presentationTime - fp.lastPresentationTime;
+          fp.longestGapMs = Math.max(fp.longestGapMs, gap);
+          if (gap > 500) fp.freezeGaps++;
+        }
+        fp.lastPresentationTime = presentationTime;
+      }
+
+      const presentedFrames = Number(metadata.presentedFrames);
+      if (Number.isFinite(presentedFrames)) {
+        if (fp.lastPresentedFrames === null) {
+          fp.compositorPresentedCount++;
+        } else {
+          const delta = Math.max(0, presentedFrames - fp.lastPresentedFrames);
+          fp.compositorPresentedCount += delta;
+          fp.callbackObservedFrameSkips += Math.max(0, delta - 1);
+        }
+        fp.lastPresentedFrames = presentedFrames;
+      } else {
+        fp.compositorPresentedCount++;
+      }
+
+      // Strict same-screen stopwatch experiments may disable the diagnostic
+      // pixel readback so the acceptance instrumentation does not perturb the
+      // renderer being measured.  rVFC presentation accounting remains active;
+      // only Gray-code identity/duplicate acceptance becomes unavailable.
+      if (!IDENTITY_CAPTURE_POLICY.requested || typeof VideoFrame !== 'function') {
+        fp.callbackWorkLastMs = performance.now() - workStartedAt;
+        fp.callbackWorkTotalMs += fp.callbackWorkLastMs;
+        fp.callbackWorkMaxMs = Math.max(
+          fp.callbackWorkMaxMs, fp.callbackWorkLastMs);
+        return;
+      }
+
+      let frame = null;
+      try {
+        frame = new VideoFrame(video);
+        const visible = frame.visibleRect ||
+          {x:0, y:0, width:frame.displayWidth, height:frame.displayHeight};
+        const width = Math.floor(visible.width);
+        const height = Math.floor(visible.height);
+        const telemetryRow = prepareTelemetryRowCopy(frame, visible, width, height);
+        const expectedDisplayTime = Number(metadata.expectedDisplayTime);
+        const receiverEpochMs = Number.isFinite(expectedDisplayTime) ?
+          performance.timeOrigin + expectedDisplayTime : null;
+        const receiverClockMs32 = clockMs32(receiverEpochMs);
+        const copyStartedAt = performance.now();
+        fp.identityPending++;
+        frame.copyTo(telemetryRow.pixels, telemetryRow.copyOptions).then(layout => ({
+          ...decodeTelemetryRow(telemetryRow.pixels, layout, width),
+          width, height, mediaTime:metadata.mediaTime,
+          receiverEpochMs, receiverClockMs32,
+        })).catch(error => ({error:String(error)})).then(result => {
+          frame.close();
+          if (!state.running || epoch !== state.runEpoch ||
+              identityTrackToken !== state.identityTrackToken) return;
+          fp.identityPending = Math.max(0, fp.identityPending - 1);
+          const copyMs = performance.now() - copyStartedAt;
+          fp.identityCopyTotalMs += copyMs;
+          fp.identityCopyMaxMs = Math.max(fp.identityCopyMaxMs, copyMs);
+          recordIdentityResult(epoch, identityTrackToken, sequence, result);
+        });
+      } catch (error) {
+        if (frame) frame.close();
+        if (!state.running || epoch !== state.runEpoch ||
+            identityTrackToken !== state.identityTrackToken) return;
+        fp.identityPending = Math.max(0, fp.identityPending - 1);
+        recordIdentityResult(epoch, identityTrackToken, sequence, {error:String(error)});
+      }
+
+      fp.callbackWorkLastMs = performance.now() - workStartedAt;
+      fp.callbackWorkTotalMs += fp.callbackWorkLastMs;
+      fp.callbackWorkMaxMs = Math.max(fp.callbackWorkMaxMs, fp.callbackWorkLastMs);
+    };
+    state.rvfcId = video.requestVideoFrameCallback(onFrame);
+  }
+
+  async function acceptOffer(message, epoch, offerSession=state.session) {
+    const generation = Number(message.generation);
+    if (!message.sdp || !Number.isFinite(generation)) throw new Error('invalid offer event');
+    const session = offerSession;
+    const offerIsCurrent = peer => state.running && epoch === state.runEpoch &&
+      state.session === session && (!peer || state.peer === peer);
+    const stopStalePeer = async peer => {
+      if (offerIsCurrent(peer)) return false;
+      await closePeer('stale SDP generation', peer);
+      return true;
+    };
+    if (!offerIsCurrent(null)) return;
+    await closePeer('new SDP generation');
+    if (!offerIsCurrent(null)) return;
+    state.peerGeneration = generation;
+    state.generation = generation;
+    const peerInstanceSequence = ++state.peerInstanceSequence;
+    const peer = new RTCPeerConnection({iceServers:[], bundlePolicy:'max-bundle'});
+    peer.acceptancePeerInstanceSequence = peerInstanceSequence;
+    state.peer = peer;
+    peer.onicecandidate = event => {
+      if (!offerIsCurrent(peer)) return;
+      if (!event.candidate) {
+        log(`local ICE gathering complete generation=${generation}`);
+        return;
+      }
+      const decision = filterLocalCandidate(event.candidate.candidate);
+      state.localCandidates.push(decision);
+      if (state.localCandidates.length > 64) state.localCandidates.shift();
+      log(`local ICE ${decision.accepted ? 'allow' : 'drop'} address=${decision.address || '?'} ` +
+          `type=${decision.type || '?'} reason=${decision.reason}`);
+      if (!decision.accepted) return;
+      if (state.answerPostedGeneration !== generation) {
+        const queue = state.pendingLocalCandidates.get(generation) || [];
+        queue.push(decision);
+        state.pendingLocalCandidates.set(generation, queue);
+        log(`local ICE queued until filtered answer generation=${generation}`);
+        return;
+      }
+      postApprovedCandidate(decision, generation, session)
+        .catch(error => {
+          if (offerIsCurrent(peer)) requestReconnect(`candidate POST: ${error.message}`);
+        });
+    };
+    peer.ontrack = event => {
+      if (!offerIsCurrent(peer) || event.track.kind !== 'video') return;
+      // Apply the receiver latency policy before attaching the MediaStream or
+      // scheduling decoded-frame work.  The measured production default asks
+      // Chrome for both zero jitter-buffer target and zero playout delay;
+      // lowLatency=0/off preserves the browser defaults.
+      const receiverLatencyControl = describeReceiverLatencyControl(
+        event.receiver || event.transceiver?.receiver,
+        RECEIVER_LATENCY_EXPERIMENT.jitterBufferTargetRequested,
+        RECEIVER_LATENCY_EXPERIMENT.playoutDelayHintRequested);
+      const identityTrackToken = beginIdentityTrack();
+      const trackEvent = {
+        sequence:++state.trackEventSequence,
+        event:'track', at:nowIso(), runEpoch:epoch, session:state.session,
+        generation, peerInstanceSequence, identityTrackToken,
+        trackId:event.track.id, kind:event.track.kind, label:event.track.label || null,
+        readyState:event.track.readyState, muted:event.track.muted,
+        enabled:event.track.enabled,
+        streamIds:event.streams.map(stream => stream.id),
+        transceiverMid:event.transceiver?.mid ?? null,
+        receiverLatencyControl,
+      };
+      state.trackEvents.push(trackEvent);
+      if (state.trackEvents.length > 128) state.trackEvents.shift();
+      state.activeTrack = trackEvent;
+      state.activeTrackRef = event.track;
+      state.remoteStream = event.streams[0] || new MediaStream([event.track]);
+      video.srcObject = state.remoteStream;
+      video.play().catch(error => log(`video.play: ${error.message}`));
+      attachFrameCallbacks(epoch, identityTrackToken);
+      log(`remote H264 video track received generation=${generation} ` +
+          `peer=${peerInstanceSequence} trackEvent=${trackEvent.sequence} ` +
+          `receiverLatencyControl=${JSON.stringify(receiverLatencyControl)}`);
+    };
+    peer.onconnectionstatechange = () => {
+      if (!offerIsCurrent(peer)) return;
+      const value = peer.connectionState;
+      setConnection(value, value === 'connected' ? 'ok' :
+        (value === 'failed' || value === 'closed' ? 'bad' : 'warn'));
+      if (value === 'failed' || value === 'closed') requestReconnect(`pc ${value}`);
+    };
+    peer.oniceconnectionstatechange = () => {
+      if (!offerIsCurrent(peer)) return;
+      if (peer.iceConnectionState === 'disconnected' || peer.iceConnectionState === 'failed') {
+        requestReconnect(`ICE ${peer.iceConnectionState}`);
+      }
+    };
+    setupJetKvmControlChannels(peer, epoch, generation,
+      peerInstanceSequence, offerIsCurrent);
+    await peer.setRemoteDescription({type:'offer', sdp:message.sdp});
+    if (await stopStalePeer(peer)) return;
+    const queued = state.pendingCandidates.get(generation) || [];
+    state.pendingCandidates.delete(generation);
+    for (const candidate of queued) {
+      await peer.addIceCandidate(candidate);
+      if (await stopStalePeer(peer)) return;
+    }
+    const answer = await peer.createAnswer();
+    if (await stopStalePeer(peer)) return;
+    await peer.setLocalDescription(answer);
+    if (await stopStalePeer(peer)) return;
+    const filteredAnswerSdp = stripUnfilteredCandidates(peer.localDescription.sdp);
+    await postSignal('answer', {sdp:filteredAnswerSdp}, generation, session);
+    if (await stopStalePeer(peer)) return;
+    state.answerPostedGeneration = generation;
+    log(`answered offer generation=${generation} with SDP candidates stripped`);
+    const approved = state.pendingLocalCandidates.get(generation) || [];
+    state.pendingLocalCandidates.delete(generation);
+    for (const decision of approved) {
+      await postApprovedCandidate(decision, generation, session);
+      if (await stopStalePeer(peer)) return;
+    }
+  }
+
+  async function handleEvent(message, epoch, eventSession=state.session) {
+    if (!message || !message.type) return;
+    if (!state.running || epoch !== state.runEpoch ||
+        state.session !== eventSession) return;
+    if (Number.isFinite(Number(message.generation))) state.generation = Number(message.generation);
+    if (message.type === 'offer') await acceptOffer(message, epoch, eventSession);
+    else if (message.type === 'candidate') await addRemoteCandidate(message);
+    else if (message.type === 'bye') requestReconnect('device bye');
+  }
+
+  async function signalingLoop(epoch) {
+    let backoff = 400;
+    while (state.running && epoch === state.runEpoch) {
+      try {
+        state.reconnectRequested = false;
+        const sessionUrl = SENDER_PLAYOUT_DELAY_POLICY.requested ?
+          '/webrtc/session' : '/webrtc/session?senderPlayoutDelay=off';
+        const created = await fetchJson(sessionUrl, {method:'POST'});
+        if (!state.running || epoch !== state.runEpoch) return;
+        const actualSenderPlayoutDelay =
+          created.senderPlayoutDelayRequested === true;
+        state.senderPlayoutDelaySessions.push({
+          session:created.session,
+          generation:Number(created.generation),
+          requested:SENDER_PLAYOUT_DELAY_POLICY.requested,
+          deviceAccepted:actualSenderPlayoutDelay,
+          createdAt:nowIso(),
+        });
+        if (state.senderPlayoutDelaySessions.length > 128) {
+          state.senderPlayoutDelaySessions.shift();
+        }
+        if (actualSenderPlayoutDelay !== SENDER_PLAYOUT_DELAY_POLICY.requested) {
+          throw new Error('device sender playout-delay session policy mismatch');
+        }
+        state.session = created.session;
+        state.generation = Number(created.generation);
+        state.candidatePolicy = created.candidatePolicy ===
+          'http-peer-ipv4-rewrite-v1' ? created.candidatePolicy : null;
+        state.deviceAddress = parseIpv4(created.deviceAddress) ?
+          created.deviceAddress : null;
+        state.reconnects++;
+        backoff = 400;
+        setConnection('signaling', 'warn');
+        log(`session=${state.session} generation=${state.generation}`);
+        while (state.running && epoch === state.runEpoch && !state.reconnectRequested) {
+          const pollSession = state.session;
+          const message = await fetchJson(
+            `/webrtc/events?session=${encodeURIComponent(pollSession)}&t=${Date.now()}`);
+          if (!state.running || epoch !== state.runEpoch ||
+              state.session !== pollSession) return;
+          await handleEvent(message, epoch, pollSession);
+          await sleep(state.options.pollIntervalMs);
+        }
+        if (!state.running || epoch !== state.runEpoch) return;
+        const oldSession = state.session;
+        const oldGeneration = state.generation;
+        postSignal('bye', {}, oldGeneration, oldSession).catch(() => {});
+        state.session = null;
+        await closePeer('reconnect');
+        await sleep(200);
+      } catch (error) {
+        if (!state.running || epoch !== state.runEpoch) return;
+        log(`signaling error: ${error.message}`);
+        setConnection('signaling retry', 'bad');
+        state.session = null;
+        await closePeer('signaling error');
+        await sleep(backoff);
+        backoff = Math.min(backoff * 2, 5000);
+      }
+    }
+  }
+
+  function findVideoInbound(report) {
+    let inbound = null;
+    report.forEach(stat => {
+      if (stat.type === 'inbound-rtp' && stat.kind === 'video' && !stat.isRemote) inbound = stat;
+    });
+    return inbound;
+  }
+
+  function serializeRtcStats(report) {
+    if (!report) return [];
+    const values = [];
+    report.forEach(stat => {
+      const item = {};
+      for (const key of Object.keys(stat)) {
+        const value = stat[key];
+        item[key] = typeof value === 'bigint' ? value.toString() : value;
+      }
+      values.push(item);
+    });
+    values.sort((left, right) => String(left.id || '').localeCompare(String(right.id || '')));
+    return values;
+  }
+
+  function decodedCounterTotal() {
+    return state.decodedCompleted + state.decodedActive;
+  }
+
+  function finalizeActiveDecodedCounter() {
+    const peerInstance = state.decodedActivePeerInstance;
+    state.decodedCompleted += state.decodedActive;
+    state.decodedActive = 0;
+    state.decodedActivePeerInstance = 0;
+    if (peerInstance) {
+      state.decodedFinalizedPeerInstances.add(peerInstance);
+      if (state.decodedFinalizedPeerInstances.size > 256) {
+        state.decodedFinalizedPeerInstances.delete(
+          state.decodedFinalizedPeerInstances.values().next().value);
+      }
+    }
+  }
+
+  function observeDecodedCounter(inbound, peerInstanceSequence=null) {
+    if (!inbound) return decodedCounterTotal();
+    const peerInstance = Number(peerInstanceSequence ||
+      state.activeTrack?.peerInstanceSequence || state.peerInstanceSequence || 0);
+    if (state.decodedFinalizedPeerInstances.has(peerInstance)) {
+      return decodedCounterTotal();
+    }
+    if (state.decodedActivePeerInstance !== peerInstance) {
+      finalizeActiveDecodedCounter();
+      state.decodedActivePeerInstance = peerInstance;
+    }
+    const trackValue = Math.max(0, Math.trunc(Number(inbound.framesDecoded) || 0));
+    // A single inbound-rtp counter must not regress.  If a browser briefly
+    // reports a lower value, retaining the high-water mark keeps the public
+    // cumulative counter monotonic without inventing decoded frames.
+    state.decodedActive = Math.max(state.decodedActive, trackValue);
+    return decodedCounterTotal();
+  }
+
+  function finiteNumberOrNull(value) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  function describeInboundIdentity(report, inbound) {
+    if (!inbound) return null;
+    const codec = inbound.codecId ? report.get(inbound.codecId) : null;
+    return {
+      id:inbound.id || null,
+      ssrc:finiteNumberOrNull(inbound.ssrc),
+      trackIdentifier:inbound.trackIdentifier || null,
+      codecId:inbound.codecId || null,
+      transportId:inbound.transportId || null,
+      mid:inbound.mid || null,
+      rid:inbound.rid || null,
+      kind:inbound.kind || inbound.mediaType || null,
+      frameWidth:finiteNumberOrNull(inbound.frameWidth),
+      frameHeight:finiteNumberOrNull(inbound.frameHeight),
+      framesDecoded:finiteNumberOrNull(inbound.framesDecoded),
+      timestamp:finiteNumberOrNull(inbound.timestamp),
+      codec:codec ? {
+        id:codec.id || inbound.codecId || null,
+        mimeType:codec.mimeType || null,
+        clockRate:finiteNumberOrNull(codec.clockRate),
+        sdpFmtpLine:codec.sdpFmtpLine || null,
+      } : null,
+    };
+  }
+
+  function describeActiveTrack() {
+    if (!state.activeTrack || !state.activeTrackRef) return null;
+    const track = state.activeTrackRef;
+    let settings = {};
+    try {
+      settings = track.getSettings ? {...track.getSettings()} : {};
+    } catch (_error) {
+      settings = {};
+    }
+    return {
+      ...state.activeTrack,
+      readyState:track.readyState,
+      muted:track.muted,
+      enabled:track.enabled,
+      settings,
+    };
+  }
+
+  function describeDisplayProfile(queryValue) {
+    const bare = queryValue === 'bare' || queryValue === 'bare-fill';
+    const fillViewport = queryValue === 'bare-fill';
+    return {
+      queryParameter:'display',
+      queryValue,
+      effectiveMode:fillViewport ? 'bare-fill' : bare ? 'bare' : 'dashboard',
+      bare,
+      videoOnly:bare,
+      fillViewport,
+      dashboardLayoutPreservedForAb:bare && !fillViewport,
+      domTelemetryUpdatesEnabled:!bare,
+      continuousLocalClockRafEnabled:!bare,
+      purpose:bare ?
+        'video-only compositor A/B with rVFC and RTCStats measurement retained' :
+        'interactive acceptance dashboard',
+    };
+  }
+
+  function describeReceiverLatencyExperiment(queryValue) {
+    const explicitOptOut = queryValue === '0' || queryValue === 'off';
+    const explicitMode = queryValue === '1' || queryValue === 'jitter' ||
+      queryValue === 'playout';
+    const effectiveMode = explicitOptOut ? 'browser-default' :
+      explicitMode ? queryValue : '1';
+    const jitterRequested = effectiveMode === '1' || effectiveMode === 'jitter';
+    const playoutRequested = effectiveMode === '1' || effectiveMode === 'playout';
+    return {
+      queryParameter:'lowLatency',
+      queryValue,
+      defaultMode:'jitter+playout',
+      effectiveMode,
+      productionDefaultApplied:!explicitOptOut && !explicitMode,
+      explicitOptOut,
+      experiment:effectiveMode === '1' ?
+        'receiver-zero-delay-hints' : effectiveMode === 'jitter' ?
+          'receiver-zero-jitter-buffer-target' : effectiveMode === 'playout' ?
+            'receiver-zero-playout-delay-hint' : 'browser-default',
+      requested:jitterRequested || playoutRequested,
+      jitterBufferTargetRequested:jitterRequested,
+      jitterBufferTargetRequestedValue:jitterRequested ? 0 : null,
+      playoutDelayHintRequested:playoutRequested,
+      playoutDelayHintRequestedValue:playoutRequested ? 0 : null,
+    };
+  }
+
+  function describeReceiverLatencyControl(
+    receiver, jitterBufferTargetRequested, playoutDelayHintRequested) {
+    const jitterRequested = jitterBufferTargetRequested === true;
+    const playoutRequested = playoutDelayHintRequested === true;
+    const requested = jitterRequested || playoutRequested;
+    const result = {
+      experiment:jitterRequested && playoutRequested ?
+        'receiver-zero-delay-hints' : jitterRequested ?
+          'receiver-zero-jitter-buffer-target' : playoutRequested ?
+            'receiver-zero-playout-delay-hint' : 'browser-default',
+      requested,
+      mutated:false,
+      jitterBufferTargetSupported:false,
+      jitterBufferTargetRequested:jitterRequested,
+      jitterBufferTargetRequestedValue:jitterRequested ? 0 : null,
+      jitterBufferTargetMutationAttempted:false,
+      jitterBufferTargetMutated:false,
+      jitterBufferTargetReadback:null,
+      jitterBufferTarget:null,
+      jitterBufferTargetUntouched:true,
+      playoutDelayHintSupported:false,
+      playoutDelayHintRequested:playoutRequested,
+      playoutDelayHintRequestedValue:playoutRequested ? 0 : null,
+      playoutDelayHintMutationAttempted:false,
+      playoutDelayHintMutated:false,
+      playoutDelayHintReadback:null,
+      playoutDelayHint:null,
+      playoutDelayHintUntouched:true,
+      errors:[],
+    };
+    if (!receiver) {
+      result.errors.push('RTCTrackEvent receiver is missing');
+      return result;
+    }
+
+    try {
+      result.jitterBufferTargetSupported = 'jitterBufferTarget' in receiver;
+    } catch (error) {
+      result.errors.push(`jitterBufferTarget support detection: ${error.message}`);
+    }
+    try {
+      result.playoutDelayHintSupported = 'playoutDelayHint' in receiver;
+    } catch (error) {
+      result.errors.push(`playoutDelayHint support detection: ${error.message}`);
+    }
+
+    if (jitterRequested && result.jitterBufferTargetSupported) {
+      result.jitterBufferTargetMutationAttempted = true;
+      try {
+        receiver.jitterBufferTarget = 0;
+        result.jitterBufferTargetMutated = true;
+        result.jitterBufferTargetUntouched = false;
+        result.mutated = true;
+      } catch (error) {
+        result.errors.push(`jitterBufferTarget write: ${error.message}`);
+      }
+    }
+    if (playoutRequested && result.playoutDelayHintSupported) {
+      result.playoutDelayHintMutationAttempted = true;
+      try {
+        receiver.playoutDelayHint = 0;
+        result.playoutDelayHintMutated = true;
+        result.playoutDelayHintUntouched = false;
+        result.mutated = true;
+      } catch (error) {
+        result.errors.push(`playoutDelayHint write: ${error.message}`);
+      }
+    }
+
+    if (result.jitterBufferTargetSupported) {
+      try {
+        const readback = receiver.jitterBufferTarget;
+        result.jitterBufferTargetReadback = readback ?? null;
+        result.jitterBufferTarget = readback ?? null;
+      } catch (error) {
+        result.errors.push(`jitterBufferTarget readback: ${error.message}`);
+      }
+    }
+    if (result.playoutDelayHintSupported) {
+      try {
+        const readback = receiver.playoutDelayHint;
+        result.playoutDelayHintReadback = readback ?? null;
+        result.playoutDelayHint = readback ?? null;
+      } catch (error) {
+        result.errors.push(`playoutDelayHint readback: ${error.message}`);
+      }
+    }
+    return result;
+  }
+
+  function describeJitterBuffer(inbound) {
+    if (!inbound) return null;
+    const emitted = Math.max(0, Number(inbound.jitterBufferEmittedCount) || 0);
+    const delay = Math.max(0, Number(inbound.jitterBufferDelay) || 0);
+    const target = Math.max(0, Number(inbound.jitterBufferTargetDelay) || 0);
+    const minimum = Math.max(0, Number(inbound.jitterBufferMinimumDelay) || 0);
+    const averageMs = value => emitted > 0 ? round(value * 1000 / emitted, 3) : null;
+    return {
+      emittedCount:emitted,
+      cumulativeDelaySeconds:delay,
+      cumulativeTargetDelaySeconds:target,
+      cumulativeMinimumDelaySeconds:minimum,
+      averageDelayMs:averageMs(delay),
+      averageTargetDelayMs:averageMs(target),
+      averageMinimumDelayMs:averageMs(minimum),
+    };
+  }
+
+  function describeNetwork(report, inbound) {
+    let pair = null;
+    report.forEach(stat => {
+      if (stat.type === 'transport' && stat.selectedCandidatePairId) pair = report.get(stat.selectedCandidatePairId);
+    });
+    if (!pair) report.forEach(stat => {
+      if (stat.type === 'candidate-pair' && stat.state === 'succeeded' && stat.nominated) pair = stat;
+    });
+    const local = pair && report.get(pair.localCandidateId);
+    const remote = pair && report.get(pair.remoteCandidateId);
+    return {
+      pairState:pair?.state || null,
+      protocol:local?.protocol || null,
+      localCandidateType:local?.candidateType || null,
+      remoteCandidateType:remote?.candidateType || null,
+      localAddress:local?.address || local?.ip || null,
+      remoteAddress:remote?.address || remote?.ip || null,
+      currentRoundTripTime:pair?.currentRoundTripTime ?? null,
+      packetsLost:inbound?.packetsLost ?? 0,
+    };
+  }
+
+  function modeContract(width, height, fps) {
+    if (width === 1920 && height === 1080 && fps === 30) return {name:'1080p30', width, height, fps, threshold:28};
+    if (width === 1280 && height === 720 && fps === 60) return {name:'720p60', width, height, fps, threshold:55};
+    if (width === 1280 && height === 720 && fps === 30) return {name:'720p30', width, height, fps, threshold:28};
+    return {name:'unsupported', width, height, fps:0, threshold:28};
+  }
+
+  function rollingAcceptance() {
+    const windowSamples = state.samples.slice(-60).filter(sample => sample.decodeFps > 0);
+    const latest = state.latest || {};
+    const contract = modeContract(latest.width || 0, latest.height || 0,
+      Number(state.firmware?.fps) || telemetryFps);
+    const average = key => windowSamples.length ?
+      windowSamples.reduce((sum, sample) => sum + (sample[key] || 0), 0) / windowSamples.length : 0;
+    const minimum = key => windowSamples.length ? Math.min(...windowSamples.map(sample => sample[key] || 0)) : 0;
+    const elapsedSeconds = state.runStartedAt ? (Date.now() - state.runStartedAt) / 1000 : 0;
+    return {
+      contract,
+      elapsedSeconds:round(elapsedSeconds, 1),
+      tenMinuteDurationPass:elapsedSeconds >= 600,
+      resolutionPass:contract.name !== 'unsupported',
+      currentDecodeFps:round(latest.decodeFps || 0),
+      currentRenderFps:round(latest.renderFps || 0),
+      rollingSampleCount:windowSamples.length,
+      rollingDecodeFpsAverage:round(average('decodeFps')),
+      rollingRenderFpsAverage:round(average('renderFps')),
+      rollingDecodeFpsMinimum:round(minimum('decodeFps')),
+      rollingRenderFpsMinimum:round(minimum('renderFps')),
+      rollingFpsPass:windowSamples.length >= 10 &&
+        average('decodeFps') >= contract.threshold && average('renderFps') >= contract.threshold,
+      browserFramesDropped:latest.framesDropped || 0,
+      browserFreezeCount:latest.freezeCount || 0,
+      presentationFreezeGaps:state.fingerprint.freezeGaps,
+      exactFingerprintDuplicateRatio:state.fingerprint.count > 1 ?
+        round(state.fingerprint.duplicateCount / (state.fingerprint.count - 1), 5) : 0,
+      repeatedMediaTimeCount:state.fingerprint.duplicateMediaTimeCount,
+      longestExactFingerprintRun:state.fingerprint.longestRun,
+      fingerprintCallbackWorkAverageMs:state.fingerprint.callbackCount ?
+        round(state.fingerprint.callbackWorkTotalMs / state.fingerprint.callbackCount, 3) : 0,
+      fingerprintCallbackWorkMaximumMs:round(state.fingerprint.callbackWorkMaxMs, 3),
+      fingerprintIdentityCopyAverageMs:
+        (state.fingerprint.count + state.fingerprint.unclassifiedCount) ?
+          round(state.fingerprint.identityCopyTotalMs /
+            (state.fingerprint.count + state.fingerprint.unclassifiedCount), 3) : 0,
+      fingerprintIdentityCopyMaximumMs:round(state.fingerprint.identityCopyMaxMs, 3),
+      fingerprintClassifiedPresentations:state.fingerprint.count,
+      fingerprintObservedCallbacks:state.fingerprint.callbackCount,
+      compositorPresentedFrames:state.fingerprint.compositorPresentedCount,
+      fingerprintCallbackObservedFrameSkips:state.fingerprint.callbackObservedFrameSkips,
+      fingerprintUnclassifiedFrames:state.fingerprint.unclassifiedCount,
+      sourceFrameIdGaps:state.fingerprint.sourceFrameIdGaps,
+      telemetryLowConfidenceCount:state.fingerprint.telemetryLowConfidenceCount,
+      latestTelemetryConfidence:state.fingerprint.lastTelemetryConfidence,
+      frameAgeProxy:latencySummary(),
+      reconnectSessions:state.reconnects,
+      note:'The formal dynamic source must produce advancing Gray-code frame IDs; unobserved or unclassified presentations never count as unique.',
+    };
+  }
+
+  function updateFingerprintVisualization(fp) {
+    fingerprintContext.clearRect(0, 0, fingerprintCanvas.width, fingerprintCanvas.height);
+    if (fp.lastGrayCode === null) return;
+    const cellWidth = fingerprintCanvas.width / 32;
+    for (let bit=0; bit<32; bit++) {
+      fingerprintContext.fillStyle =
+        ((fp.lastGrayCode >>> (31 - bit)) & 1) ? '#fff' : '#000';
+      fingerprintContext.fillRect(Math.floor(bit * cellWidth), 0,
+        Math.ceil(cellWidth), fingerprintCanvas.height);
+    }
+  }
+
+  function updateDashboard(sample) {
+    if (!DISPLAY_PROFILE.domTelemetryUpdatesEnabled) return;
+    $('resolution').textContent = `${sample.width}×${sample.height}`;
+    $('decodeFps').textContent = sample.decodeFps.toFixed(2);
+    $('renderFps').textContent = sample.renderFps.toFixed(2);
+    $('bitrate').textContent = `${sample.bitrateKbps.toFixed(0)} kbps`;
+    $('drops').textContent = String(sample.framesDropped);
+    $('freezes').textContent = `${sample.freezeCount} RTC / ${state.fingerprint.freezeGaps} presentation`;
+    $('codec').textContent = sample.codec?.mimeType || 'unknown';
+    const fp = state.fingerprint;
+    const averageWorkMs = fp.callbackCount ? fp.callbackWorkTotalMs / fp.callbackCount : 0;
+    const identityCompleted = fp.count + fp.unclassifiedCount;
+    const averageCopyMs = identityCompleted ? fp.identityCopyTotalMs / identityCompleted : 0;
+    const latency = latencySummary();
+    updateFingerprintVisualization(fp);
+    $('fingerprintText').textContent =
+      `classified=${fp.count} callbacks=${fp.callbackCount} compositor=${fp.compositorPresentedCount} ` +
+      `source-id=${fp.lastSourceFrameId ?? '-'} gray=${fp.lastHashHex || '--------'} ` +
+      `duplicates=${fp.duplicateCount} unclassified=${fp.unclassifiedCount} ` +
+      `contrast/min-distance=${round(fp.lastTelemetryConfidence?.contrast || 0, 1)}/` +
+      `${round(fp.lastTelemetryConfidence?.minimumCellDistance || 0, 1)} ` +
+      `callback avg/max=${averageWorkMs.toFixed(3)}/${fp.callbackWorkMaxMs.toFixed(3)} ms ` +
+      `copy avg/max=${averageCopyMs.toFixed(3)}/${fp.identityCopyMaxMs.toFixed(3)} ms`;
+    $('latencyMinP50').textContent =
+      `${latency.minMs ?? '-'} / ${latency.p50Ms ?? '-'} ms`;
+    $('latencyP95P99').textContent =
+      `${latency.p95Ms ?? '-'} / ${latency.p99Ms ?? '-'} ms`;
+    $('latencySamples').textContent =
+      `${latency.validSampleCount} / ${latency.invalidSampleCount}`;
+    const net = sample.network || {};
+    $('candidate').textContent = `${net.protocol || '?'} ${net.localCandidateType || '?'}→${net.remoteCandidateType || '?'}`;
+    const elapsed = Math.max(0, Math.floor((Date.now() - state.runStartedAt) / 1000));
+    $('elapsed').textContent = `${Math.floor(elapsed/60)}:${String(elapsed%60).padStart(2,'0')} / ${state.reconnects}`;
+    $('acceptance').textContent = JSON.stringify(rollingAcceptance(), null, 2);
+    $('firmwareStats').textContent = JSON.stringify(state.firmware, null, 2);
+    $('presentationLedger').textContent = JSON.stringify(
+      presentationLedgerSummary(false), null, 2);
+    $('jetkvmControl').textContent = JSON.stringify(state.jetkvmControl, null, 2);
+  }
+
+  function buildPresentationStatsInterval(previous, inbound, timestamp,
+                                           peerInstanceSequence) {
+    if (!previous || timestamp <= previous.timestamp) return null;
+    const delta = key => {
+      const before = finiteNumberOrNull(previous[key]);
+      const after = finiteNumberOrNull(inbound[key]);
+      return before === null || after === null || after < before ? null : after - before;
+    };
+    const perEventMs = (totalKey, countKey) => {
+      const totalDelta = delta(totalKey);
+      const countDelta = delta(countKey);
+      return {totalKey, countKey, totalDeltaSeconds:totalDelta,
+        countDelta, averageMs:totalDelta === null || !countDelta ? null :
+          round(totalDelta * 1000 / countDelta, 3)};
+    };
+    return {
+      capturedAt:nowIso(), peerInstanceSequence,
+      startTimestampMs:previous.timestamp, endTimestampMs:timestamp,
+      elapsedMs:round(timestamp - previous.timestamp, 3),
+      frameDeltas:{received:delta('framesReceived'), decoded:delta('framesDecoded'),
+        rendered:delta('framesRendered'), dropped:delta('framesDropped')},
+      stages:{
+        packetAssembly:perEventMs(
+          'totalAssemblyTime', 'framesAssembledFromMultiplePackets'),
+        jitterBuffer:perEventMs('jitterBufferDelay', 'jitterBufferEmittedCount'),
+        jitterBufferTarget:perEventMs(
+          'jitterBufferTargetDelay', 'jitterBufferEmittedCount'),
+        jitterBufferMinimum:perEventMs(
+          'jitterBufferMinimumDelay', 'jitterBufferEmittedCount'),
+        decode:perEventMs('totalDecodeTime', 'framesDecoded'),
+        firstPacketToDecodeReady:perEventMs(
+          'totalProcessingDelay', 'framesDecoded'),
+        renderedInterFrame:perEventMs('totalInterFrameDelay', 'framesRendered'),
+      },
+      note:'Interval averages from cumulative getStats counters; they are not per-frame timestamps and must not be joined to an individual rVFC row.',
+    };
+  }
+
+  async function sampleStats(epoch) {
+    if (state.sampling || !state.running || epoch !== state.runEpoch) return;
+    state.sampling = true;
+    try {
+      const firmwarePromise = fetchJson('/webrtc/stats').catch(error => ({error:error.message}));
+      const peer = state.peer;
+      if (!peer) {
+        state.firmware = await firmwarePromise;
+        $('firmwareStats').textContent = JSON.stringify(state.firmware, null, 2);
+        return;
+      }
+      const peerInstanceSequence = state.activeTrack?.peerInstanceSequence ||
+        state.peerInstanceSequence;
+      const report = await peer.getStats();
+      const inbound = findVideoInbound(report);
+      state.firmware = await firmwarePromise;
+      if (state.peer !== peer) return;
+      if (!inbound) return;
+      const timestamp = inbound.timestamp || performance.now();
+      const previous = state.previousInbound;
+      const elapsedSeconds = previous ? (timestamp - previous.timestamp) / 1000 : 0;
+      const delta = key => previous && elapsedSeconds > 0 ?
+        Math.max(0, (Number(inbound[key]) || 0) - (Number(previous[key]) || 0)) : 0;
+      const renderTotal = Math.max(state.fingerprint.count,
+        state.fingerprint.compositorPresentedCount);
+      const previousRender = state.previousRender;
+      const renderElapsed = previousRender ? (performance.now() - previousRender.timestamp) / 1000 : 0;
+      const renderFps = previousRender && renderElapsed > 0 ?
+        Math.max(0, renderTotal - previousRender.count) / renderElapsed : 0;
+      const codecStat = inbound.codecId ? report.get(inbound.codecId) : null;
+      const cumulativeDecoded = observeDecodedCounter(inbound, peerInstanceSequence);
+      const presentationStatsInterval = buildPresentationStatsInterval(
+        previous, inbound, timestamp, peerInstanceSequence);
+      if (presentationStatsInterval) {
+        const intervals = state.presentationLedger.statsIntervals;
+        intervals.push(presentationStatsInterval);
+        if (intervals.length > MAX_PRESENTATION_STATS_INTERVALS) {
+          intervals.shift();
+          state.presentationLedger.evictedStatsIntervals++;
+        }
+      }
+      const sample = {
+        wallClock:nowIso(), elapsedMs:Date.now()-state.runStartedAt,
+        width:Number(inbound.frameWidth || video.videoWidth || 0),
+        height:Number(inbound.frameHeight || video.videoHeight || 0),
+        decodeFps:round(elapsedSeconds > 0 ? delta('framesDecoded') / elapsedSeconds : 0),
+        receiveFps:round(elapsedSeconds > 0 ? delta('framesReceived') / elapsedSeconds : 0),
+        renderFps:round(renderFps),
+        bitrateKbps:round(elapsedSeconds > 0 ? delta('bytesReceived') * 8 / elapsedSeconds / 1000 : 0),
+        framesDecoded:cumulativeDecoded,
+        framesDecodedTrack:Number(inbound.framesDecoded || 0),
+        framesReceived:Number(inbound.framesReceived || 0),
+        framesDropped:Number(inbound.framesDropped || 0),
+        keyFramesDecoded:Number(inbound.keyFramesDecoded || 0),
+        freezeCount:Number(inbound.freezeCount || 0),
+        totalFreezesDuration:Number(inbound.totalFreezesDuration || 0),
+        packetsLost:Number(inbound.packetsLost || 0), jitter:Number(inbound.jitter || 0),
+        jitterBuffer:describeJitterBuffer(inbound),
+        decoderImplementation:inbound.decoderImplementation || null,
+        codec:codecStat ? {mimeType:codecStat.mimeType, clockRate:codecStat.clockRate,
+          sdpFmtpLine:codecStat.sdpFmtpLine || null} : null,
+        inboundIdentity:describeInboundIdentity(report, inbound),
+        network:describeNetwork(report, inbound),
+        presentationStatsInterval,
+        fingerprint:{...state.fingerprint}, frameAgeProxy:latencySummary(), firmware:state.firmware,
+      };
+      state.previousInbound = {timestamp,
+        framesDecoded:finiteNumberOrNull(inbound.framesDecoded),
+        framesReceived:finiteNumberOrNull(inbound.framesReceived),
+        framesRendered:finiteNumberOrNull(inbound.framesRendered),
+        framesDropped:finiteNumberOrNull(inbound.framesDropped),
+        bytesReceived:finiteNumberOrNull(inbound.bytesReceived),
+        totalAssemblyTime:finiteNumberOrNull(inbound.totalAssemblyTime),
+        framesAssembledFromMultiplePackets:
+          finiteNumberOrNull(inbound.framesAssembledFromMultiplePackets),
+        jitterBufferDelay:finiteNumberOrNull(inbound.jitterBufferDelay),
+        jitterBufferTargetDelay:finiteNumberOrNull(inbound.jitterBufferTargetDelay),
+        jitterBufferMinimumDelay:finiteNumberOrNull(inbound.jitterBufferMinimumDelay),
+        jitterBufferEmittedCount:finiteNumberOrNull(inbound.jitterBufferEmittedCount),
+        totalDecodeTime:finiteNumberOrNull(inbound.totalDecodeTime),
+        totalProcessingDelay:finiteNumberOrNull(inbound.totalProcessingDelay),
+        totalInterFrameDelay:finiteNumberOrNull(inbound.totalInterFrameDelay)};
+      state.previousRender = {timestamp:performance.now(), count:renderTotal};
+      state.latest = sample;
+      state.samples.push(sample);
+      if (state.samples.length > state.options.maxSamples) state.samples.shift();
+      updateDashboard(sample);
+    } catch (error) {
+      log(`getStats error: ${error.message}`);
+    } finally {
+      state.sampling = false;
+    }
+  }
+
+  function resetRunMetrics() {
+    state.samples = [];
+    state.latest = null;
+    state.firmware = null;
+    state.previousInbound = null;
+    state.previousRender = null;
+    state.decodedCompleted = 0;
+    state.decodedActive = 0;
+    state.decodedActivePeerInstance = 0;
+    state.decodedFinalizedPeerInstances.clear();
+    state.reconnects = 0;
+    state.pendingCandidates.clear();
+    state.pendingLocalCandidates.clear();
+    state.answerPostedGeneration = 0;
+    state.localCandidates = [];
+    state.senderPlayoutDelaySessions = [];
+    state.trackEvents = [];
+    state.activeTrack = null;
+    state.activeTrackRef = null;
+    state.identityResults.clear();
+    state.identityNextSequence = 1;
+    state.latency = createLatencyState();
+    state.presentationLedger = createPresentationLedgerState();
+    state.jetkvmControlSessions = [];
+    state.jetkvmControl = null;
+    state.fingerprint = {count:0, duplicateCount:0, duplicateMediaTimeCount:0,
+      currentRun:0, longestRun:0,lastHash:null,lastMediaTime:null,
+      lastPresentationTime:0,lastCallbackTime:0,freezeGaps:0,
+      longestGapMs:0,longestCallbackDispatchGapMs:0,lastHashHex:null,
+      callbackWorkTotalMs:0,callbackWorkMaxMs:0,callbackWorkLastMs:0,
+      identityCopyTotalMs:0,identityCopyMaxMs:0,identityPending:0,
+      identityFailures:0,identityDecodeAnomalies:0,identityTrackResets:0,
+      unclassifiedCount:0,
+      callbackCount:0,compositorPresentedCount:0,
+      lastPresentedFrames:null,callbackObservedFrameSkips:0,
+      lastGrayCode:null,lastSourceFrameId:null,sourceFrameIdGaps:0,
+      lastTelemetryConfidence:null,telemetryLowConfidenceCount:0};
+    if (DISPLAY_PROFILE.domTelemetryUpdatesEnabled) {
+      fingerprintContext.clearRect(0, 0, fingerprintCanvas.width, fingerprintCanvas.height);
+      $('fingerprintText').textContent = 'No presented frame yet.';
+      $('sourceClock').textContent = '--:--:--.---';
+      $('latencyLive').textContent = 'waiting';
+      $('latencyMinP50').textContent = '- / - ms';
+      $('latencyP95P99').textContent = '- / - ms';
+      $('latencySamples').textContent = '0 / 0';
+      $('presentationLedger').textContent = 'Waiting for a presented WebRTC frame.';
+      $('jetkvmControl').textContent = 'Waiting for the JetKVM rpc DataChannel.';
+    }
+  }
+
+  async function start(options={}) {
+    state.startInvocationCount++;
+    await stop(false);
+    const requestedMode = String(options.mode || telemetryModeQueryValue || '');
+    telemetryFps = requestedMode === '720p60' ? 60 : 30;
+    state.options = {
+      mode:requestedMode || null,
+      sampleIntervalMs:Math.max(500, Number(options.sampleIntervalMs) || 10000),
+      pollIntervalMs:Math.max(50, Number(options.pollIntervalMs) || 120),
+      maxSamples:Math.max(600, Number(options.maxSamples) || MAX_SAMPLES),
+    };
+    state.running = true;
+    state.runEpoch++;
+    const epoch = state.runEpoch;
+    state.runStartedAt = Date.now();
+    resetRunMetrics();
+    startVsyncCalibration(epoch);
+    setConnection('starting', 'warn');
+    log(`acceptance run started epoch=${epoch}`);
+    state.sampleTimer = setInterval(() => sampleStats(epoch), state.options.sampleIntervalMs);
+    signalingLoop(epoch).catch(error => log(`signaling loop stopped: ${error.message}`));
+    return {epoch, pageLifecycleId:state.pageLifecycleId,
+      startInvocationCount:state.startInvocationCount,
+      startedAt:new Date(state.runStartedAt).toISOString(), options:{...state.options}};
+  }
+
+  async function stop(sendBye=true) {
+    const session = state.session;
+    const generation = state.generation;
+    if (sendBye && session) {
+      postSignal('bye', {}, generation, session).catch(() => {});
+    }
+    state.running = false;
+    state.runEpoch++;
+    state.session = null;
+    state.reconnectRequested = false;
+    if (state.sampleTimer) clearInterval(state.sampleTimer);
+    state.sampleTimer = null;
+    if (state.presentationLedger.rafId !== null) {
+      cancelAnimationFrame(state.presentationLedger.rafId);
+      state.presentationLedger.rafId = null;
+    }
+    await closePeer(state.runStartedAt ? 'run stopped' : '');
+    setConnection('stopped', 'bad');
+    return {stoppedAt:nowIso(), sampleCount:state.samples.length};
+  }
+
+  async function captureScreenshot() {
+    const width = video.videoWidth;
+    const height = video.videoHeight;
+    if (!width || !height || typeof VideoFrame !== 'function') return null;
+    let frame = null;
+    try {
+      const selectionBeforePerformanceNow = performance.now();
+      frame = new VideoFrame(video);
+      const selectionAfterPerformanceNow = performance.now();
+      const selectionMidpointPerformanceNow =
+        (selectionBeforePerformanceNow + selectionAfterPerformanceNow) / 2;
+      const receiverCaptureEpochMs =
+        performance.timeOrigin + selectionMidpointPerformanceNow;
+      const receiverCaptureClockMs32 = clockMs32(receiverCaptureEpochMs);
+      const visible = frame.visibleRect ||
+        {x:0, y:0, width:frame.displayWidth, height:frame.displayHeight};
+      const telemetryWidth = Math.floor(visible.width);
+      const telemetryHeight = Math.floor(visible.height);
+      const telemetryRow = prepareTelemetryRowCopy(
+        frame, visible, telemetryWidth, telemetryHeight);
+      let telemetry = null;
+      let invalidReason = null;
+      let telemetryConfidence = null;
+      try {
+        const layout = await frame.copyTo(
+          telemetryRow.pixels, telemetryRow.copyOptions);
+        const decoded = decodeTelemetryRow(
+          telemetryRow.pixels, layout, telemetryWidth);
+        telemetryConfidence = decoded.telemetryConfidence;
+        const receivedTelemetryCrc32c = decoded.wireCrc32c >>> 0;
+        const expectedTelemetryCrc32c = telemetryCrc32c(
+          telemetryWidth, telemetryHeight, decoded.frameGray, decoded.clockGray);
+        if (!telemetryConfidence.confidencePass) {
+          invalidReason = 'telemetryLowConfidence';
+        } else if (receivedTelemetryCrc32c !== expectedTelemetryCrc32c) {
+          invalidReason = 'timecodeIntegrity';
+        } else {
+          const screenshotFrameId = grayToBinary(decoded.frameGray);
+          const sourceClockMs32 = grayToBinary(decoded.clockGray);
+          const screenshotFrameAgeMs = unsignedDelta32(
+            receiverCaptureClockMs32, sourceClockMs32);
+          if (screenshotFrameAgeMs > MAX_VALID_LATENCY_MS) {
+            invalidReason = 'outsideDecoderSanityWindow';
+          } else {
+            telemetry = {
+              screenshotFrameId, sourceClockMs32,
+              telemetryCrc32c:receivedTelemetryCrc32c,
+              expectedTelemetryCrc32c, screenshotFrameAgeMs,
+              sourceEpochMs:Math.floor(receiverCaptureEpochMs) - screenshotFrameAgeMs,
+            };
+          }
+        }
+      } catch (error) {
+        invalidReason = `copyFailure:${String(error)}`;
+      }
+
+      screenshotCanvas.width = width;
+      screenshotCanvas.height = height;
+      // Draw the exact immutable VideoFrame whose packed row was decoded.
+      // Drawing the live <video> here could silently advance by one frame.
+      screenshotContext.drawImage(frame, 0, 0, width, height);
+      const panelWidth = Math.min(width - 24, Math.max(430, Math.floor(width * 0.35)));
+      const panelHeight = Math.max(96, Math.floor(height * 0.12));
+      const panelX = width - panelWidth - 12;
+      const panelY = 12;
+      const fontSize = Math.max(16, Math.floor(height / 42));
+      screenshotContext.fillStyle = '#02070be8';
+      screenshotContext.fillRect(panelX, panelY, panelWidth, panelHeight);
+      screenshotContext.strokeStyle = '#7890a8';
+      screenshotContext.strokeRect(
+        panelX + 0.5, panelY + 0.5, panelWidth - 1, panelHeight - 1);
+      screenshotContext.fillStyle = '#ffffff';
+      screenshotContext.font = `600 ${fontSize}px ui-monospace, Consolas, monospace`;
+      screenshotContext.textBaseline = 'top';
+      screenshotContext.fillText(
+        `LOCAL    ${formatHostClock(receiverCaptureEpochMs)}`,
+        panelX + 12, panelY + 10);
+      screenshotContext.fillText(
+        `SOURCE   ${telemetry ? formatHostClock(telemetry.sourceEpochMs) : 'INVALID'}`,
+        panelX + 12, panelY + 12 + fontSize);
+      screenshotContext.fillStyle = telemetry ? '#3ddc97' : '#ff6577';
+      screenshotContext.fillText(
+        `FRAME AGE ${telemetry ? `${telemetry.screenshotFrameAgeMs} ms` : 'INVALID'}`,
+        panelX + 12, panelY + 14 + fontSize * 2);
+      const dataUrl = screenshotCanvas.toDataURL('image/png');
+      $('screenshotPreview').src = dataUrl;
+      return {
+        width, height, mimeType:'image/png', capturedAt:nowIso(),
+        receiverCaptureEpochMs,
+        receiverCaptureClockMs32,
+        receiverFrameSelectionBracket:{
+          beforePerformanceNow:selectionBeforePerformanceNow,
+          afterPerformanceNow:selectionAfterPerformanceNow,
+          widthMs:selectionAfterPerformanceNow - selectionBeforePerformanceNow,
+          estimator:'midpoint around new VideoFrame(video)',
+        },
+        localClock:formatHostClock(receiverCaptureEpochMs),
+        screenshotTelemetryValid:telemetry !== null,
+        screenshotTelemetryInvalidReason:invalidReason,
+        screenshotTelemetryConfidence:telemetryConfidence,
+        screenshotFrameId:telemetry?.screenshotFrameId ?? null,
+        sourceClockMs32:telemetry?.sourceClockMs32 ?? null,
+        decodedSourceClock:telemetry ? formatHostClock(telemetry.sourceEpochMs) : null,
+        screenshotFrameAgeMs:telemetry?.screenshotFrameAgeMs ?? null,
+        telemetryCrc32c:telemetry?.telemetryCrc32c ?? null,
+        note:'Packed telemetry and pixels come from the same immutable VideoFrame. This frame-age proxy is not optical glass-to-glass latency.',
+        dataUrl,
+      };
+    } finally {
+      if (frame) frame.close();
+    }
+  }
+
+  async function snapshot(options={}) {
+    const includeSamples = options.includeSamples !== false;
+    const includeScreenshot = options.screenshot === true;
+    const includeFullStats = options.includeFullStats === true;
+    const firmware = await fetchJson('/webrtc/stats').catch(error => ({error:error.message}));
+    let liveReport = null;
+    let liveInbound = null;
+    let livePeerInstanceSequence = 0;
+    let liveNetwork = state.latest?.network || null;
+    const livePeer = state.peer;
+    if (livePeer) {
+      try {
+        livePeerInstanceSequence = state.activeTrack?.peerInstanceSequence ||
+          state.peerInstanceSequence;
+        const report = await livePeer.getStats();
+        if (state.peer === livePeer) {
+          liveReport = report;
+          liveInbound = findVideoInbound(liveReport);
+          if (liveInbound) liveNetwork = describeNetwork(liveReport, liveInbound);
+        }
+      } catch (error) {
+        log(`snapshot getStats error: ${error.message}`);
+      }
+    }
+    const classified = Math.trunc(state.fingerprint.count || 0);
+    const rendered = Math.max(classified,
+      Math.trunc(state.fingerprint.compositorPresentedCount || 0));
+    const duplicate = Math.min(classified,
+      Math.trunc(state.fingerprint.duplicateCount || 0));
+    const decoded = liveInbound ?
+      observeDecodedCounter(liveInbound, livePeerInstanceSequence) : decodedCounterTotal();
+    const counters = {
+      captured:Math.trunc(Number(firmware.accessUnitsOffered) || 0),
+      encoded:Math.trunc(Number(firmware.accessUnitsEnqueued) || 0),
+      rtpSent:Math.trunc(Number(firmware.accessUnitsSent) || 0),
+      decoded:Math.trunc(decoded),
+      rendered,
+      unique:classified - duplicate,
+      duplicate,
+      unclassified:rendered - classified,
+    };
+    const screenshot = includeScreenshot ? await captureScreenshot() : undefined;
+    const browserClock = browserClockSample();
+    const evidence = {
+      schema:'kvm-webrtc-acceptance/v1', capturedAt:nowIso(),
+      userAgent:navigator.userAgent, page:location.href,
+      pageLifecycleId:state.pageLifecycleId,
+      startInvocationCount:state.startInvocationCount,
+      displayProfile:{...DISPLAY_PROFILE},
+      receiverLatencyExperiment:{...RECEIVER_LATENCY_EXPERIMENT},
+      senderPlayoutDelayPolicy:{...SENDER_PLAYOUT_DELAY_POLICY},
+      identityCapturePolicy:{...IDENTITY_CAPTURE_POLICY},
+      senderPlayoutDelaySessions:state.senderPlayoutDelaySessions.map(
+        session => ({...session})),
+      runEpoch:state.runEpoch,
+      browserClock,
+      runStartedAt:state.runStartedAt ? new Date(state.runStartedAt).toISOString() : null,
+      session:state.session, generation:state.peerGeneration || state.generation,
+      peerInstanceSequence:state.peerInstanceSequence,
+      trackEventSequence:state.trackEventSequence,
+      trackEvents:state.trackEvents.map(event => ({
+        ...event, streamIds:[...event.streamIds],
+        receiverLatencyControl:{...event.receiverLatencyControl,
+          errors:[...event.receiverLatencyControl.errors]},
+      })),
+      peerConnectionState:state.peer?.connectionState || 'closed',
+      iceConnectionState:state.peer?.iceConnectionState || 'closed',
+      video:{width:video.videoWidth,height:video.videoHeight,readyState:video.readyState,
+        currentTime:video.currentTime,paused:video.paused},
+      counters,
+      counterSources:{
+        captured:'firmware.accessUnitsOffered',
+        encoded:'firmware.accessUnitsEnqueued',
+        rtpSent:'firmware.accessUnitsSent',
+        decoded:'cumulative high-water sum of each RTCRtpReceiver inbound-rtp.framesDecoded',
+        rendered:'rVFC metadata.presentedFrames compositor-submission delta',
+        uniqueAndDuplicate:'decoded dynamic-source Gray-code frame ID equality',
+        unclassified:'rendered minus Gray-code-classified presentations; never counted as unique',
+        frameAgeProxy:'source Gray32 millisecond clock to rVFC expectedDisplayTime in the same-host clock domain; not glass-to-glass',
+        presentationLedger:'per-frame rVFC metadata plus separately differenced getStats interval counters',
+      },
+      webrtc:{
+        selectedCandidatePair:liveNetwork,
+        activeTrack:describeActiveTrack(),
+        receiverLatencyControl:state.activeTrack ? {
+          ...state.activeTrack.receiverLatencyControl,
+          errors:[...state.activeTrack.receiverLatencyControl.errors],
+        } : null,
+        liveInboundIdentity:liveReport ?
+          describeInboundIdentity(liveReport, liveInbound) : null,
+        jitterBuffer:describeJitterBuffer(liveInbound),
+        stats:includeFullStats ? serializeRtcStats(liveReport) : undefined,
+        statsCapturedAt:includeFullStats ? nowIso() : undefined,
+        connectionState:state.peer?.connectionState || 'closed',
+        iceConnectionState:state.peer?.iceConnectionState || 'closed',
+        localCandidatePolicy:'component-1 UDP host via the device HTTP peer',
+        candidatePolicy:state.candidatePolicy,
+        localCandidates:[...state.localCandidates],
+      },
+      acceptance:rollingAcceptance(), fingerprint:{...state.fingerprint},
+      frameAgeProxy:latencySummary(),
+      presentationLedger:presentationLedgerSummary(includeSamples),
+      jetkvmControl:{
+        active:state.jetkvmControl ? JSON.parse(JSON.stringify(state.jetkvmControl)) : null,
+        sessions:state.jetkvmControlSessions.map(
+          session => JSON.parse(JSON.stringify(session))),
+      },
+      latestBrowserStats:state.latest, firmwareStats:firmware,
+      samples:includeSamples ? [...state.samples] : undefined,
+      events:[...state.logs],
+      screenshot,
+    };
+    return evidence;
+  }
+
+  async function exportEvidence() {
+    const evidence = await snapshot({screenshot:true, includeSamples:true});
+    const blob = new Blob([JSON.stringify(evidence, null, 2)], {type:'application/json'});
+    const anchor = document.createElement('a');
+    anchor.href = URL.createObjectURL(blob);
+    anchor.download = `kvm-webrtc-${new Date().toISOString().replaceAll(':','-')}.json`;
+    anchor.click();
+    setTimeout(() => URL.revokeObjectURL(anchor.href), 1000);
+  }
+
+  window.kvmAcceptance = Object.freeze({
+    start, stop, snapshot, clockSample:browserClockSample, version:'1.4.0'
+  });
+  let lastLocalClockUpdate = -Infinity;
+  function updateLocalClock(now) {
+    if (now - lastLocalClockUpdate >= 30) {
+      lastLocalClockUpdate = now;
+      $('localClock').textContent = formatHostClock(performance.timeOrigin + now);
+    }
+    requestAnimationFrame(updateLocalClock);
+  }
+  if (DISPLAY_PROFILE.continuousLocalClockRafEnabled) {
+    requestAnimationFrame(updateLocalClock);
+  }
+  $('startButton').addEventListener('click', () => start().catch(error => log(error.message)));
+  $('stopButton').addEventListener('click', () => stop().catch(error => log(error.message)));
+  $('snapshotButton').addEventListener('click', async () => {
+    const evidence = await snapshot({screenshot:true, includeSamples:false});
+    log(`snapshot ${evidence.video.width}x${evidence.video.height}, decode=${evidence.acceptance.currentDecodeFps}, render=${evidence.acceptance.currentRenderFps}`);
+  });
+  $('exportButton').addEventListener('click', () => exportEvidence().catch(error => log(error.message)));
+  start().catch(error => { log(`auto-start failed: ${error.message}`); setConnection('start failed','bad'); });
+})();
+</script>
+</body>
+</html>

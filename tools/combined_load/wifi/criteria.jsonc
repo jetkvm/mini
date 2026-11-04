@@ -1,0 +1,197 @@
+// Rules for the Wi-Fi Mini. Format: runner/judge.mjs. Same as the Ethernet
+// rules except for speeds, the update, and video paused during an upload.
+{
+  // Checked every second. A rule fails when its limit is broken for more than
+  // "failAfterSeconds" in a row; without it, at once. "andOneOf" makes one
+  // rule per listed variable.
+  "everySecond": [
+    { "measure": "statsResponsesPerSecond", "min": 1, "failAfterSeconds": 2 },
+    { "measure": "deviceRestarts", "max": 0 },
+    // Low-water marks stay above the hard floors in jetkvm_memory_policy.h.
+    { "measure": ["allocationFailures", "videoRebuildFailures", "uploadWriteErrors"], "max": 0 },
+    // A refused read is a read error on the host.
+    { "measure": "imageReadsRefused", "max": 0 },
+    // A refused connection is a failed sender update check.
+    { "measure": "senderUpdatesRefused", "max": 0 },
+    // While a TLS reservation is held, free RAM must not fall by more than
+    // the reservation plus the admission-to-hard-floor room.
+    { "measure": "tlsHeldOverruns", "max": 0 },
+    { "measure": ["freeInternalLowWater", "freeDmaLowWater"], "min": 49152 },
+    { "measure": "freePsramLowWater", "min": 2097152 },
+    // An update check's TLS connection needs 16 KiB headroom above the floors;
+    // a refused check looks like a network failure.
+    { "measure": "tlsReserveMin", "min": 16384 },
+    { "while": { "updateCheck": true }, "measure": "updateChecksFailed", "max": 0 },
+    // A handshake that leaks memory eats the room an update needs.
+    { "measure": "memoryLostBytes", "max": 1023 },
+    // SHA-256 of uploaded blocks, mounted blocks read, transferred files and clipboard text.
+    { "measure": ["uploadsCorrupt", "mountReadsCorrupt", "fileTransfersCorrupt", "clipboardCorrupt"], "max": 0 },
+    // MQTT video state matches the Mini's own; a lost signal is published
+    // after a delay. Status is published every 15 s.
+    { "while": { "mqtt": true }, "measure": "mqttVideoWrong", "max": 0, "failAfterSeconds": 10 },
+    { "while": { "mqtt": true }, "measure": "mqttFirstStatusSeconds", "max": 30 },
+    { "while": { "mqtt": true }, "measure": "mqttSilentSeconds", "max": 20 },
+    // The session stays up during an update until the restart.
+    { "while": { "ota": true }, "measure": "sessionGoneSeconds", "max": 4 },
+    { "while": { "cloud": true }, "measure": "cloudConnected", "min": 1 },
+    { "while": { "tailscale": true }, "measure": "tailscaleRunning", "min": 1 },
+    // From the request for /adopt to the cloud's name page.
+    { "while": { "cloud": true }, "measure": "adoptMs", "max": 2500 },
+    // takeoverMs includes the tool browser's page load.
+    { "while": { "takeover": true }, "measure": "takeoverMs", "max": 3500 },
+    { "while": { "takeover": true }, "measure": "useHereMs", "max": 1000 },
+    // Two open tabs must not take the session from each other.
+    { "while": { "takeover": true }, "measure": "takeoverNewConnections", "max": 0 },
+    { "while": { "video": true }, "measure": "framesPerSecond", "min": 26, "failAfterSeconds": 2 },
+    // Service video runs at 50 to 60 fps; beside a busy session with a Linux
+    // host it holds 36 fps or more, apart from single seconds.
+    { "while": { "video": true, "osVideo": true, "upload": false }, "measure": "framesPerSecond", "min": 30, "failAfterSeconds": 2 },
+    { "while": { "video": true }, "measure": "freezeMs", "max": 0 },
+    // HDMI stream in states that neither replace nor stop the picture. The
+    // Wi-Fi Mini sends 1 keyframe per second.
+    { "while": { "video": true, "osVideo": false, "upload": false, "ota": false, "updateCheck": false, "takeover": false, "packetLoss": false },
+      "measure": "keyframesPerSecond", "min": 0.6 },
+    { "while": { "video": true, "osVideo": false, "upload": false, "ota": false, "updateCheck": false, "takeover": false, "packetLoss": false },
+      "measure": ["browserFramesDropped", "keyframeRequests"], "max": 0 },
+    { "while": { "video": true, "osVideo": false, "upload": false, "ota": false, "updateCheck": false, "takeover": false, "packetLoss": false },
+      "measure": "framesDecodedShare", "min": 0.95 },
+    { "while": { "video": true }, "measure": "videoStreamReplaced", "max": 0 },
+    { "measure": ["serviceVideoFaults", "serviceVideoSwitchFailures", "serviceVideoFramesDropped"], "max": 0 },
+    // The target page's tone with beeps. Above max is louder than the host
+    // plays; below min is the tone without its beeps.
+    { "while": { "audio": true }, "measure": "audioLevel", "min": 0.08, "max": 0.22, "failAfterSeconds": 1 },
+    { "while": { "audio": true }, "measure": "audioConcealedMs", "max": 30 },
+    // The page's 220 Hz tone; a second can catch its 1000 Hz beeps.
+    { "while": { "audio": true }, "measure": "audioToneHz", "min": 190, "max": 250, "failAfterSeconds": 1 },
+    // The Wi-Fi Mini pauses video and sound during an upload to the TF card,
+    // and only then.
+    { "measure": "videoPausedByUpload", "max": 0 },
+    { "while": { "upload": true }, "measure": "videoPausedByUpload", "min": 1 },
+    { "while": { "video": true, "upload": true }, "measure": "framesPerSecond", "max": 0 },
+    { "measure": "audioPausedByUpload", "max": 0 },
+    { "while": { "upload": true }, "measure": "audioPausedByUpload", "min": 1 },
+    { "while": { "osVideo": true }, "measure": "serviceVideo", "min": 1 },
+    // Wi-Fi loses packets, so lost packets have no rule; packetLoss below
+    // checks recovery.
+    { "while": { "video": true }, "measure": "videoQuantizer", "max": 35, "failAfterSeconds": 1 },
+    { "while": { "video": true }, "measure": "videoHeight", "min": 1080 },
+    // hostModeChange's other mode is 1280x720. During an upload as well the
+    // page shows no picture, so nothing is checked.
+    { "while": { "video": true, "hostModeChange": true }, "measure": "videoHeight", "min": 720, "max": 720 },
+    { "while": { "video": true, "upload": true, "hostModeChange": true },
+      "measure": ["framesPerSecond", "freezeMs", "videoQuantizer", "videoHeight", "encodeMs", "keyframeEncodeMs", "framesTooBig"], "min": 0 },
+    // One frame at 30 fps. One slow frame moves a second's mean, so 2 s pass.
+    { "while": { "video": true }, "measure": ["encodeMs", "keyframeEncodeMs"], "max": 33.3, "failAfterSeconds": 2 },
+    // The Mini drops a frame larger than a send buffer.
+    { "while": { "video": true }, "measure": "framesTooBig", "max": 0 },
+    // A key without an answer within 3 s counts as 3000 ms.
+    { "while": { "hid": true }, "measure": "keysLost", "max": 0 },
+    { "while": { "hid": true }, "measure": "keyLatencyP95Ms", "windowSeconds": 5, "max": 100 },
+    { "while": { "hid": true }, "measure": "keyLatencyMaxMs", "max": 500 },
+    // One key every 1.5 s, so a 5 s window's P95 is its slowest key.
+    { "while": { "slowKeys": true }, "measure": "keyLatencyP95Ms", "windowSeconds": 5, "max": 100 },
+    { "while": { "slowKeys": true }, "measure": "keyLatencyMaxMs", "max": 500 },
+    { "while": { "hid": true }, "measure": "mouseMovesLost", "max": 0 },
+    { "while": { "hid": true }, "measure": "mouseGapMs", "max": 500 },
+    // Throughput floors in bytes per second.
+    { "while": { "osTerminal": true }, "measure": "terminalBytesPerSecond", "min": 288000, "failAfterSeconds": 3 },
+    { "while": { "osTerminal": true }, "measure": "terminalLinesLost", "max": 0 },
+    // A line without an answer within 3 s counts as 3000 ms.
+    { "while": { "osTerminalLight": true }, "measure": "terminalLineP95Ms", "windowSeconds": 5, "max": 200 },
+    { "while": { "osTerminalLight": true }, "measure": "terminalLineMaxMs", "max": 500 },
+    { "while": { "osFiles": true }, "measure": "fileBytesPerSecond", "min": 445000, "failAfterSeconds": 3 },
+    { "while": { "osFiles": true, "osTerminal": true }, "measure": "fileBytesPerSecond", "min": 124000, "failAfterSeconds": 5 },
+    // Over tailscale each floor is 70 % of its LAN rule, which it replaces.
+    { "while": { "osTerminal": true, "tailscale": true }, "measure": "terminalBytesPerSecond", "min": 201600, "failAfterSeconds": 3 },
+    { "while": { "osFiles": true, "tailscale": true }, "measure": "fileBytesPerSecond", "min": 311500, "failAfterSeconds": 3 },
+    { "while": { "osFiles": true, "osTerminal": true, "tailscale": true }, "measure": "fileBytesPerSecond", "min": 86800, "failAfterSeconds": 3 },
+    { "while": { "osFiles": true }, "measure": "filesFailed", "max": 0 },
+    { "while": { "osFilesSmall": true }, "measure": "filesFailed", "max": 0 },
+    { "while": { "osClipboard": true }, "measure": "clipboardWrong", "max": 0 },
+    { "while": { "osClipboard": true }, "measure": "clipboardMs", "max": 350, "failAfterSeconds": 3 },
+    { "andOneOf": ["httpMountCdrom", "httpMountDisk"], "measure": "mountReadBytesPerSecond", "min": 260000, "failAfterSeconds": 3 },
+    { "andOneOf": ["tfMountCdrom", "tfMountDisk"], "measure": "mountReadBytesPerSecond", "min": 2800000, "failAfterSeconds": 3 },
+    { "while": { "upload": true }, "measure": "uploadEnded", "max": 0 },
+    { "while": { "upload": true }, "measure": "uploadBytesPerSecond", "min": 1000000, "failAfterSeconds": 3 }
+  ],
+
+  // "max": seconds from the switch call until every rule above holds for 2 s
+  // in a row. "pauses": checks the change interrupts by design, skipped until
+  // the switch is done. A mount takes the Mini off USB, so it pauses HID.
+  "changeTakesAtMost": [
+    { "change": { "video": true }, "max": 3.5, "pauses": ["framesPerSecond", "keyframesPerSecond", "browserFramesDropped", "keyframeRequests", "framesDecodedShare", "freezeMs"] },
+    { "change": { "mqtt": true }, "max": 2 },
+    // Adoption leaves the device page; the tool loads it again.
+    { "change": { "cloud": true }, "max": 6, "pauses": ["cloudConnected", "framesPerSecond", "keyframesPerSecond", "browserFramesDropped", "keyframeRequests", "framesDecodedShare", "freezeMs"] },
+    { "change": { "cloud": false }, "max": 5 },
+    { "change": { "osServices": true }, "max": 2.5 },
+    { "change": { "osServices": false }, "max": 4.5 },
+    { "change": { "osVideo": true }, "max": 8, "pauses": ["framesPerSecond", "keyframesPerSecond", "browserFramesDropped", "keyframeRequests", "framesDecodedShare", "freezeMs", "serviceVideo"] },
+    { "change": { "osVideo": false }, "max": 7.5, "pauses": ["framesPerSecond", "keyframesPerSecond", "browserFramesDropped", "keyframeRequests", "framesDecodedShare", "freezeMs"] },
+    { "change": { "osTerminal": true }, "max": 10.5, "pauses": ["terminalBytesPerSecond", "terminalLinesLost"] },
+    { "change": { "osTerminal": false }, "max": 4.5 },
+    { "change": { "osTerminalLight": true }, "max": 4, "pauses": ["terminalLineP95Ms", "terminalLineMaxMs"] },
+    { "change": { "osTerminalLight": false }, "max": 1.5 },
+    { "change": { "osFiles": true }, "max": 3.5, "pauses": ["fileBytesPerSecond", "filesFailed"] },
+    { "change": { "osFiles": false }, "max": 4.5 },
+    { "change": { "osFilesSmall": true }, "max": 1.5, "pauses": ["filesFailed"] },
+    { "change": { "osFilesSmall": false }, "max": 4.5 },
+    { "change": { "osClipboard": true }, "max": 6, "pauses": ["clipboardWrong", "clipboardMs"] },
+    { "change": { "osClipboard": false }, "max": 4.5 },
+    { "change": { "hid": true }, "max": 3, "pauses": ["keysLost", "keyLatencyP95Ms", "keyLatencyMaxMs", "mouseMovesLost", "mouseGapMs"] },
+    { "change": { "hid": false }, "max": 4.5 },
+    { "change": { "slowKeys": true }, "max": 3, "pauses": ["keyLatencyP95Ms", "keyLatencyMaxMs"] },
+    { "change": { "slowKeys": false }, "max": 1.5 },
+    { "change": { "audio": true }, "max": 6, "pauses": ["audioLevel", "audioToneHz", "audioConcealedMs"] },
+    { "change": { "audio": false }, "max": 2 },
+    { "change": { "httpMountCdrom": true }, "max": 7, "pauses": ["mountReadBytesPerSecond", "keysLost", "keyLatencyP95Ms", "keyLatencyMaxMs", "mouseMovesLost", "mouseGapMs"] },
+    { "change": { "httpMountCdrom": false }, "max": 3.5 },
+    { "change": { "httpMountDisk": true }, "max": 7, "pauses": ["mountReadBytesPerSecond", "keysLost", "keyLatencyP95Ms", "keyLatencyMaxMs", "mouseMovesLost", "mouseGapMs"] },
+    { "change": { "httpMountDisk": false }, "max": 3 },
+    // Leaving USB also interrupts the sender's session.
+    { "change": { "httpsMountDisk": true }, "max": 8, "pauses": ["mountReadBytesPerSecond", "keysLost", "keyLatencyP95Ms", "keyLatencyMaxMs", "mouseMovesLost", "mouseGapMs", "terminalLineP95Ms", "terminalLineMaxMs"] },
+    { "change": { "httpsMountDisk": false }, "max": 5.5 },
+    { "change": { "tfMountCdrom": true }, "max": 6, "pauses": ["mountReadBytesPerSecond", "keysLost", "keyLatencyP95Ms", "keyLatencyMaxMs", "mouseMovesLost", "mouseGapMs"] },
+    { "change": { "tfMountCdrom": false }, "max": 3 },
+    { "change": { "tfMountDisk": true }, "max": 6, "pauses": ["mountReadBytesPerSecond", "keysLost", "keyLatencyP95Ms", "keyLatencyMaxMs", "mouseMovesLost", "mouseGapMs"] },
+    { "change": { "tfMountDisk": false }, "max": 7.5 },
+    { "change": { "updateCheck": true }, "max": 4.5 },
+    { "change": { "updateCheck": false }, "max": 1.5 },
+    // An upload pauses video and sound. When it ends, Chrome counts the whole
+    // pause as one freeze, and the host may have another display mode.
+    { "change": { "upload": true }, "max": 2, "pauses": ["uploadBytesPerSecond", "framesPerSecond", "keyframesPerSecond", "browserFramesDropped", "keyframeRequests", "framesDecodedShare", "videoPausedByUpload", "audioPausedByUpload", "audioLevel", "audioToneHz", "audioConcealedMs"] },
+    // Freezes stay checked: a quality change must not freeze the picture.
+    { "change": { "qualityChange": true }, "max": 2.5 },
+    { "change": { "qualityChange": false }, "max": 2.5 },
+    { "change": { "usbEmulation": true }, "max": 10,
+      "pauses": ["keysLost", "keyLatencyP95Ms", "keyLatencyMaxMs", "mouseMovesLost", "mouseGapMs", "mountReadBytesPerSecond"] },
+    { "change": { "usbEmulation": false }, "max": 4.5 },
+    { "change": { "senderRestart": true }, "max": 15,
+      "pauses": ["serviceVideo", "framesPerSecond", "freezeMs", "keyframesPerSecond", "browserFramesDropped", "keyframeRequests", "framesDecodedShare"] },
+    { "change": { "senderRestart": false }, "max": 1.5 },
+    // The whole picture changes, and the busy host reads HID late.
+    { "change": { "noisePicture": true }, "max": 10.5, "pauses": ["framesPerSecond", "freezeMs", "keyframesPerSecond", "browserFramesDropped", "keyframeRequests", "framesDecodedShare", "keysLost", "keyLatencyP95Ms", "keyLatencyMaxMs", "mouseMovesLost", "mouseGapMs"] },
+    // The host redraws its desktop and can be late with a key after the switch.
+    { "change": { "noisePicture": false }, "max": 5.5, "pauses": ["framesPerSecond", "freezeMs", "keyframesPerSecond", "browserFramesDropped", "keyframeRequests", "framesDecodedShare", "keysLost", "keyLatencyP95Ms", "keyLatencyMaxMs", "mouseMovesLost", "mouseGapMs"], "pauseSeconds": 2.5 },
+    { "change": { "upload": false }, "max": 15, "pauses": ["framesPerSecond", "keyframesPerSecond", "browserFramesDropped", "keyframeRequests", "framesDecodedShare", "freezeMs", "videoHeight", "videoPausedByUpload", "audioPausedByUpload", "audioLevel", "audioToneHz", "audioConcealedMs"] },
+    { "change": { "hostModeChange": true }, "max": 8.5, "pauses": ["framesPerSecond", "freezeMs", "keyframesPerSecond", "browserFramesDropped", "keyframeRequests", "framesDecodedShare", "videoHeight"] },
+    { "change": { "hostModeChange": false }, "max": 5.5, "pauses": ["framesPerSecond", "freezeMs", "keyframesPerSecond", "browserFramesDropped", "keyframeRequests", "framesDecodedShare", "videoHeight"] },
+    // All packets between the tool's browser and the Mini dropped for 100 ms.
+    { "change": { "packetLoss": true }, "max": 4.5,
+      "pauses": ["videoPacketsLost", "framesPerSecond", "keyframesPerSecond", "browserFramesDropped", "keyframeRequests", "framesDecodedShare", "freezeMs", "keysLost", "keyLatencyP95Ms", "keyLatencyMaxMs", "mouseMovesLost", "mouseGapMs",
+        "terminalBytesPerSecond", "fileBytesPerSecond", "clipboardMs"] },
+    // A second tab takes the session; the first takes it back with "Use Here".
+    { "change": { "takeover": true }, "max": 10.5, "pauses": ["framesPerSecond", "keyframesPerSecond", "browserFramesDropped", "keyframeRequests", "framesDecodedShare", "freezeMs", "audioLevel", "audioToneHz", "audioConcealedMs"] },
+    { "change": { "takeover": false }, "max": 2 },
+    // The page reloads from the Mini's tailnet address and back.
+    { "change": { "tailscale": true }, "max": 15, "pauses": ["tailscaleRunning", "framesPerSecond", "keyframesPerSecond", "browserFramesDropped", "keyframeRequests", "framesDecodedShare", "freezeMs"] },
+    { "change": { "tailscale": false }, "max": 2, "pauses": ["framesPerSecond", "keyframesPerSecond", "browserFramesDropped", "keyframeRequests", "framesDecodedShare", "freezeMs"] },
+    // Download, install, restart and video again. Session rates are not
+    // checked, but lost terminal lines and closed transfers are.
+    { "change": { "ota": true }, "max": 166.5,
+      "pauses": ["statsResponsesPerSecond", "deviceRestarts", "cloudConnected", "mqttSilentSeconds", "framesPerSecond", "keyframesPerSecond", "browserFramesDropped", "keyframeRequests", "framesDecodedShare", "freezeMs", "mountReadBytesPerSecond",
+        "terminalBytesPerSecond", "fileBytesPerSecond",
+        "encodeMs", "keyframeEncodeMs"] },
+    { "change": { "ota": false }, "max": 2 }
+  ]
+}

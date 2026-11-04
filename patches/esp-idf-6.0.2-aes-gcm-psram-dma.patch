@@ -1,0 +1,53 @@
+--- a/components/mbedtls/port/aes/esp_aes_gcm.c
++++ b/components/mbedtls/port/aes/esp_aes_gcm.c
+@@ -23,6 +23,8 @@
+ 
+ #include "esp_heap_caps.h"
+ #include "esp_log.h"
++#include "esp_memory_utils.h"
++#include "hal/efuse_hal.h"
+ #include "soc/soc_caps.h"
+ #include "soc/soc_memory_layout.h"
+ 
+@@ -536,6 +538,20 @@
+ }
+ 
+ #if CONFIG_MBEDTLS_HARDWARE_GCM
++/* Where the AES DMA path syncs the cache (ESP32-P4), esp_aes_process_dma_gcm()
++   takes buffers in DMA-capable PSRAM as esp_aes_process_dma() does. It does not
++   apply the 16-byte alignment that flash encryption and PSRAM ECC need for
++   external memory DMA, so with either one PSRAM buffers stay in software. */
++static bool esp_aes_gcm_dma_capable(const void *p)
++{
++#if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE && CONFIG_SPIRAM && SOC_PSRAM_DMA_CAPABLE && !CONFIG_SPIRAM_ECC_ENABLE
++    if (esp_ptr_dma_ext_capable(p) && !efuse_hal_flash_encryption_enabled()) {
++        return true;
++    }
++#endif
++    return esp_ptr_dma_capable(p);
++}
++
+ /* Due to restrictions in the hardware (e.g. need to do the whole conversion in one go),
+    some combinations of inputs are not supported */
+ static bool esp_aes_gcm_input_support_hw_accel(size_t length, const unsigned char *aad, size_t aad_len,
+@@ -545,14 +561,14 @@
+ 
+     if (aad_len > ESP_AES_GCM_AAD_MAX_BYTES) {
+         support_hw_accel = false;
+-    } else if (!esp_ptr_dma_capable(aad) && aad_len > 0) {
+-        /* aad in non internal DMA memory */
++    } else if (!esp_aes_gcm_dma_capable(aad) && aad_len > 0) {
++        /* aad not in DMA-capable memory */
+         support_hw_accel = false;
+-    } else if (!esp_ptr_dma_capable(input) && length > 0) {
+-        /* input in non internal DMA memory */
++    } else if (!esp_aes_gcm_dma_capable(input) && length > 0) {
++        /* input not in DMA-capable memory */
+         support_hw_accel = false;
+-    } else if (!esp_ptr_dma_capable(output) && length > 0) {
+-        /* output in non internal DMA memory */
++    } else if (!esp_aes_gcm_dma_capable(output) && length > 0) {
++        /* output not in DMA-capable memory */
+         support_hw_accel = false;
+     } else if (length == 0) {
+         support_hw_accel = false;

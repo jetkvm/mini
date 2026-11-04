@@ -1,0 +1,54 @@
+diff --git a/managed_components/espressif__network_provisioning/include/network_provisioning/manager.h b/managed_components/espressif__network_provisioning/include/network_provisioning/manager.h
+--- a/managed_components/espressif__network_provisioning/include/network_provisioning/manager.h
++++ b/managed_components/espressif__network_provisioning/include/network_provisioning/manager.h
+@@ -238,5 +238,12 @@ typedef struct {
+      * This config holds the Wi-Fi provisioning related configurations.
+      */
+     network_prov_wifi_conn_cfg_t network_prov_wifi_conn_cfg;
++
++    /**
++     * Storage used when applying provisioned Wi-Fi credentials. The zero
++     * value preserves the upstream default, WIFI_STORAGE_FLASH. Select
++     * WIFI_STORAGE_RAM when the application owns credential persistence.
++     */
++    wifi_storage_t wifi_storage;
+ #endif // CONFIG_NETWORK_PROV_NETWORK_TYPE_WIFI
+ } network_prov_mgr_config_t;
+diff --git a/managed_components/espressif__network_provisioning/src/manager.c b/managed_components/espressif__network_provisioning/src/manager.c
+--- a/managed_components/espressif__network_provisioning/src/manager.c
++++ b/managed_components/espressif__network_provisioning/src/manager.c
+@@ -1287,9 +1287,9 @@ esp_err_t network_prov_mgr_configure_wifi_sta(wifi_config_t *wifi_cfg)
+      * happens even before manager state is updated in the next
+      * few lines causing the internal event handler to miss */
+ 
+-    /* Set Wi-Fi storage again to flash to keep the newly
+-     * provided credentials on NVS */
+-    if (esp_wifi_set_storage(WIFI_STORAGE_FLASH) != ESP_OK) {
++    /* Restore the application-selected storage before applying the newly
++     * provided credentials. */
++    if (esp_wifi_set_storage(prov_ctx->mgr_config.wifi_storage) != ESP_OK) {
+         ESP_LOGE(TAG, "Failed to set storage Wi-Fi");
+         RELEASE_LOCK(prov_ctx_lock);
+         return ESP_FAIL;
+@@ -2299,10 +2299,10 @@ err:
+     }
+ #endif
+ exit:
+ #ifdef CONFIG_NETWORK_PROV_NETWORK_TYPE_WIFI
+     if (restore_wifi_flag & WIFI_PROV_STORAGE_BIT) {
+-        /* Restore WiFi storage back to FLASH */
+-        esp_wifi_set_storage(WIFI_STORAGE_FLASH);
++        /* Restore the application-selected Wi-Fi storage policy. */
++        esp_wifi_set_storage(prov_ctx->mgr_config.wifi_storage);
+     }
+ #endif
+     RELEASE_LOCK(prov_ctx_lock);
+@@ -2425,7 +2425,7 @@ esp_err_t network_prov_mgr_reset_wifi_sm_state_for_reprovision(void)
+ 
+ exit:
+     if (restore_wifi_flag & WIFI_PROV_STORAGE_BIT) {
+-        esp_wifi_set_storage(WIFI_STORAGE_FLASH);
++        esp_wifi_set_storage(prov_ctx->mgr_config.wifi_storage);
+     }
+     RELEASE_LOCK(prov_ctx_lock);
+     return ret;

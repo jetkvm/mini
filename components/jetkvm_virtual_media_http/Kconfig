@@ -1,0 +1,25 @@
+menu "JetKVM virtual-media HTTP"
+
+config JETKVM_VIRTUAL_MEDIA_HTTP_LOCAL_CONTROL
+    bool "Enable local REST storage control"
+    default y
+    help
+        Expose the small local REST surface used to start and verify TF image
+        uploads without first creating a WebRTC peer. These routes require the
+        same authentication as the rest of the device API. Disable this option
+        in a build that must not expose local storage mutation over HTTP.
+
+config JETKVM_VIRTUAL_MEDIA_HTTP_DIAGNOSTIC_DISCARD
+    bool "Enable HTTP receive-only discard diagnostic"
+    default n
+    depends on JETKVM_VIRTUAL_MEDIA_HTTP_LOCAL_CONTROL
+    help
+        Expose POST /storage/diagnostics/http-discard to measure the HTTP/TCP
+        receive ceiling without creating an upload or calling the TF/FatFs
+        path. Requests must also carry the explicit diagnostic confirmation
+        header and are bounded to 16..256 MiB. This endpoint requires the same
+        authentication as the rest of the device API and can occupy the
+        synchronous HTTP server while a test is running; leave it disabled in
+        production.
+
+endmenu

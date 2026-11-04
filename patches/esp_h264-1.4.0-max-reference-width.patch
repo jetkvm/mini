@@ -1,0 +1,90 @@
+diff --git a/managed_components/espressif__esp_h264/hw/src/esp_h264_enc_hw_param.c b/managed_components/espressif__esp_h264/hw/src/esp_h264_enc_hw_param.c
+index c33a835..57a5456 100644
+--- a/managed_components/espressif__esp_h264/hw/src/esp_h264_enc_hw_param.c
++++ b/managed_components/espressif__esp_h264/hw/src/esp_h264_enc_hw_param.c
+@@ -15,6 +15,16 @@ static const char *TAG = "H264_ENC.HW.SET";
+ #define ESP_H264_ROI_SUP_NUM    (8)
+ #define ESP_H264_REDUNDANT_BYTE (8 + 64)
+ #define SPS_PPS_BUF_SIZE        (160)
++#define ESP_H264_REFERENCE_MB_WIDTH \
++    ((ESP_H264_MAX_WIDTH + H264_DMA_MACRO_SIZE - 1) / H264_DMA_MACRO_SIZE)
++#define ESP_H264_REFERENCE_POOL_SIZE \
++    (H264_DMA_3_LINES * H264_DMA_MACRO_SIZE * \
++     (H264_DMA_MACRO_SIZE + H264_DMA_HALF_MACRO_SIZE) * \
++     ESP_H264_REFERENCE_MB_WIDTH + HW_DMA_BUF_ALIGN_SIZE)
++
++/* Reserve the maximum-width reference store for the single P4 encoder. */
++static uint8_t s_reference_pool[ESP_H264_REFERENCE_POOL_SIZE]
++    __attribute__((aligned(64)));
+ 
+ typedef struct esp_h264_param {
+     esp_h264_enc_param_hw_t    hw_base;
+@@ -36,6 +46,7 @@ typedef struct esp_h264_param {
+     uint32_t                   mvm_buf_len;
+     uint8_t                   *db;
+     uint8_t                   *ref;
++    bool                       ref_uses_static_pool;
+     h264_dma_desc_t           *dsc_ref;
+     h264_dma_desc_t           *dsc_db[4];
+     h264_dma_desc_t           *dsc_mvm;
+@@ -46,6 +57,8 @@ typedef struct esp_h264_param {
+     float                      bpp;
+ } esp_h264_param_t;
+ 
++static esp_h264_param_t *s_reference_pool_owner;
++
+ #if HAL_CONFIG(CHIP_SUPPORT_MIN_REV) >= 300
+ 
+ static h264_dma_pbyte_t esp_h264_get_pbyte_by_pic_type(esp_h264_raw_format_t pic_type)
+@@ -279,12 +292,6 @@ static esp_h264_err_t get_mv_data_len(esp_h264_enc_param_hw_handle_t handle, uin
+     return ESP_H264_ERR_OK;
+ }
+ 
+-static int max_refame_buffer_size(int16_t mb_width)
+-{
+-    /** H264_DMA_MACRO_SIZE + H264_DMA_HALF_MACRO_SIZE : Y(16) + U(4) + V(4) */
+-    return H264_DMA_3_LINES * H264_DMA_MACRO_SIZE * (H264_DMA_MACRO_SIZE + H264_DMA_HALF_MACRO_SIZE) * mb_width + HW_DMA_BUF_ALIGN_SIZE;
+-}
+-
+ static int max_db_buffer_size(int16_t mb_width, int16_t mb_height)
+ {
+     int buffer_size = mb_width * (mb_height - 1) * H264_DMA_DB_12_LINES_ROW_LENGTH
+@@ -315,7 +322,14 @@ esp_h264_err_t esp_h264_enc_hw_del_param(esp_h264_enc_param_hw_handle_t handle)
+         if (param->nal_buf) {
+             esp_h264_free(param->nal_buf);
+         }
+-        if (param->ref) {
++        if (param->ref_uses_static_pool) {
++            esp_h264_param_t *expected_owner = param;
++            __atomic_compare_exchange_n(
++                &s_reference_pool_owner, &expected_owner, NULL, false,
++                __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
++            param->ref = NULL;
++            param->ref_uses_static_pool = false;
++        } else if (param->ref) {
+             esp_h264_free(param->ref);
+         }
+         if (param->db) {
+@@ -378,10 +392,18 @@ esp_h264_err_t esp_h264_enc_hw_new_param(esp_h264_enc_hw_param_cfg_t *cfg, esp_h
+     param->nal_bit_len = esp_h264_enc_set_sps(param->nal_buf, param->nal_buf_len, param->height, param->width, param->fps);
+     param->nal_bit_len += esp_h264_enc_set_pps(param->nal_buf + (param->nal_bit_len >> 3), param->nal_buf_len - (param->nal_bit_len >> 3), param->qp_init, true);
+ 
+-    /** Allocated reference frame and DB memory (malloc: large buffers, no need to zero) */
+-    param->ref = (uint8_t *)esp_h264_aligned_malloc(16, 1, max_refame_buffer_size(param->mb_width), &actual_size, ESP_H264_MEM_INTERNAL);
+-    ESP_H264_GOTO_ON_FALSE(param->ref, ESP_H264_ERR_MEM, __exit__, TAG, "No memory for reference frame");
+-    param->db = (uint8_t *)esp_h264_malloc_prefer(1, max_db_buffer_size(param->mb_width, param->mb_height), &actual_size, ESP_H264_MEM_INTERNAL, ESP_H264_MEM_SPIRAM);
++    /** The single hardware encoder reuses one permanent internal-SRAM pool. */
++    esp_h264_param_t *expected_owner = NULL;
++    bool pool_claimed = __atomic_compare_exchange_n(
++        &s_reference_pool_owner, &expected_owner, param, false,
++        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
++    ESP_H264_GOTO_ON_FALSE(pool_claimed, ESP_H264_ERR_MEM, __exit__, TAG,
++                           "Reference pool is already in use");
++    param->ref = s_reference_pool;
++    param->ref_uses_static_pool = true;
++    memset(param->ref, 0, sizeof(s_reference_pool));
++    /* DB is valid in cached PSRAM and must not consume scarce internal SRAM. */
++    param->db = (uint8_t *)esp_h264_aligned_calloc(4, 1, max_db_buffer_size(param->mb_width, param->mb_height), &actual_size, ESP_H264_MEM_SPIRAM);
+     ESP_H264_GOTO_ON_FALSE(param->db, ESP_H264_ERR_MEM, __exit__, TAG, "No memory for data");
+ 
+     /** Allocated descriptor memory*/

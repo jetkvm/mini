@@ -1,0 +1,374 @@
+// Known failures of the Wi-Fi Mini. Format: runner/judge.mjs.
+[
+  // A mount that re-enumerates USB ends the OS Services session: service
+  // video, the clipboard round, the file transfer and the terminal drop out.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/268",
+    "while": { "osVideo": true },
+    "andOneOf": ["httpMountDisk", "tfMountCdrom"],
+    "measure": "framesPerSecond",
+    "tolerateSeconds": 14
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/268",
+    "while": { "osVideo": true },
+    "andOneOf": ["httpMountDisk", "tfMountCdrom"],
+    "measure": "serviceVideo",
+    "tolerateSeconds": 11
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/268",
+    "while": { "osVideo": true },
+    "andOneOf": ["httpMountDisk", "tfMountCdrom"],
+    "measure": "freezeMs",
+    "tolerateSeconds": 5
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/268",
+    "while": { "osClipboard": true },
+    "andOneOf": ["httpMountCdrom", "httpMountDisk", "tfMountCdrom", "tfMountDisk"],
+    "measure": "clipboardWrong",
+    "tolerateSeconds": 5
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/268",
+    "while": { "osFiles": true },
+    "andOneOf": ["httpMountCdrom", "httpMountDisk", "tfMountCdrom", "tfMountDisk"],
+    "measure": "filesFailed",
+    "tolerateSeconds": 2
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/268",
+    "while": { "osTerminal": true },
+    "andOneOf": ["httpMountCdrom", "httpMountDisk", "tfMountCdrom", "tfMountDisk"],
+    "measure": "terminalBytesPerSecond",
+    "tolerateSeconds": 11
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/268",
+    "while": { "osFiles": true },
+    "andOneOf": ["httpMountDisk", "tfMountCdrom", "tfMountDisk"],
+    "measure": "fileBytesPerSecond",
+    "tolerateSeconds": 9
+  },
+
+  // The same on a Windows host, where the sender takes longer to come back.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/268",
+    "host": "windows",
+    "while": { "osVideo": true },
+    "andOneOf": ["httpMountDisk", "tfMountCdrom"],
+    "measure": "framesPerSecond",
+    "tolerateSeconds": 18
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/268",
+    "host": "windows",
+    "while": { "osVideo": true },
+    "andOneOf": ["httpMountDisk", "tfMountCdrom"],
+    "measure": "serviceVideo",
+    "tolerateSeconds": 17
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/268",
+    "host": "windows",
+    "while": { "osTerminal": true },
+    "andOneOf": ["httpMountCdrom", "httpMountDisk", "tfMountCdrom", "tfMountDisk"],
+    "measure": "terminalBytesPerSecond",
+    "tolerateSeconds": 15
+  },
+
+  // While the host reads the disk from a URL beside a terminal and a file
+  // transfer, the file transfer is under its floor.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/269",
+    "while": { "osTerminal": true, "osFiles": true, "httpMountDisk": true },
+    "measure": "fileBytesPerSecond",
+    "min": 72000,
+    "tolerateSeconds": 12,
+    "recoverySeconds": 10
+  },
+
+  // Windows host: mouse moves are late or lost after a mount beside service
+  // video, a terminal and a file transfer.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/269",
+    "host": "windows",
+    "while": { "osVideo": true, "osTerminal": true, "osFiles": true },
+    "andOneOf": ["httpMountDisk", "tfMountCdrom"],
+    "measure": "mouseMovesLost",
+    "max": 14,
+    "tolerateSeconds": 5
+  },
+
+  // The disk mount from a URL beside a terminal and a file transfer ends the
+  // session, so it takes longer to settle.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/268",
+    "change": { "httpMountDisk": true },
+    "while": { "osTerminal": true, "osFiles": true },
+    "max": 10.5
+  },
+
+  // At the start of an upload one late frame arrives as a single freeze.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/240",
+    "change": { "upload": true },
+    "measure": "freezeMs",
+    "max": 2500,
+    "tolerateSeconds": 2,
+    "recoverySeconds": 2
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/240",
+    "change": { "upload": true },
+    "measure": "framesPerSecond",
+    "max": 2,
+    "tolerateSeconds": 2,
+    "recoverySeconds": 2
+  },
+  // Linux host: the Mini refuses a sender update-check connection around an
+  // upload beside service video. The count arrives up to ~30 s later.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/240",
+    "host": "linux",
+    "while": { "osVideo": true, "upload": true },
+    "measure": "senderUpdatesRefused",
+    "max": 2,
+    "tolerateSeconds": 2,
+    "recoverySeconds": 32
+  },
+
+  // Beside a terminal and a file transfer, keys are late and service video
+  // is under its rate. Keys stay late for a second after the transfer ends.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/272",
+    "while": { "osTerminal": true, "osFiles": true, "osVideo": true },
+    "measure": "framesPerSecond",
+    "min": 14.5,
+    "tolerateSeconds": 9
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/272",
+    "while": { "osTerminal": true, "osFiles": true },
+    "measure": "keysLost",
+    "tolerateSeconds": 5,
+    "recoverySeconds": 2
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/272",
+    "while": { "osTerminal": true, "osFiles": true },
+    // The 5 s percentile stays high 5 s after the late keys.
+    "measure": ["keyLatencyP95Ms", "keyLatencyMaxMs"],
+    "tolerateSeconds": 10,
+    "recoverySeconds": 2
+  },
+  // Windows host: more keys are late.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/272",
+    "host": "windows",
+    "while": { "osTerminal": true, "osFiles": true },
+    "measure": "keysLost",
+    "max": 4,
+    "tolerateSeconds": 8,
+    "recoverySeconds": 2
+  },
+  // With service video as well, mouse moves are late.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/272",
+    "while": { "osTerminal": true, "osFiles": true, "osVideo": true },
+    "measure": "mouseMovesLost",
+    "max": 10,
+    "tolerateSeconds": 2
+  },
+
+  // Wi-Fi packet loss freezes video for a moment in any state with video.
+  // Each second is matched by itself, so separate freezes look the same.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/317",
+    "while": { "video": true },
+    "measure": "freezeMs",
+    "max": 347,
+    "tolerateSeconds": 2
+  },
+  // A burst of lost packets: a longer freeze and a gap in the sound are
+  // known failures; the entries with "fails" are known faults.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/317",
+    "while": { "video": true },
+    "measure": "freezeMs",
+    "max": 1100,
+    "tolerateSeconds": 3
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/317",
+    "while": { "audio": true },
+    "measure": "audioConcealedMs",
+    "max": 375,
+    "tolerateSeconds": 2
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/317",
+    "fails": true,
+    "while": { "osVideo": true, "osTerminal": true, "osFiles": true, "tfMountCdrom": true },
+    "measure": ["keysLost", "mouseMovesLost"],
+    "tolerateSeconds": 11
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/317",
+    "fails": true,
+    "while": { "osVideo": true, "osTerminal": true, "osFiles": true, "tfMountCdrom": true },
+    "measure": "clipboardMs",
+    "max": 6100,
+    "tolerateSeconds": 7
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/317",
+    "fails": true,
+    "while": { "osTerminal": true, "osFiles": true, "osVideo": false },
+    "measure": "framesPerSecond",
+    "min": 10,
+    "tolerateSeconds": 5
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/317",
+    "fails": true,
+    "while": { "osTerminal": true, "osFiles": true, "osVideo": false },
+    "measure": "mouseMovesLost",
+    "max": 23,
+    "tolerateSeconds": 5
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/317",
+    "fails": true,
+    "while": { "osTerminal": true, "osFiles": true, "osVideo": false },
+    "measure": "fileBytesPerSecond",
+    "max": 88000,
+    "tolerateSeconds": 7
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/317",
+    "fails": true,
+    "while": { "osTerminal": true, "osFiles": true, "osVideo": false },
+    "measure": "clipboardMs",
+    "max": 4650,
+    "tolerateSeconds": 11
+  },
+
+  // At 1080p30 the encoder takes longer than a frame beside a terminal or a
+  // file transfer.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/287",
+    "andOneOf": ["osTerminal", "osFiles"],
+    "measure": "encodeMs",
+    "max": 33.9,
+    "tolerateSeconds": 69,
+    "recoverySeconds": 3
+  },
+
+  // One long HDMI encoder call in the sample where a switch to service video
+  // (or, on Windows, a sound switch) starts. Values up to 33.9 ms belong to
+  // the encoder entry above.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/296",
+    "change": { "osVideo": true },
+    "while": { "osTerminal": true, "osFiles": true },
+    "measure": "encodeMs",
+    "min": 33.9,
+    "max": 100,
+    "tolerateSeconds": 2
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/296",
+    "host": "windows",
+    "change": { "audio": true },
+    "while": { "osTerminal": true, "osFiles": true },
+    "measure": "encodeMs",
+    "min": 33.9,
+    "max": 35.6,
+    "tolerateSeconds": 2
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/296",
+    "host": "windows",
+    "change": { "audio": false },
+    "while": { "osTerminal": true, "osFiles": true },
+    "measure": "encodeMs",
+    "min": 33.9,
+    "max": 35.6,
+    "tolerateSeconds": 2
+  },
+
+  // Windows host: clipboard rounds are slow at the end of a switch to
+  // service video beside a terminal and a file transfer.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/306",
+    "host": "windows",
+    "change": { "osVideo": true },
+    "while": { "osTerminal": true, "osFiles": true },
+    "measure": "clipboardMs",
+    "max": 700,
+    "tolerateSeconds": 6
+  },
+
+  // Windows host: mouse moves are late or lost during a switch to service video.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/320",
+    "host": "windows",
+    "change": { "osVideo": true },
+    "while": { "hid": true },
+    "measure": "mouseMovesLost",
+    "max": 24,
+    "tolerateSeconds": 3
+  },
+
+  // Windows host: keys and mouse moves are late when service video ends.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/465",
+    "host": "windows",
+    "change": { "osVideo": false },
+    "while": { "hid": true },
+    "measure": "keysLost",
+    "max": 5,
+    "tolerateSeconds": 2
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/465",
+    "host": "windows",
+    "change": { "osVideo": false },
+    "while": { "hid": true },
+    "measure": "mouseMovesLost",
+    "max": 10,
+    "tolerateSeconds": 3
+  },
+
+  // A lost video packet makes the browser drop frames.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/317",
+    "while": { "osTerminal": true, "osFiles": true },
+    "measure": "browserFramesDropped",
+    "max": 4,
+    "tolerateSeconds": 2
+  },
+  // Lost video packets delay a key echo beside service video and the noise picture.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/317",
+    "while": { "osVideo": true, "noisePicture": true },
+    // The 5 s percentile stays high 5 s after the late keys.
+    "measure": ["keyLatencyP95Ms", "keyLatencyMaxMs"],
+    "max": 1000,
+    "tolerateSeconds": 7
+  },
+
+  // An update download beside a host reading an HTTPS mount slows the light
+  // terminal's round trips.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/386",
+    "change": { "ota": true },
+    "while": { "httpsMountDisk": true, "osTerminalLight": true },
+    "measure": ["terminalLineP95Ms", "terminalLineMaxMs"],
+    "max": 1370,
+    // The 5 s percentile stays high 5 s after the late lines.
+    "tolerateSeconds": 115
+  }
+]

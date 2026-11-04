@@ -1,0 +1,106 @@
+diff --git a/managed_components/espressif__esp_libsrtp/libsrtp/crypto/hash/hmac_esp_sha1.c b/managed_components/espressif__esp_libsrtp/libsrtp/crypto/hash/hmac_esp_sha1.c
+--- a/managed_components/espressif__esp_libsrtp/libsrtp/crypto/hash/hmac_esp_sha1.c
++++ b/managed_components/espressif__esp_libsrtp/libsrtp/crypto/hash/hmac_esp_sha1.c
+@@ -31,6 +31,14 @@
+ #include "sdkconfig.h"
+ #include "soc/soc_caps.h"
+ 
++#ifndef JETKVM_SRTP_HMAC_FUSED_FINISH
++#define JETKVM_SRTP_HMAC_FUSED_FINISH 0
++#endif
++
++#if JETKVM_SRTP_HMAC_FUSED_FINISH
++#include "sha/sha_core.h"
++#endif
++
+ #define SHA1_BLOCK_SIZE 64
+ #define SHA1_DIGEST_SIZE 20
+ 
+@@ -195,6 +203,61 @@
+     return srtp_err_status_ok;
+ }
+ 
++#if JETKVM_SRTP_HMAC_FUSED_FINISH
++/* Keep hardware ownership inside one callback.  The body and final suffix
++ * still use esp_sha1_update(), including its DMA/error handling; only the
++ * two short final hashes share one hardware acquisition.  Reuse the existing
++ * work buffer, and leave work equivalent to a completed outer SHA context. */
++static void srtp_hmac_esp_sha1_finish_pair(srtp_hmac_esp_sha1_ctx_t *state)
++{
++    esp_sha1_context *work = &state->work;
++    uint32_t high = (work->total[0] >> 29) | (work->total[1] << 3);
++    uint32_t low = work->total[0] << 3;
++    size_t used = work->total[0] & (SHA1_BLOCK_SIZE - 1);
++    bool first = work->sha_state == ESP_SHA1_STATE_INIT;
++
++    work->buffer[used++] = 0x80;
++    memset(work->buffer + used, 0, SHA1_BLOCK_SIZE - used);
++
++    esp_sha_acquire_hardware();
++    esp_sha_set_mode(SHA1);
++    if (!first) {
++        esp_sha_write_digest_state(SHA1, work->state);
++    }
++    if (used > SHA1_BLOCK_SIZE - 8) {
++        esp_sha_block(SHA1, work->buffer, first);
++        /* Preserve the SDK's completion wait and all-zero fault check for
++         * this first padding block, before replacing the engine's input. */
++        esp_sha_read_digest_state(SHA1, work->state);
++        first = false;
++        memset(work->buffer, 0, SHA1_BLOCK_SIZE);
++    }
++    PUT_UINT32_BE(high, work->buffer, SHA1_BLOCK_SIZE - 8);
++    PUT_UINT32_BE(low, work->buffer, SHA1_BLOCK_SIZE - 4);
++    esp_sha_block(SHA1, work->buffer, first);
++    /* Retains the driver's completion wait and all-zero fault check. */
++    esp_sha_read_digest_state(SHA1, state->digest);
++
++    esp_sha_write_digest_state(SHA1, state->outer_seed.state);
++    memcpy(work->buffer, state->digest, SHA1_DIGEST_SIZE);
++    work->buffer[SHA1_DIGEST_SIZE] = 0x80;
++    memset(work->buffer + SHA1_DIGEST_SIZE + 1, 0,
++           SHA1_BLOCK_SIZE - SHA1_DIGEST_SIZE - 1);
++    /* outer_seed already hashed the 64-byte opad, then the 20-byte digest. */
++    PUT_UINT32_BE((SHA1_BLOCK_SIZE + SHA1_DIGEST_SIZE) * 8,
++                  work->buffer, SHA1_BLOCK_SIZE - 4);
++    esp_sha_block(SHA1, work->buffer, false);
++    esp_sha_read_digest_state(SHA1, work->state);
++    esp_sha_release_hardware();
++
++    memcpy(state->digest, work->state, SHA1_DIGEST_SIZE);
++    work->total[0] = SHA1_BLOCK_SIZE * 2;
++    work->total[1] = 0;
++    work->first_block = false;
++    work->sha_state = ESP_SHA1_STATE_IN_PROCESS;
++}
++#endif
++
+ static srtp_err_status_t srtp_hmac_esp_sha1_compute(void *statev,
+                                                     const uint8_t *message,
+                                                     size_t msg_octets,
+@@ -211,17 +274,23 @@
+         return srtp_err_status_bad_param;
+     }
+ 
+-    if (esp_sha1_update(&state->work, message, msg_octets) != 0 ||
+-        esp_sha1_finish(&state->work, state->digest) != 0) {
++    if (esp_sha1_update(&state->work, message, msg_octets) != 0) {
+         goto out;
+     }
+ 
++#if JETKVM_SRTP_HMAC_FUSED_FINISH
++    srtp_hmac_esp_sha1_finish_pair(state);
++#else
++    if (esp_sha1_finish(&state->work, state->digest) != 0) {
++        goto out;
++    }
+     memcpy(&state->work, &state->outer_seed, sizeof(state->work));
+     if (esp_sha1_update(&state->work, state->digest,
+                         sizeof(state->digest)) != 0 ||
+         esp_sha1_finish(&state->work, state->digest) != 0) {
+         goto out;
+     }
++#endif
+ 
+     if (tag_len != 0) {
+         memcpy(result, state->digest, tag_len);

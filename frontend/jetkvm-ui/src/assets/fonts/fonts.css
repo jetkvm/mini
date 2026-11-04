@@ -1,0 +1,8 @@
+/* Inter 4 variable font: weight 100-900 and optical size 14-32. With
+   font-optical-sizing auto, headings get the Display design. */
+@font-face {
+  font-family: "Inter";
+  src: url("InterVariable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+}

@@ -1,0 +1,181 @@
+diff --git a/components/fatfs/CMakeLists.txt b/components/fatfs/CMakeLists.txt
+index f561f441..ed9ab984 100644
+--- a/components/fatfs/CMakeLists.txt
++++ b/components/fatfs/CMakeLists.txt
+@@ -20,7 +20,7 @@ else()
+ 
+     list(APPEND include_dirs "vfs")
+ 
+-    list(APPEND requires "sdmmc" "esp_driver_sdmmc" "esp_driver_sdspi")
++    list(APPEND requires "sdmmc" "esp_driver_sdmmc" "esp_driver_sdspi" "esp_timer")
+ 
+     list(APPEND priv_requires "vfs" "esp_driver_gpio" "esptool_py")
+ endif()
+diff --git a/components/fatfs/diskio/diskio_sdmmc.c b/components/fatfs/diskio/diskio_sdmmc.c
+index 71dc0e11..944f8fbf 100644
+--- a/components/fatfs/diskio/diskio_sdmmc.c
++++ b/components/fatfs/diskio/diskio_sdmmc.c
+@@ -5,12 +5,16 @@
+  */
+ 
++#include <inttypes.h>
++
+ #include "diskio_impl.h"
+ #include "private_include/diskio_sdmmc_private.h"
+ #include "ffconf.h"
+ #include "ff.h"
+ #include "sdmmc_cmd.h"
++#include "sd_protocol_defs.h"
+ #include "esp_log.h"
+ #include "esp_compiler.h"
++#include "esp_timer.h"
+ 
+ static sdmmc_card_t* s_cards[FF_VOLUMES] = { NULL };
+ static bool s_disk_status_check_en[FF_VOLUMES] = { };
+@@ -91,6 +95,75 @@ static DRESULT ff_sdmmc_trim (BYTE pdrv, DWORD start_sector, DWORD sector_count)
+ }
+ #endif //FF_USE_TRIM
+ 
++#if JETKVM_FATFS_SEQ_PREERASE
++static DRESULT ff_sdmmc_seq_preerase(BYTE pdrv,
++                                     const jetkvm_disk_range_t* request)
++{
++    sdmmc_card_t* card = s_cards[pdrv];
++    assert(card);
++
++    const uint64_t request_lba = request->start_lba;
++    const uint64_t request_count = request->sector_count;
++    const uint64_t capacity = (uint64_t)card->csd.capacity;
++    uint64_t erase_lba = request_lba;
++    uint64_t erase_count = 0;
++    esp_err_t result = ESP_ERR_NOT_SUPPORTED;
++    int64_t started_us = esp_timer_get_time();
++
++    /* This experiment deliberately excludes SDSPI, MMC, SDSC and cards that
++     * do not advertise the SD erase command class.  Requiring decoded SSR
++     * geometry also lets us align inward, so an erase unit containing a live
++     * cluster adjacent to the free extent is never selected. */
++    bool safe_native_sd = card->is_mem && !card->is_mmc &&
++            !(card->host.flags & SDMMC_HOST_FLAG_SPI) &&
++            (card->ocr & SD_OCR_SDHC_CAP) &&
++            card->csd.csd_ver == SD_CSD_CSDVER_2_0 &&
++            (card->csd.card_command_class & SD_CSD_CCC_ERASE) &&
++            card->csd.sector_size == 512 &&
++            card->ssr.alloc_unit_kb != 0 && card->ssr.erase_size_au != 0;
++    bool request_in_range = request_count != 0 && request_lba < capacity &&
++            request_count <= capacity - request_lba;
++
++    if (safe_native_sd && request_in_range) {
++        uint64_t erase_unit_sectors =
++                ((uint64_t)card->ssr.alloc_unit_kb * 1024U /
++                 (uint64_t)card->csd.sector_size) *
++                (uint64_t)card->ssr.erase_size_au;
++        uint64_t request_end = request_lba + request_count;
++        if (erase_unit_sectors != 0 &&
++                request_lba <= UINT64_MAX - (erase_unit_sectors - 1U)) {
++            erase_lba = ((request_lba + erase_unit_sectors - 1U) /
++                         erase_unit_sectors) * erase_unit_sectors;
++            uint64_t erase_end =
++                    (request_end / erase_unit_sectors) * erase_unit_sectors;
++            if (erase_end > erase_lba) {
++                erase_count = erase_end - erase_lba;
++                result = sdmmc_erase_sectors(card, (size_t)erase_lba,
++                                             (size_t)erase_count,
++                                             SDMMC_ERASE_ARG);
++            } else {
++                result = ESP_ERR_INVALID_SIZE;
++            }
++        } else {
++            result = ESP_ERR_INVALID_SIZE;
++        }
++    }
++
++    int64_t elapsed_us = esp_timer_get_time() - started_us;
++    ESP_LOGI(TAG,
++             "seq-preerase request_lba=%" PRIu64 " request_count=%" PRIu64
++             " lba=%" PRIu64 " count=%" PRIu64 " us=%" PRIi64
++             " result=0x%x",
++             request_lba, request_count, erase_lba, erase_count, elapsed_us,
++             (unsigned)result);
++    if (result == ESP_OK) {
++        return RES_OK;
++    }
++    return result == ESP_ERR_NOT_SUPPORTED || result == ESP_ERR_INVALID_SIZE ?
++            RES_PARERR : RES_ERROR;
++}
++#endif
++
+ static DRESULT ff_sdmmc_ioctl (BYTE pdrv, BYTE cmd, void* buff)
+ {
+     sdmmc_card_t* card = s_cards[pdrv];
+@@ -114,6 +187,10 @@ static DRESULT ff_sdmmc_ioctl (BYTE pdrv, BYTE cmd, void* buff)
+             return ff_sdmmc_trim (pdrv, *((DWORD*)buff), //start_sector
+                     (*((DWORD*)buff + 1) - *((DWORD*)buff) + 1)); //sector_count
+ #endif //FF_USE_TRIM
++#if JETKVM_FATFS_SEQ_PREERASE
++        case CTRL_JETKVM_SD_SEQ_PREERASE:
++            return ff_sdmmc_seq_preerase(pdrv, (const jetkvm_disk_range_t*)buff);
++#endif
+     }
+     return RES_ERROR;
+ }
+diff --git a/components/fatfs/src/diskio.h b/components/fatfs/src/diskio.h
+index 4396b57d..76ea0506 100644
+--- a/components/fatfs/src/diskio.h
++++ b/components/fatfs/src/diskio.h
+@@ -51,6 +51,16 @@ DRESULT disk_ioctl (BYTE pdrv, BYTE cmd, void* buff);
+ #define GET_BLOCK_SIZE		3	/* Get erase block size (needed at FF_USE_MKFS == 1) */
+ #define CTRL_TRIM			4	/* Inform device that the data on the block of sectors is no longer used (needed at FF_USE_TRIM == 1) */
+ 
++#if JETKVM_FATFS_SEQ_PREERASE
++/* Project-private command: physically erase only an extent that FatFs has
++ * just proven free. It must never be treated as the generic CTRL_TRIM. */
++#define CTRL_JETKVM_SD_SEQ_PREERASE  0x80
++typedef struct {
++	LBA_t start_lba;
++	LBA_t sector_count;
++} jetkvm_disk_range_t;
++#endif
++
+ /* Generic command (Not used by FatFs) */
+ #define CTRL_POWER			5	/* Get/Set power status */
+ #define CTRL_LOCK			6	/* Lock/Unlock media removal */
+diff --git a/components/fatfs/src/ff.c b/components/fatfs/src/ff.c
+index dbb64fb0..92396e8c 100644
+--- a/components/fatfs/src/ff.c
++++ b/components/fatfs/src/ff.c
+@@ -5688,6 +5688,10 @@ FRESULT f_getlabel (
+ 
+ 
+ #if FF_USE_EXPAND && !FF_FS_READONLY
++#ifndef JETKVM_FATFS_SEQ_PREERASE
++#define JETKVM_FATFS_SEQ_PREERASE 0
++#endif
++
+ /*-----------------------------------------------------------------------*/
+ /* Allocate a Contiguous Blocks to the File                              */
+ /*-----------------------------------------------------------------------*/
+@@ -5718,6 +5722,23 @@ FRESULT f_expand (
+ 		if (scl == 0) res = FR_DENIED;				/* No contiguous cluster block was found */
+ 		if (scl == 0xFFFFFFFF) res = FR_DISK_ERR;
+ 		if (res == FR_OK) {	/* A contiguous free area is found */
++#if JETKVM_FATFS_SEQ_PREERASE
++			/* Mode 0 is the upload path's non-allocating look-ahead. The file
++			 * must still be empty, and the selected range is wholly free while
++			 * the FatFs volume lock is held. The disk layer may reject or fail
++			 * this optional hint; allocation and resume semantics stay stock. */
++			if (!opt && fp->obj.objsize == 0 && fs->fs_type == FS_EXFAT &&
++				fs->csize != 0 && tcl <= (LBA_t)-1 / fs->csize) {
++				LBA_t start_lba = clst2sect(fs, scl);
++				jetkvm_disk_range_t range = {
++					.start_lba = start_lba,
++					.sector_count = (LBA_t)tcl * fs->csize,
++				};
++				if (start_lba != 0) {
++					(void)disk_ioctl(fs->pdrv, CTRL_JETKVM_SD_SEQ_PREERASE, &range);
++				}
++			}
++#endif
+ 			if (opt) {		/* Allocate it now */
+ 				res = change_bitmap(fs, scl, tcl, 1);	/* Mark the cluster block 'in use' */
+ 				lclst = scl + tcl - 1;

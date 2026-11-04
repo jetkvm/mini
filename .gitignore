@@ -1,0 +1,14 @@
+/build*/
+/frontend/jetkvm-ui/dist-p4/
+/artifacts/
+managed_components/
+.claude/
+sdkconfig
+sdkconfig.old
+__pycache__/
+*.pyc
+*.o
+.e2e-out/
+/frontend/e2e/remote-agent/remote-agent
+/tools/benches/*.env
+!/tools/benches/example.env

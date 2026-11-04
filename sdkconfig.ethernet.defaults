@@ -1,0 +1,16 @@
+# No coprocessor: esp_wifi_remote enables itself whenever the dependency is
+# present, and ESP-Hosted would claim SDMMC slot 1.
+CONFIG_ESP_WIFI_REMOTE_ENABLED=n
+CONFIG_ESP_HOSTED_ENABLED=n
+
+# Send under the lwIP core mutex instead of a mailbox round trip per packet.
+CONFIG_LWIP_TCPIP_CORE_LOCKING=y
+# CONFIG_LWIP_TCPIP_CORE_LOCKING_INPUT is not set
+CONFIG_LWIP_CHECK_THREAD_SAFETY=y
+
+CONFIG_WEBRTC_TRANSPORT_TASK_STACK=16384
+
+# The Ethernet board carries SW2/SW3 beside the panel; they drive the local UI
+# and the 16 px Montserrat face supplies its icons.
+CONFIG_JETKVM_SCREEN_BUTTONS=y
+CONFIG_LV_FONT_MONTSERRAT_16=y

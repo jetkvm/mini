@@ -1,0 +1,28 @@
+diff --git a/managed_components/espressif__esp_h264/hw/src/esp_h264_enc_single_hw.c b/managed_components/espressif__esp_h264/hw/src/esp_h264_enc_single_hw.c
+--- a/managed_components/espressif__esp_h264/hw/src/esp_h264_enc_single_hw.c
++++ b/managed_components/espressif__esp_h264/hw/src/esp_h264_enc_single_hw.c
+@@ -417,7 +417,9 @@
+ 
+     /** Create encoder handle */
+     uint32_t actual_size;
+-    esp_h264_hw_handle_t *hw_hd = (esp_h264_hw_handle_t *)esp_h264_calloc_prefer(1, sizeof(esp_h264_hw_handle_t), &actual_size, ESP_H264_MEM_SPIRAM, ESP_H264_MEM_INTERNAL);
++    /* This small control block is read on every start and H.264 interrupt.
++     * Prefer SRAM so concurrent network traffic cannot evict its PSRAM lines. */
++    esp_h264_hw_handle_t *hw_hd = (esp_h264_hw_handle_t *)esp_h264_calloc_prefer(1, sizeof(esp_h264_hw_handle_t), &actual_size, ESP_H264_MEM_INTERNAL, ESP_H264_MEM_SPIRAM);
+     ESP_H264_RET_ON_FALSE(hw_hd != NULL, ESP_H264_ERR_MEM, TAG, "No memory for handle");
+ 
+     /** H.264 HAL initalization*/
+diff --git a/managed_components/espressif__esp_h264/hw/src/esp_h264_enc_hw_param.c b/managed_components/espressif__esp_h264/hw/src/esp_h264_enc_hw_param.c
+--- a/managed_components/espressif__esp_h264/hw/src/esp_h264_enc_hw_param.c
++++ b/managed_components/espressif__esp_h264/hw/src/esp_h264_enc_hw_param.c
+@@ -364,7 +364,9 @@
+     esp_h264_err_t ret = ESP_H264_ERR_OK;
+     uint32_t actual_size;
+     /** Create a new parameter handle */
+-    esp_h264_param_t *param = (esp_h264_param_t *)esp_h264_calloc_prefer(1, sizeof(esp_h264_param_t), &actual_size, ESP_H264_MEM_SPIRAM, ESP_H264_MEM_INTERNAL);
++    /* Keep the small per-frame parameter state beside the SRAM RC state.
++     * Image/reconstruction buffers retain their existing memory policy. */
++    esp_h264_param_t *param = (esp_h264_param_t *)esp_h264_calloc_prefer(1, sizeof(esp_h264_param_t), &actual_size, ESP_H264_MEM_INTERNAL, ESP_H264_MEM_SPIRAM);
+     ESP_H264_RET_ON_FALSE(param, ESP_H264_ERR_ARG, TAG, "No memory for handle");
+ 
+     /* Parameter initalization */

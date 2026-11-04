@@ -1,0 +1,90 @@
+diff --git a/managed_components/espressif__esp_hosted/host/drivers/transport/sdio/sdio_drv.c b/managed_components/espressif__esp_hosted/host/drivers/transport/sdio/sdio_drv.c
+--- a/managed_components/espressif__esp_hosted/host/drivers/transport/sdio/sdio_drv.c
++++ b/managed_components/espressif__esp_hosted/host/drivers/transport/sdio/sdio_drv.c
+@@ -130,11 +130,49 @@
+ #if defined(USE_DRIVER_LOCK)
+ static void * sdio_bus_lock;
+ 
+-#define SDIO_DRV_LOCK()   g_h.funcs->_h_lock_mutex(sdio_bus_lock, HOSTED_BLOCK_MAX);
+-#define SDIO_DRV_UNLOCK() g_h.funcs->_h_unlock_mutex(sdio_bus_lock);
++/* The read and the write task take the bus lock for each packet. A mutex
++ * does not pass to a task that waits for it: the task that releases it can
++ * take it again before the waiter runs. While the slave keeps raising receive
++ * interrupts the read task does that for tens of ms, and the write task, with
++ * the TCP ACKs and the video in its queue, waits. So a task that finds the
++ * other one waiting for the bus lets it take the bus first. */
++#include "freertos/FreeRTOS.h"
++#include "freertos/semphr.h"
++enum { SDIO_SIDE_RX, SDIO_SIDE_TX, SDIO_SIDES };
++static uint32_t sdio_bus_waiting[SDIO_SIDES];
++static uint32_t sdio_bus_wants_turn[SDIO_SIDES];
++static SemaphoreHandle_t sdio_bus_turn[SDIO_SIDES];
++/* Bounds a turn that does not come; the other task takes the bus within
++ * microseconds. */
++#define SDIO_BUS_TURN_WAIT_TICKS 2
++
++static void sdio_bus_take(int side)
++{
++	const int other = !side;
++
++	if (__atomic_load_n(&sdio_bus_waiting[other], __ATOMIC_SEQ_CST)) {
++		/* A turn given after this task last stopped wanting one */
++		xSemaphoreTake(sdio_bus_turn[side], 0);
++		__atomic_store_n(&sdio_bus_wants_turn[side], 1, __ATOMIC_SEQ_CST);
++		if (__atomic_load_n(&sdio_bus_waiting[other], __ATOMIC_SEQ_CST))
++			xSemaphoreTake(sdio_bus_turn[side], SDIO_BUS_TURN_WAIT_TICKS);
++		__atomic_store_n(&sdio_bus_wants_turn[side], 0, __ATOMIC_SEQ_CST);
++	}
++	__atomic_add_fetch(&sdio_bus_waiting[side], 1, __ATOMIC_SEQ_CST);
++	g_h.funcs->_h_lock_mutex(sdio_bus_lock, HOSTED_BLOCK_MAX);
++	__atomic_sub_fetch(&sdio_bus_waiting[side], 1, __ATOMIC_SEQ_CST);
++	if (__atomic_exchange_n(&sdio_bus_wants_turn[other], 0, __ATOMIC_SEQ_CST))
++		xSemaphoreGive(sdio_bus_turn[other]);
++}
++
++/* Only the write task takes the bus with SDIO_DRV_LOCK_TX(). */
++#define SDIO_DRV_LOCK()    sdio_bus_take(SDIO_SIDE_RX);
++#define SDIO_DRV_LOCK_TX() sdio_bus_take(SDIO_SIDE_TX);
++#define SDIO_DRV_UNLOCK()  g_h.funcs->_h_unlock_mutex(sdio_bus_lock);
+ 
+ #else
+ #define SDIO_DRV_LOCK()
++#define SDIO_DRV_LOCK_TX()
+ #define SDIO_DRV_UNLOCK()
+ #endif
+ 
+@@ -320,6 +358,14 @@
+ 		g_h.funcs->_h_destroy_mutex(sdio_bus_lock);
+ 		sdio_bus_lock = NULL;
+ 	}
++	for (int side = 0; side < SDIO_SIDES; side++) {
++		if (sdio_bus_turn[side]) {
++			vSemaphoreDelete(sdio_bus_turn[side]);
++			sdio_bus_turn[side] = NULL;
++		}
++		sdio_bus_waiting[side] = 0;
++		sdio_bus_wants_turn[side] = 0;
++	}
+ #endif
+ 
+ 	// free memory allocated in double buffering structs
+@@ -696,7 +742,7 @@
+ 		buf_needed = (len + sizeof(struct esp_payload_header) + ESP_RX_BUFFER_SIZE - 1)
+ 			/ ESP_RX_BUFFER_SIZE;
+ 
+-		SDIO_DRV_LOCK();
++		SDIO_DRV_LOCK_TX();
+ 
+ 		ret = sdio_is_write_buffer_available(buf_needed);
+ 		if (ret != BUFFER_AVAILABLE) {
+@@ -1424,6 +1470,10 @@
+ #if defined(USE_DRIVER_LOCK)
+ 	sdio_bus_lock = g_h.funcs->_h_create_mutex();
+ 	assert(sdio_bus_lock);
++	for (int side = 0; side < SDIO_SIDES; side++) {
++		sdio_bus_turn[side] = xSemaphoreCreateBinary();
++		assert(sdio_bus_turn[side]);
++	}
+ #endif
+ 
+ 	sem_to_slave_queue = g_h.funcs->_h_create_semaphore(tx_queue_size * MAX_PRIORITY_QUEUES);

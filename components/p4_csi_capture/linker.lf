@@ -1,0 +1,10 @@
+# csi_dma_trans_done_callback() re-arms each completed descriptor in the DMA
+# interrupt. With CAM_CTLR_MIPI_CSI_ISR_CACHE_SAFE that interrupt also runs
+# while the flash driver has the cache disabled, so the descriptor setter it
+# calls must be in IRAM. ESP-IDF's own mapping covers dw_gdma_lli_set_block_markers
+# and dw_gdma_link_list_get_item, but not dw_gdma_lli_config_transfer.
+[mapping:p4_csi_capture_dw_gdma]
+archive: libesp_driver_dma.a
+entries:
+    if CAM_CTLR_MIPI_CSI_ISR_CACHE_SAFE = y:
+        dw_gdma: dw_gdma_lli_config_transfer (noflash)

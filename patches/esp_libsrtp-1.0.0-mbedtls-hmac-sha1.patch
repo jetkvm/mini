@@ -1,0 +1,36 @@
+diff --git a/managed_components/espressif__esp_libsrtp/CMakeLists.txt b/managed_components/espressif__esp_libsrtp/CMakeLists.txt
+--- a/managed_components/espressif__esp_libsrtp/CMakeLists.txt
++++ b/managed_components/espressif__esp_libsrtp/CMakeLists.txt
+@@ -20,7 +20,6 @@ set(HASHES_SOURCES_C
+ )
+ 
+ list(APPEND HASHES_SOURCES_C
+-  libsrtp/crypto/hash/hmac.c
+-  libsrtp/crypto/hash/sha1.c
++  libsrtp/crypto/hash/hmac_mbedtls.c
+   libsrtp/crypto/hash/auth_test_cases.c
+ )
+diff --git a/managed_components/espressif__esp_libsrtp/libsrtp/crypto/hash/hmac_mbedtls.c b/managed_components/espressif__esp_libsrtp/libsrtp/crypto/hash/hmac_mbedtls.c
+--- a/managed_components/espressif__esp_libsrtp/libsrtp/crypto/hash/hmac_mbedtls.c
++++ b/managed_components/espressif__esp_libsrtp/libsrtp/crypto/hash/hmac_mbedtls.c
+@@ -49,6 +49,7 @@
+ #include "alloc.h"
+ #include "err.h" /* for srtp_debug */
+ #include "auth_test_cases.h"
++#define MBEDTLS_DECLARE_PRIVATE_IDENTIFIERS
+ #include <mbedtls/md.h>
+ 
+ #define SHA1_DIGEST_SIZE 20
+@@ -135,6 +135,10 @@ static srtp_err_status_t srtp_hmac_mbedtls_init(void *statev,
+         return srtp_err_status_auth_fail;
+     }
+ 
+-    if (mbedtls_md_setup(state, info, 1) != 0) {
++    /* Mbed TLS 4 split HMAC allocation out of mbedtls_md_setup().  Using the
++     * generic MD/PSA engine lets ESP-IDF route SHA-1 to the P4 hardware
++     * accelerator while preserving libsrtp's per-session HMAC key state. */
++    if (mbedtls_md_setup(state, info, 0) != 0 ||
++        mbedtls_md_hmac_setup(state, info) != 0) {
+         return srtp_err_status_auth_fail;
+     }
+ 

@@ -1,0 +1,49 @@
+--- a/components/esp_http_server/include/esp_http_server.h
++++ b/components/esp_http_server/include/esp_http_server.h
+@@ -374,7 +374,7 @@
+     httpd_handle_t  handle;                     /*!< Handle to server instance */
+     int             method;                     /*!< The type of HTTP request, -1 if unsupported method, HTTP_ANY for wildcard method to support every method */
+     const char      uri[CONFIG_HTTPD_MAX_URI_LEN + 1]; /*!< The URI of this request (1 byte extra for null termination) */
+-    size_t          content_len;                /*!< Length of the request body */
++    uint64_t        content_len;                /*!< Length of the request body */
+     void           *aux;                        /*!< Internally used members */
+ 
+     /**
+--- a/components/esp_http_server/src/esp_httpd_priv.h
++++ b/components/esp_http_server/src/esp_httpd_priv.h
+@@ -102,7 +102,7 @@
+     size_t          scratch_cur_size;               /*!< Scratch buffer cur size (By default this value is set to CONFIG_HTTPD_MAX_URI_LEN, overwrite is possible) */
+     size_t          max_req_hdr_len;             /*!< Header buffer size limit */
+     size_t          max_uri_len;             /*!< URI buffer size limit */
+-    size_t          remaining_len;                  /*!< Amount of data remaining to be fetched */
++    uint64_t        remaining_len;                  /*!< Amount of data remaining to be fetched */
+     char           *status;                         /*!< HTTP response's status code */
+     char           *content_type;                   /*!< HTTP response's content type */
+     bool            first_chunk_sent;               /*!< Used to indicate if first chunk sent */
+--- a/components/esp_http_server/src/httpd_parse.c
++++ b/components/esp_http_server/src/httpd_parse.c
+@@ -368,11 +368,11 @@
+     }
+ 
+     /* In absence of body/chunked encoding, http_parser sets content_len to -1 */
+-    r->content_len = ((int)parser->content_length != -1 ?
++    r->content_len = (parser->content_length != UINT64_MAX ?
+                       parser->content_length : 0);
+ 
+     ESP_LOGD(TAG, LOG_FMT("bytes read     = %" PRId32 ""),  parser->nread);
+-    ESP_LOGD(TAG, LOG_FMT("content length = %"NEWLIB_NANO_COMPAT_FORMAT), NEWLIB_NANO_COMPAT_CAST(r->content_len));
++    ESP_LOGD(TAG, LOG_FMT("content length = %" PRIu64), r->content_len);
+ 
+     /* Handle upgrade requests - only WebSocket is supported for now */
+     if (parser->upgrade) {
+--- a/components/esp_http_server/src/httpd_txrx.c
++++ b/components/esp_http_server/src/httpd_txrx.c
+@@ -628,7 +628,7 @@
+     }
+ 
+     struct httpd_req_aux *ra = r->aux;
+-    ESP_LOGD(TAG, LOG_FMT("remaining length = %"NEWLIB_NANO_COMPAT_FORMAT), NEWLIB_NANO_COMPAT_CAST(ra->remaining_len));
++    ESP_LOGD(TAG, LOG_FMT("remaining length = %" PRIu64), ra->remaining_len);
+ 
+     if (buf_len > ra->remaining_len) {
+         buf_len = ra->remaining_len;

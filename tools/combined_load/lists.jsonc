@@ -1,0 +1,118 @@
+// The lists: each is one run from the clean state, every variable off. A
+// list names only combinations a user can be in: an upload runs beside video
+// only (the user is in the upload dialog), though the host may change its
+// display mode meanwhile; an update has video off, so no keys, clipboard or
+// upload beside it.
+{
+  // One walk in which every two things a user can have at once are on
+  // together at least once. The driver goes straight from one loaded state
+  // to the next, starting each change once the state before has settled.
+  //
+  // Notable steps:
+  // - Update checks beside a host reading an HTTPS disk with the cloud on, so
+  //   their TLS connections overlap; then 40 s of repeated checks between two
+  //   video-only steps, which memoryLostBytes compares.
+  // - A takeover with nothing else on the session, since it ends what the
+  //   first tab carries.
+  // - Tailscale with HID, an HTTPS disk and update checks, so TLS and the
+  //   tunnel need memory together.
+  // - Small file drops and clipboard rounds while service video ends and
+  //   restarts: a drop during the HDMI capture rebuild must be taken.
+  // - The first update leaves a CD-ROM drive, so the later CD-ROM mount from
+  //   a URL keeps the OS Services session. The cloud comes on after it via
+  //   adoption, which reloads the page.
+  // - Mounts from a URL and from the TF card beside each video source, each
+  //   source once as CD-ROM and once as disk; sound is off first because a
+  //   mount takes the Mini's audio output away.
+  // - The last update runs beside an HTTPS disk the host reads; the tool's
+  //   server drops the image's connection once mid-download, and reads and
+  //   the light terminal must go on.
+  //
+  // States with less than the next one are judged on their own: video alone,
+  // service video alone, the video-only steps around the update checks, the
+  // adoption, and the small drops without service video.
+  "walk": [
+    { "state": { "video": true },
+      "holdSeconds": 3 },
+    { "state": { "video": true, "mqtt": true, "upload": true },
+      "holdSeconds": 10 },
+    { "state": { "video": true, "mqtt": true, "upload": true, "hostModeChange": true },
+      "holdSeconds": 10 },
+    { "state": { "video": true, "mqtt": true, "hostModeChange": true },
+      "holdSeconds": 5 },
+    { "state": { "video": true, "mqtt": true, "cloud": true, "httpsMountDisk": true, "updateCheck": true },
+      "holdSeconds": 25 },
+    { "state": { "video": true },
+      "holdSeconds": 12 },
+    { "state": { "video": true, "updateCheck": true },
+      "holdSeconds": 40 },
+    { "state": { "video": true },
+      "holdSeconds": 15 },
+    { "state": { "video": true, "slowKeys": true },
+      "holdSeconds": 15 },
+    { "state": { "video": true, "qualityChange": true },
+      "holdSeconds": 6 },
+    { "state": { "video": true, "audio": true },
+      "holdSeconds": 10 },
+    { "state": { "video": true, "audio": true, "upload": true },
+      "holdSeconds": 10 },
+    { "state": { "video": true, "audio": true, "takeover": true },
+      "holdSeconds": 10 },
+    { "state": { "video": true, "tailscale": true },
+      "holdSeconds": 10 },
+    { "state": { "video": true, "tailscale": true, "hid": true },
+      "holdSeconds": 10 },
+    { "state": { "video": true, "tailscale": true, "hid": true, "httpsMountDisk": true, "updateCheck": true },
+      "holdSeconds": 20 },
+    { "state": { "video": true, "tailscale": true, "hid": true, "osServices": true, "osVideo": true, "osTerminal": true, "osFiles": true, "osClipboard": true, "httpMountDisk": true },
+      "holdSeconds": 10 },
+    { "state": { "video": true, "tailscale": true, "hid": true, "osServices": true, "osTerminalLight": true, "httpMountDisk": true },
+      "holdSeconds": 10 },
+    { "state": { "video": true, "osServices": true, "osVideo": true },
+      "holdSeconds": 3 },
+    { "state": { "video": true, "osServices": true, "osVideo": true, "senderRestart": true },
+      "holdSeconds": 5 },
+    { "state": { "video": true, "osServices": true, "osVideo": true, "hid": true, "noisePicture": true },
+      "holdSeconds": 30 },
+    { "state": { "video": true, "osServices": true, "osVideo": true, "upload": true },
+      "holdSeconds": 10 },
+    { "state": { "video": true, "osServices": true, "osVideo": true, "audio": true },
+      "holdSeconds": 10 },
+    { "state": { "video": true, "osServices": true, "osVideo": true, "osFilesSmall": true, "osClipboard": true },
+      "holdSeconds": 5 },
+    { "state": { "video": true, "osServices": true, "osFilesSmall": true, "osClipboard": true },
+      "holdSeconds": 5 },
+    { "state": { "video": true, "osServices": true, "osVideo": true, "osFilesSmall": true, "osClipboard": true },
+      "holdSeconds": 5 },
+    { "state": { "video": true, "mqtt": true, "osServices": true, "osTerminal": true, "osFiles": true, "ota": true },
+      "holdSeconds": 0 },
+    { "state": { "video": true, "mqtt": true, "cloud": true, "osServices": true },
+      "holdSeconds": 3 },
+    { "state": { "video": true, "mqtt": true, "cloud": true, "osServices": true, "osTerminal": true, "osFiles": true, "osClipboard": true, "hid": true },
+      "holdSeconds": 10 },
+    { "state": { "video": true, "mqtt": true, "cloud": true, "osServices": true, "osTerminalLight": true, "osFiles": true, "osClipboard": true, "hid": true },
+      "holdSeconds": 10 },
+    { "state": { "video": true, "mqtt": true, "cloud": true, "osServices": true, "osTerminal": true, "osFiles": true, "osClipboard": true, "hid": true, "audio": true },
+      "holdSeconds": 10 },
+    { "state": { "video": true, "mqtt": true, "cloud": true, "osServices": true, "osTerminal": true, "osFiles": true, "osClipboard": true, "hid": true, "packetLoss": true },
+      "holdSeconds": 10 },
+    { "state": { "video": true, "mqtt": true, "cloud": true, "osServices": true, "osTerminal": true, "osFiles": true, "osClipboard": true, "hid": true, "httpMountCdrom": true },
+      "holdSeconds": 10 },
+    { "state": { "video": true, "mqtt": true, "cloud": true, "osServices": true, "osTerminal": true, "osFiles": true, "osClipboard": true, "hid": true, "tfMountDisk": true },
+      "holdSeconds": 10 },
+    { "state": { "video": true, "mqtt": true, "cloud": true, "osServices": true, "osVideo": true, "osTerminal": true, "osFiles": true, "osClipboard": true, "hid": true },
+      "holdSeconds": 10 },
+    { "state": { "video": true, "mqtt": true, "cloud": true, "osServices": true, "osVideo": true, "osTerminal": true, "osFiles": true, "osClipboard": true, "hid": true, "httpMountDisk": true },
+      "holdSeconds": 10 },
+    { "state": { "video": true, "mqtt": true, "cloud": true, "osServices": true, "osVideo": true, "osTerminalLight": true, "hid": true, "httpMountDisk": true },
+      "holdSeconds": 10 },
+    { "state": { "video": true, "mqtt": true, "cloud": true, "osServices": true, "osVideo": true, "osTerminal": true, "osFiles": true, "osClipboard": true, "hid": true, "tfMountCdrom": true },
+      "holdSeconds": 10 },
+    { "state": { "video": true, "mqtt": true, "cloud": true, "osServices": true, "hid": true, "tfMountCdrom": true, "usbEmulation": true },
+      "holdSeconds": 10 },
+    { "state": { "video": true, "mqtt": true, "cloud": true, "osServices": true, "osTerminalLight": true, "httpsMountDisk": true },
+      "holdSeconds": 5 },
+    { "state": { "video": true, "mqtt": true, "cloud": true, "osServices": true, "osTerminalLight": true, "httpsMountDisk": true, "ota": true },
+      "holdSeconds": 0 }
+  ]
+}

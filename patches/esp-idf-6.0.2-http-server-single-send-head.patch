@@ -1,0 +1,143 @@
+--- a/components/esp_http_server/src/httpd_txrx.c
++++ b/components/esp_http_server/src/httpd_txrx.c
+@@ -83,6 +83,46 @@
+     return ESP_OK;
+ }
+ 
++/* Send the status line, the headers added with httpd_resp_set_hdr() and the
++ * blank line that ends the head in one send. Sending each field, separator
++ * and value on its own turns a response head into about thirty TCP segments
++ * once the application sets TCP_NODELAY, each one a round trip through the
++ * TCP/IP task. */
++static esp_err_t httpd_send_head(httpd_req_t *r, const char *first)
++{
++    struct httpd_req_aux *ra = r->aux;
++    size_t first_len = strlen(first);
++    size_t size = first_len + 2;
++    for (unsigned i = 0; i < ra->resp_hdrs_count; i++) {
++        size += strlen(ra->resp_hdrs[i].field) + 2 + strlen(ra->resp_hdrs[i].value) + 2;
++    }
++    char *head = malloc(size);
++    if (head == NULL) {
++        ESP_LOGE(TAG, "Unable to allocate httpd response head buffer");
++        return ESP_ERR_HTTPD_ALLOC_MEM;
++    }
++    char *p = head;
++    memcpy(p, first, first_len);
++    p += first_len;
++    for (unsigned i = 0; i < ra->resp_hdrs_count; i++) {
++        size_t field_len = strlen(ra->resp_hdrs[i].field);
++        size_t value_len = strlen(ra->resp_hdrs[i].value);
++        memcpy(p, ra->resp_hdrs[i].field, field_len);
++        p += field_len;
++        memcpy(p, ": ", 2);
++        p += 2;
++        memcpy(p, ra->resp_hdrs[i].value, value_len);
++        p += value_len;
++        memcpy(p, "\r\n", 2);
++        p += 2;
++    }
++    memcpy(p, "\r\n", 2);
++    p += 2;
++    esp_err_t ret = httpd_send_all(r, head, (size_t)(p - head));
++    free(head);
++    return ret == ESP_OK ? ESP_OK : ESP_ERR_HTTPD_RESP_SEND;
++}
++
+ static size_t httpd_recv_pending(httpd_req_t *r, char *buf, size_t buf_len)
+ {
+     struct httpd_req_aux *ra = r->aux;
+@@ -263,8 +303,6 @@
+ 
+     struct httpd_req_aux *ra = r->aux;
+     const char *httpd_hdr_str = "HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %d\r\n";
+-    const char *colon_separator = ": ";
+-    const char *cr_lf_seperator = "\r\n";
+ 
+     if (buf_len == HTTPD_RESP_USE_STRLEN) {
+         buf_len = strlen(buf);
+@@ -290,35 +328,10 @@
+         return ESP_ERR_HTTPD_RESP_HDR;
+     }
+     ESP_LOGD(TAG, "httpd send buffer size = %d", strlen(res_buf));
+-    ret = httpd_send_all(r, res_buf, strlen(res_buf));
++    ret = httpd_send_head(r, res_buf);
+     free(res_buf);
+     if (ret != ESP_OK) {
+-        return ESP_ERR_HTTPD_RESP_SEND;
+-    }
+-
+-    /* Sending additional headers based on set_header */
+-    for (unsigned i = 0; i < ra->resp_hdrs_count; i++) {
+-        /* Send header field */
+-        if (httpd_send_all(r, ra->resp_hdrs[i].field, strlen(ra->resp_hdrs[i].field)) != ESP_OK) {
+-            return ESP_ERR_HTTPD_RESP_SEND;
+-        }
+-        /* Send ': ' */
+-        if (httpd_send_all(r, colon_separator, strlen(colon_separator)) != ESP_OK) {
+-            return ESP_ERR_HTTPD_RESP_SEND;
+-        }
+-        /* Send header value */
+-        if (httpd_send_all(r, ra->resp_hdrs[i].value, strlen(ra->resp_hdrs[i].value)) != ESP_OK) {
+-            return ESP_ERR_HTTPD_RESP_SEND;
+-        }
+-        /* Send CR + LF */
+-        if (httpd_send_all(r, cr_lf_seperator, strlen(cr_lf_seperator)) != ESP_OK) {
+-            return ESP_ERR_HTTPD_RESP_SEND;
+-        }
+-    }
+-
+-    /* End header section */
+-    if (httpd_send_all(r, cr_lf_seperator, strlen(cr_lf_seperator)) != ESP_OK) {
+-        return ESP_ERR_HTTPD_RESP_SEND;
++        return ret;
+     }
+     struct httpd_data *hd = (struct httpd_data *) r->handle;
+     hd->http_server_state = HTTP_SERVER_EVENT_HEADERS_SENT;
+@@ -356,8 +369,6 @@
+     struct httpd_req_aux *ra = r->aux;
+     struct httpd_data *hd = (struct httpd_data *) r->handle;
+     const char *httpd_chunked_hdr_str = "HTTP/1.1 %s\r\nContent-Type: %s\r\nTransfer-Encoding: chunked\r\n";
+-    const char *colon_separator = ": ";
+-    const char *cr_lf_seperator = "\r\n";
+ 
+     /* Request headers are no longer available */
+     ra->req_hdrs_count = 0;
+@@ -380,35 +391,10 @@
+         }
+         ESP_LOGD(TAG, "httpd send chunk buffer size = %d", strlen(res_buf));
+         /* Size of essential headers is limited by scratch buffer size */
+-        ret = httpd_send_all(r, res_buf, strlen(res_buf));
++        ret = httpd_send_head(r, res_buf);
+         free(res_buf);
+         if (ret != ESP_OK) {
+-            return ESP_ERR_HTTPD_RESP_SEND;
+-        }
+-
+-        /* Sending additional headers based on set_header */
+-        for (unsigned i = 0; i < ra->resp_hdrs_count; i++) {
+-            /* Send header field */
+-            if (httpd_send_all(r, ra->resp_hdrs[i].field, strlen(ra->resp_hdrs[i].field)) != ESP_OK) {
+-                return ESP_ERR_HTTPD_RESP_SEND;
+-            }
+-            /* Send ': ' */
+-            if (httpd_send_all(r, colon_separator, strlen(colon_separator)) != ESP_OK) {
+-                return ESP_ERR_HTTPD_RESP_SEND;
+-            }
+-            /* Send header value */
+-            if (httpd_send_all(r, ra->resp_hdrs[i].value, strlen(ra->resp_hdrs[i].value)) != ESP_OK) {
+-                return ESP_ERR_HTTPD_RESP_SEND;
+-            }
+-            /* Send CR + LF */
+-            if (httpd_send_all(r, cr_lf_seperator, strlen(cr_lf_seperator)) != ESP_OK) {
+-                return ESP_ERR_HTTPD_RESP_SEND;
+-            }
+-        }
+-
+-        /* End header section */
+-        if (httpd_send_all(r, cr_lf_seperator, strlen(cr_lf_seperator)) != ESP_OK) {
+-            return ESP_ERR_HTTPD_RESP_SEND;
++            return ret;
+         }
+         ra->first_chunk_sent = true;
+     }

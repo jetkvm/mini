@@ -1,0 +1,40 @@
+diff --git a/managed_components/espressif__tinyusb/src/portable/synopsys/dwc2/dwc2_esp32.h b/managed_components/espressif__tinyusb/src/portable/synopsys/dwc2/dwc2_esp32.h
+--- a/managed_components/espressif__tinyusb/src/portable/synopsys/dwc2/dwc2_esp32.h
++++ b/managed_components/espressif__tinyusb/src/portable/synopsys/dwc2/dwc2_esp32.h
+@@ -157,28 +157,28 @@
+ #error "CFG_TUD/TUH_MEM_DCACHE_LINE_SIZE must match CONFIG_CACHE_L1_CACHE_LINE_SIZE"
+ #endif
+ 
+-TU_ATTR_ALWAYS_INLINE static inline uint32_t round_up_to_cache_line_size(uint32_t size) {
+-  if (size & (CONFIG_CACHE_L1_CACHE_LINE_SIZE-1)) {
+-    size = (size & ~(CONFIG_CACHE_L1_CACHE_LINE_SIZE-1)) + CONFIG_CACHE_L1_CACHE_LINE_SIZE;
+-  }
+-  return size;
++// esp_cache_msync() needs whole lines of the cache in front of the memory:
++// L1's for internal RAM, L2's (128 B on the P4) for PSRAM.
++TU_ATTR_ALWAYS_INLINE static inline uint32_t round_up_to_cache_line_size(const void* addr, uint32_t size) {
++  uint32_t const line = esp_cache_get_line_size_by_addr(addr);
++  return line ? (size + line - 1) / line * line : size;
+ }
+ 
+ TU_ATTR_ALWAYS_INLINE static inline bool dwc2_dcache_clean(const void* addr, uint32_t data_size) {
+   const int flag = ESP_CACHE_MSYNC_FLAG_TYPE_DATA | ESP_CACHE_MSYNC_FLAG_DIR_C2M;
+-  data_size = round_up_to_cache_line_size(data_size);
++  data_size = round_up_to_cache_line_size(addr, data_size);
+   return ESP_OK == esp_cache_msync((void*)addr, data_size, flag);
+ }
+ 
+ TU_ATTR_ALWAYS_INLINE static inline bool dwc2_dcache_invalidate(const void* addr, uint32_t data_size) {
+   const int flag = ESP_CACHE_MSYNC_FLAG_TYPE_DATA | ESP_CACHE_MSYNC_FLAG_DIR_M2C;
+-  data_size = round_up_to_cache_line_size(data_size);
++  data_size = round_up_to_cache_line_size(addr, data_size);
+   return ESP_OK == esp_cache_msync((void*)addr, data_size, flag);
+ }
+ 
+ TU_ATTR_ALWAYS_INLINE static inline bool dwc2_dcache_clean_invalidate(const void* addr, uint32_t data_size) {
+   const int flag = ESP_CACHE_MSYNC_FLAG_TYPE_DATA | ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_DIR_M2C;
+-  data_size = round_up_to_cache_line_size(data_size);
++  data_size = round_up_to_cache_line_size(addr, data_size);
+   return ESP_OK == esp_cache_msync((void*)addr, data_size, flag);
+ }
+ 

@@ -1,0 +1,152 @@
+diff --git a/managed_components/espressif__esp_libsrtp/CMakeLists.txt b/managed_components/espressif__esp_libsrtp/CMakeLists.txt
+--- a/managed_components/espressif__esp_libsrtp/CMakeLists.txt
++++ b/managed_components/espressif__esp_libsrtp/CMakeLists.txt
+@@ -10,8 +10,7 @@ set(CIPHERS_SOURCES_C
+ )
+ 
+ list(APPEND CIPHERS_SOURCES_C
+-  libsrtp/crypto/cipher/aes.c
+-  libsrtp/crypto/cipher/aes_icm.c
++  libsrtp/crypto/cipher/aes_icm_mbedtls.c
+   libsrtp/crypto/cipher/cipher_test_cases.c
+ )
+ 
+@@ -53,5 +52,6 @@ set(SRTP_INCLUDE_DIRS
+ 	libsrtp/crypto/include
+ )
+ 
+-idf_component_register(SRCS ${SRTP_SRCS} INCLUDE_DIRS ${SRTP_INCLUDE_DIRS})
+-target_compile_definitions(${COMPONENT_LIB} PUBLIC "-DHAVE_CONFIG_H")
++idf_component_register(SRCS ${SRTP_SRCS} INCLUDE_DIRS ${SRTP_INCLUDE_DIRS}
++                       PRIV_REQUIRES mbedtls)
++target_compile_definitions(${COMPONENT_LIB} PUBLIC "-DHAVE_CONFIG_H" PRIVATE ESP_AES)
+diff --git a/managed_components/espressif__esp_libsrtp/libsrtp/crypto/cipher/aes_icm_mbedtls.c b/managed_components/espressif__esp_libsrtp/libsrtp/crypto/cipher/aes_icm_mbedtls.c
+--- a/managed_components/espressif__esp_libsrtp/libsrtp/crypto/cipher/aes_icm_mbedtls.c
++++ b/managed_components/espressif__esp_libsrtp/libsrtp/crypto/cipher/aes_icm_mbedtls.c
+@@ -47,3 +47,5 @@
+ #endif
+-#include <mbedtls/aes.h>
++#include "esp_attr.h"
++#include "aes/esp_aes.h"
++#include "hal/aes_hal.h"
+ #include "aes_icm_ext.h"
+@@ -61 +63,52 @@ srtp_debug_module_t srtp_mod_aes_icm = {
++/* ESP-IDF's public CTR API switches RTP-sized requests to GDMA, where P4
++ * allocates packet-sized alignment buffers and descriptor lists.  libSRTP
++ * callbacks are serialized on the peer task, so hold the normal AES hardware
++ * lock once and run the same block transform without packet-time allocation. */
++static IRAM_ATTR int srtp_esp_aes_crypt_ctr_noalloc(
++    srtp_aes_icm_ctx_t *c,
++    const uint8_t *src,
++    size_t src_len,
++    uint8_t *dst)
++{
++    size_t n = c->nc_off;
++    size_t remaining = src_len;
++
++    while (n != 0 && remaining != 0) {
++        *dst++ = (uint8_t)(*src++ ^ c->stream_block.v8[n]);
++        n = (n + 1U) & 0x0fU;
++        remaining--;
++    }
++
++    if (remaining != 0) {
++        esp_aes_acquire_hardware();
++        c->ctx->key_in_hardware = 0;
++        c->ctx->key_in_hardware = aes_hal_setkey(
++            c->ctx->key, c->ctx->key_bytes, ESP_AES_ENCRYPT);
++        if (c->ctx->key_in_hardware != c->ctx->key_bytes) {
++            esp_aes_release_hardware();
++            memset(dst, 0, remaining);
++            return -1;
++        }
++
++        while (remaining != 0) {
++            if (n == 0) {
++                aes_hal_transform_block(c->counter.v8,
++                                        c->stream_block.v8);
++                for (int i = 15; i >= 0; i--) {
++                    if (++c->counter.v8[i] != 0) {
++                        break;
++                    }
++                }
++            }
++            *dst++ = (uint8_t)(*src++ ^ c->stream_block.v8[n]);
++            n = (n + 1U) & 0x0fU;
++            remaining--;
++        }
++        esp_aes_release_hardware();
++    }
++
++    c->nc_off = n;
++    return 0;
++}
++
+ /*
+@@ -232,3 +285,3 @@ static srtp_err_status_t srtp_aes_icm_mbedtls_alloc(srtp_cipher_t **c,
+     icm->ctx =
+-        (mbedtls_aes_context *)srtp_crypto_alloc(sizeof(mbedtls_aes_context));
++        (esp_aes_context *)srtp_crypto_alloc(sizeof(esp_aes_context));
+     if (icm->ctx == NULL) {
+@@ -240,3 +293,3 @@ static srtp_err_status_t srtp_aes_icm_mbedtls_alloc(srtp_cipher_t **c,
+ 
+-    mbedtls_aes_init(icm->ctx);
++    esp_aes_init(icm->ctx);
+ 
+@@ -286,3 +339,3 @@ static srtp_err_status_t srtp_aes_icm_mbedtls_dealloc(srtp_cipher_t *c)
+     if (ctx != NULL) {
+-        mbedtls_aes_free(ctx->ctx);
++        esp_aes_free(ctx->ctx);
+         srtp_crypto_free(ctx->ctx);
+@@ -332,3 +385,3 @@ static srtp_err_status_t srtp_aes_icm_mbedtls_context_init(void *cv,
+ 
+-    errcode = mbedtls_aes_setkey_enc(c->ctx, key, key_size_in_bits);
++    errcode = esp_aes_setkey(c->ctx, key, key_size_in_bits);
+     if (errcode != 0) {
+@@ -375,7 +428,8 @@ static srtp_err_status_t srtp_aes_icm_mbedtls_set_iv(
+  */
+-static srtp_err_status_t srtp_aes_icm_mbedtls_encrypt(void *cv,
+-                                                      const uint8_t *src,
+-                                                      size_t src_len,
+-                                                      uint8_t *dst,
+-                                                      size_t *dst_len)
++static IRAM_ATTR srtp_err_status_t srtp_aes_icm_mbedtls_encrypt(
++    void *cv,
++    const uint8_t *src,
++    size_t src_len,
++    uint8_t *dst,
++    size_t *dst_len)
+ {
+@@ -391,4 +445,2 @@ static srtp_err_status_t srtp_aes_icm_mbedtls_encrypt(void *cv,
+-    errCode =
+-        mbedtls_aes_crypt_ctr(c->ctx, src_len, &(c->nc_off), c->counter.v8,
+-                              c->stream_block.v8, src, dst);
++    errCode = srtp_esp_aes_crypt_ctr_noalloc(c, src, src_len, dst);
+     if (errCode != 0) {
+     if (errCode != 0) {
+         debug_print(srtp_mod_aes_icm, "encrypt error: %d", errCode);
+         return srtp_err_status_cipher_fail;
+diff --git a/managed_components/espressif__esp_libsrtp/libsrtp/crypto/include/aes_icm_ext.h b/managed_components/espressif__esp_libsrtp/libsrtp/crypto/include/aes_icm_ext.h
+--- a/managed_components/espressif__esp_libsrtp/libsrtp/crypto/include/aes_icm_ext.h
++++ b/managed_components/espressif__esp_libsrtp/libsrtp/crypto/include/aes_icm_ext.h
+@@ -91,6 +91,20 @@ typedef struct {
+ 
+ #endif /* MBEDTLS */
+ 
++#ifdef ESP_AES
++
++#include "aes/esp_aes.h"
++typedef struct {
++    v128_t counter;
++    v128_t offset;
++    v128_t stream_block;
++    size_t nc_off;
++    size_t key_size;
++    esp_aes_context *ctx;
++} srtp_aes_icm_ctx_t;
++
++#endif /* ESP_AES */
++
+ #ifdef NSS
+ 
+ #define NSS_PKCS11_2_0_COMPAT 1

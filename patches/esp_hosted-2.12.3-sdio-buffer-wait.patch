@@ -1,0 +1,79 @@
+diff --git a/managed_components/espressif__esp_hosted/host/drivers/transport/sdio/sdio_drv.c b/managed_components/espressif__esp_hosted/host/drivers/transport/sdio/sdio_drv.c
+--- a/managed_components/espressif__esp_hosted/host/drivers/transport/sdio/sdio_drv.c
++++ b/managed_components/espressif__esp_hosted/host/drivers/transport/sdio/sdio_drv.c
+@@ -545,6 +545,45 @@
+ 	return BUFFER_AVAILABLE;
+ }
+ 
++/* Hosted takes each SDIO buffer from the internal DMA heap, which a burst of
++ * other work (a new WebRTC peer, a TLS download) can leave without a free
++ * 1600-byte block for a moment. Wait for memory instead of asserting. The
++ * slave keeps a packet until the host reads it, so a receive loses nothing;
++ * a caller that holds the bus releases it meanwhile, so the other direction
++ * can send and free its buffers. A shortage that outlasts the wait still
++ * asserts in the caller. */
++#define SDIO_BUFFER_WAIT_MS 5000
++
++static void *sdio_alloc_waiting(void *(*alloc)(uint32_t len), uint32_t len,
++		bool holds_bus, const char *what)
++{
++	void *buf = alloc(len);
++	unsigned int waited_ms = 0;
++
++	while (!buf && waited_ms < SDIO_BUFFER_WAIT_MS) {
++		/* 10, 20, then 40 ms at a time */
++		const unsigned int sleep_ms = H_MIN(waited_ms + 10, 40);
++
++		if (holds_bus)
++			SDIO_DRV_UNLOCK();
++		g_h.funcs->_h_msleep(sleep_ms);
++		if (holds_bus)
++			SDIO_DRV_LOCK();
++		waited_ms += sleep_ms;
++		buf = alloc(len);
++	}
++	if (waited_ms)
++		ESP_LOGW(TAG, "no memory for an %s buffer for %u ms%s", what,
++				waited_ms, buf ? "" : ", giving up");
++	return buf;
++}
++
++static void *sdio_tx_buffer_alloc(uint32_t len)
++{
++	(void)len;
++	return sdio_buffer_alloc(MEMSET_REQUIRED);
++}
++
+ static void sdio_write_task(void const* pvParameters)
+ {
+ 	uint16_t len = 0;
+@@ -592,7 +631,7 @@
+ #endif
+ 
+ 		if (!buf_handle.payload_zcopy) {
+-			sendbuf = sdio_buffer_alloc(MEMSET_REQUIRED);
++			sendbuf = sdio_alloc_waiting(sdio_tx_buffer_alloc, 0, false, "tx");
+ 			assert(sendbuf);
+ 			free_func = sdio_buffer_free;
+ 		} else {
+@@ -1027,6 +1066,11 @@
+ }
+ #endif
+ 
++static void *sdio_rx_buffer_alloc(uint32_t len)
++{
++	return sdio_rx_get_buffer(len);
++}
++
+ static void sdio_read_task(void const* pvParameters)
+ {
+ 	esp_err_t res = ESP_OK;
+@@ -1168,7 +1212,7 @@
+ #endif
+ 
+ 		/* Allocate rx buffer */
+-		rxbuff = sdio_rx_get_buffer(len_from_slave);
++		rxbuff = sdio_alloc_waiting(sdio_rx_buffer_alloc, len_from_slave, true, "rx");
+ 		assert(rxbuff);
+ 
+ 		data_left = len_from_slave;

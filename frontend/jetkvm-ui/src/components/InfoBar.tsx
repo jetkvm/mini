@@ -1,0 +1,286 @@
+import { useEffect, useMemo, useState } from "react";
+
+import {
+  useCapability,
+  useHidStore,
+  useMouseStore,
+  useRTCStore,
+  useSettingsStore,
+  useVideoStore,
+  VideoState,
+} from "@hooks/stores";
+import { useHidRpc } from "@hooks/useHidRpc";
+import { keys, modifiers } from "@/keyboardMappings";
+import { cx } from "@/cva.config";
+import { m } from "@localizations/messages.js";
+
+// One cell of the OS Services state: dim until its state is on.
+function GuestIndicator({ on, label }: { on: boolean; label: string }) {
+  return (
+    <div
+      className={cx(
+        "shrink-0 p-1 px-1.5 text-xs",
+        on ? "text-black dark:text-white" : "text-slate-800/20 dark:text-slate-300/20",
+      )}
+    >
+      {label}
+    </div>
+  );
+}
+
+export default function InfoBar() {
+  const { keysDownState } = useHidStore();
+  const { mouseX, mouseY, mouseMove } = useMouseStore();
+  const { rpcHidStatus } = useHidRpc();
+
+  const videoClientSize = useVideoStore(
+    (state: VideoState) => `${Math.round(state.clientWidth)}x${Math.round(state.clientHeight)}`,
+  );
+
+  const videoSize = useVideoStore(
+    (state: VideoState) => `${Math.round(state.width)}x${Math.round(state.height)}`,
+  );
+
+  const { debugMode, mouseMode, showPressedKeys } = useSettingsStore();
+  const { isPasteInProgress } = useHidStore();
+  const { keyboardLedState, usbState } = useHidStore();
+  const { isTurnServerInUse, peerConnection, peerConnectionState } = useRTCStore();
+  const { hdmiState, osServices } = useVideoStore();
+  const hasOsServices = useCapability("os_services");
+
+  const [videoCodec, setVideoCodec] = useState<string | null>(null);
+  const [videoBitrate, setVideoBitrate] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!debugMode || !peerConnection || peerConnectionState !== "connected") {
+      setVideoCodec(null);
+      setVideoBitrate(null);
+      return;
+    }
+
+    let cancelled = false;
+    let lastBytes = 0;
+    let lastTimestamp = 0;
+
+    async function extractStats() {
+      const stats = await peerConnection!.getStats();
+      let codecId: string | null = null;
+      stats.forEach(report => {
+        if (report.type === "inbound-rtp" && report.kind === "video") {
+          codecId = report.codecId ?? null;
+
+          const bytes = report.bytesReceived as number;
+          const ts = report.timestamp as number;
+          if (lastBytes > 0 && lastTimestamp > 0) {
+            const deltaSec = (ts - lastTimestamp) / 1000;
+            if (deltaSec > 0) {
+              const kbps = ((bytes - lastBytes) * 8) / 1000 / deltaSec;
+              setVideoBitrate(`${Math.round(kbps)} kbps`);
+            }
+          }
+          lastBytes = bytes;
+          lastTimestamp = ts;
+        }
+      });
+      if (cancelled || !codecId) return false;
+      const codecReport = stats.get(codecId);
+      if (codecReport?.mimeType) {
+        const mime = codecReport.mimeType as string;
+        const short = mime.replace("video/", "").replace("H264", "H.264").replace("H265", "H.265");
+        setVideoCodec(short);
+        return true;
+      }
+      return false;
+    }
+
+    // Stats may not be available immediately — retry a few times for codec,
+    // then keep polling for bitrate updates.
+    let codecResolved = false;
+    let attempts = 0;
+    const timer = setInterval(async () => {
+      if (cancelled) {
+        clearInterval(timer);
+        return;
+      }
+      const found = await extractStats();
+      if (found && !codecResolved) codecResolved = true;
+      if (!codecResolved && attempts++ >= 10) {
+        clearInterval(timer);
+      }
+    }, 1000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [debugMode, peerConnection, peerConnectionState]);
+
+  const displayKeys = useMemo(() => {
+    if (!showPressedKeys) return "";
+
+    const activeModifierMask = keysDownState.modifier || 0;
+    const keysDown = keysDownState.keys || [];
+    const modifierNames = Object.entries(modifiers)
+      .filter(([_, mask]) => (activeModifierMask & mask) !== 0)
+      .map(([name]) => name);
+    const keyNames = Object.entries(keys)
+      .filter(([_, value]) => keysDown.includes(value))
+      .map(([name]) => name);
+
+    return [...modifierNames, ...keyNames].join(", ");
+  }, [keysDownState, showPressedKeys]);
+
+  return (
+    <div className="border-t border-t-slate-800/30 bg-white text-slate-800 dark:border-t-slate-300/20 dark:bg-slate-900 dark:text-slate-300">
+      <div className="flex flex-wrap items-stretch justify-between gap-1">
+        <div className="flex items-center">
+          <div className="flex flex-wrap items-center gap-x-4 pl-2">
+            {debugMode ? (
+              <div className="flex">
+                <span className="text-xs font-semibold">{m.info_resolution()}</span>{" "}
+                <span className="text-xs">{videoSize}</span>
+              </div>
+            ) : null}
+
+            {debugMode ? (
+              <div className="flex">
+                <span className="text-xs font-semibold">{m.info_video_size()}</span>
+                <span className="text-xs">{videoClientSize}</span>
+              </div>
+            ) : null}
+
+            {debugMode && mouseMode == "absolute" ? (
+              <div className="flex w-[118px] items-center gap-x-1">
+                <span className="text-xs font-semibold">{m.info_pointer()}</span>
+                <span className="text-xs">
+                  {mouseX},{mouseY}
+                </span>
+              </div>
+            ) : null}
+
+            {debugMode && mouseMode == "relative" ? (
+              <div className="flex w-[118px] items-center gap-x-1">
+                <span className="text-xs font-semibold">{m.info_last_move()}</span>
+                <span className="text-xs">
+                  {mouseMove
+                    ? `${mouseMove.x},${mouseMove.y} ${mouseMove.buttons ? `(${mouseMove.buttons})` : ""}`
+                    : "N/A"}
+                </span>
+              </div>
+            ) : null}
+
+            {debugMode && (
+              <div className="flex w-[156px] items-center gap-x-1">
+                <span className="text-xs font-semibold">{m.info_usb_state()}</span>
+                <span className="text-xs">{usbState}</span>
+              </div>
+            )}
+
+            {debugMode && (
+              <div className="flex w-[156px] items-center gap-x-1">
+                <span className="text-xs font-semibold">{m.info_hdmi_state()}</span>
+                <span className="text-xs">{hdmiState}</span>
+              </div>
+            )}
+
+            {debugMode && videoCodec && (
+              <div className="flex items-center gap-x-1">
+                <span className="text-xs font-semibold">{m.info_codec()}</span>
+                <span className="text-xs">{videoCodec}</span>
+              </div>
+            )}
+
+            {debugMode && videoBitrate && (
+              <div className="flex items-center gap-x-1">
+                <span className="text-xs font-semibold">{m.info_bitrate()}</span>
+                <span className="text-xs">{videoBitrate}</span>
+              </div>
+            )}
+
+            {debugMode && (
+              <div className="flex w-[156px] items-center gap-x-1">
+                <span className="text-xs font-semibold">{m.info_hidrpc_state()}</span>
+                <span className="text-xs">{rpcHidStatus}</span>
+              </div>
+            )}
+
+            {isPasteInProgress && (
+              <div className="flex w-[156px] items-center gap-x-1">
+                <span className="text-xs font-semibold">{m.info_paste_mode()}</span>
+                <span className="text-xs">{m.info_paste_enabled()}</span>
+              </div>
+            )}
+
+            {showPressedKeys && (
+              <div className="flex items-center gap-x-1">
+                <span className="text-xs font-semibold">{m.info_keys()}</span>
+                <h2 className="text-xs">{displayKeys}</h2>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="first:divide-l flex items-center divide-x divide-slate-800/20 dark:divide-slate-300/20">
+          {isTurnServerInUse && (
+            <div className="shrink-0 p-1 px-1.5 text-xs text-black dark:text-white">
+              {m.info_relayed_by_cloudflare()}
+            </div>
+          )}
+
+          {hasOsServices && (
+            <div className="flex items-center divide-x divide-slate-800/20 border-r-2 border-r-slate-800/30 dark:divide-slate-300/20 dark:border-r-slate-300/30">
+              <GuestIndicator on={osServices.connected} label={m.info_os_services()} />
+              <GuestIndicator on={osServices.video} label={m.info_guest_video()} />
+              <GuestIndicator on={osServices.clipboard} label={m.info_guest_clipboard()} />
+            </div>
+          )}
+
+          <div
+            className={cx(
+              "shrink-0 p-1 px-1.5 text-xs",
+              keyboardLedState.caps_lock
+                ? "text-black dark:text-white"
+                : "text-slate-800/20 dark:text-slate-300/20",
+            )}
+          >
+            {m.info_caps_lock()}
+          </div>
+
+          <div
+            className={cx(
+              "shrink-0 p-1 px-1.5 text-xs",
+              keyboardLedState.num_lock
+                ? "text-black dark:text-white"
+                : "text-slate-800/20 dark:text-slate-300/20",
+            )}
+          >
+            {m.info_num_lock()}
+          </div>
+
+          <div
+            className={cx(
+              "shrink-0 p-1 px-1.5 text-xs",
+              keyboardLedState.scroll_lock
+                ? "text-black dark:text-white"
+                : "text-slate-800/20 dark:text-slate-300/20",
+            )}
+          >
+            {m.info_scroll_lock()}
+          </div>
+
+          {keyboardLedState.compose ? (
+            <div className="shrink-0 p-1 px-1.5 text-xs">{m.info_compose()}</div>
+          ) : null}
+
+          {keyboardLedState.kana ? (
+            <div className="shrink-0 p-1 px-1.5 text-xs">{m.info_kana()}</div>
+          ) : null}
+
+          {keyboardLedState.shift ? (
+            <div className="shrink-0 p-1 px-1.5 text-xs">{m.info_shift()}</div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}

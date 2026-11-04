@@ -1,0 +1,158 @@
+diff --git a/managed_components/espressif__esp_h264/hw/src/esp_h264_enc_single_hw.c b/managed_components/espressif__esp_h264/hw/src/esp_h264_enc_single_hw.c
+index 0102369..a17e930 100644
+--- a/managed_components/espressif__esp_h264/hw/src/esp_h264_enc_single_hw.c
++++ b/managed_components/espressif__esp_h264/hw/src/esp_h264_enc_single_hw.c
+@@ -9,9 +9,43 @@
+ #include "esp_h264_enc_single_hw.h"
+ #include "esp_h264_enc_hw_param.h"
+ #include "esp_h264_intr_alloc.h"
++#include "esp_cache.h"
+ 
+ static const char *TAG = "H264_ENC.HW";
+ 
++static uint32_t h264_output_invalidate_size(uint8_t *out_frame, uint32_t out_frame_size,
++                                            int out_frame_len, uint32_t coded_len,
++                                            bool bitstream_overflow)
++{
++    if (bitstream_overflow || out_frame_len < 0 ||
++            (uint32_t)out_frame_len > out_frame_size ||
++            coded_len > out_frame_size - (uint32_t)out_frame_len) {
++        return out_frame_size;
++    }
++
++    size_t cache_line_size = esp_cache_get_line_size_by_addr(out_frame);
++    if (cache_line_size == 0 || cache_line_size > UINT32_MAX ||
++            ((uintptr_t)out_frame % cache_line_size) != 0 ||
++            (out_frame_size % cache_line_size) != 0) {
++        return out_frame_size;
++    }
++
++    uint32_t valid_len = (uint32_t)out_frame_len + coded_len;
++    if (valid_len == 0) {
++        return out_frame_size;
++    }
++
++    uint32_t remainder = valid_len % (uint32_t)cache_line_size;
++    if (remainder != 0) {
++        uint32_t padding = (uint32_t)cache_line_size - remainder;
++        if (padding > out_frame_size - valid_len) {
++            return out_frame_size;
++        }
++        valid_len += padding;
++    }
++    return valid_len;
++}
++
+ typedef struct esp_h264_hw_handle {
+     esp_h264_enc_t              base;
+     esp_h264_enc_param_hw_t    *param_hd;
+@@ -166,13 +200,6 @@ static esp_h264_err_t h264_hw_enc_gop_mode_process(esp_h264_hw_handle_t *hw_hd,
+         return ESP_H264_ERR_TIMEOUT;
+     }
+     *out_len = h264_hal_get_coded_len(&hw_hd->h264_hal);
+-    esp_h264_cache_check_and_invalidate(out_frame, out_frame_size);
+-    /** CAVLA mustn't be continue zeros.
+-     *  And HW encoding will check output buffer.
+-     *  Maybe start code will be wrote error data after HW encoding.
+-     *  So re-write the right start code. */
+-    *slice_start_code = 0x01000000;
+-    esp_h264_cache_check_and_writeback((uint8_t *)slice_start_code, 4);
+ #if HAL_CONFIG(CHIP_SUPPORT_MIN_REV) < 300
+     bool bs_overflow = h264_hal_get_bs_bit_overflow(&hw_hd->h264_hal);
+ #else
+@@ -187,6 +214,16 @@ static esp_h264_err_t h264_hw_enc_gop_mode_process(esp_h264_hw_handle_t *hw_hd,
+     if (*out_len + (uint32_t)out_frame_len > out_frame_size) {
+         bs_overflow = true;
+     }
++    uint32_t invalidate_size = h264_output_invalidate_size(out_frame, out_frame_size,
++                                                           out_frame_len, *out_len,
++                                                           bs_overflow);
++    esp_h264_cache_check_and_invalidate(out_frame, invalidate_size);
++    /** CAVLA mustn't be continue zeros.
++     *  And HW encoding will check output buffer.
++     *  Maybe start code will be wrote error data after HW encoding.
++     *  So re-write the right start code. */
++    *slice_start_code = 0x01000000;
++    esp_h264_cache_check_and_writeback((uint8_t *)slice_start_code, 4);
+     /* Skip RC update on overflow: coded statistics are not trustworthy */
+     if (!bs_overflow && rc_hd) {
+         /** Get the encoder bits and MAD, the sum of QP from HW. */
+diff --git a/managed_components/espressif__esp_h264/hw/src/esp_h264_enc_dual_hw.c b/managed_components/espressif__esp_h264/hw/src/esp_h264_enc_dual_hw.c
+index d8583db..686d39a 100644
+--- a/managed_components/espressif__esp_h264/hw/src/esp_h264_enc_dual_hw.c
++++ b/managed_components/espressif__esp_h264/hw/src/esp_h264_enc_dual_hw.c
+@@ -9,9 +9,43 @@
+ #include "esp_h264_intr_alloc.h"
+ #include "esp_h264_enc_dual_hw.h"
+ #include "esp_h264_enc_hw_param.h"
++#include "esp_cache.h"
+ 
+ static const char *TAG = "H264_ENC.HW.DUAL";
+ 
++static uint32_t h264_output_invalidate_size(uint8_t *out_frame, uint32_t out_frame_size,
++                                            int out_frame_len, uint32_t coded_len,
++                                            bool bitstream_overflow)
++{
++    if (bitstream_overflow || out_frame_len < 0 ||
++            (uint32_t)out_frame_len > out_frame_size ||
++            coded_len > out_frame_size - (uint32_t)out_frame_len) {
++        return out_frame_size;
++    }
++
++    size_t cache_line_size = esp_cache_get_line_size_by_addr(out_frame);
++    if (cache_line_size == 0 || cache_line_size > UINT32_MAX ||
++            ((uintptr_t)out_frame % cache_line_size) != 0 ||
++            (out_frame_size % cache_line_size) != 0) {
++        return out_frame_size;
++    }
++
++    uint32_t valid_len = (uint32_t)out_frame_len + coded_len;
++    if (valid_len == 0) {
++        return out_frame_size;
++    }
++
++    uint32_t remainder = valid_len % (uint32_t)cache_line_size;
++    if (remainder != 0) {
++        uint32_t padding = (uint32_t)cache_line_size - remainder;
++        if (padding > out_frame_size - valid_len) {
++            return out_frame_size;
++        }
++        valid_len += padding;
++    }
++    return valid_len;
++}
++
+ typedef struct esp_h264_hw_handle {
+     esp_h264_enc_dual_t         base;
+     esp_h264_enc_param_hw_t    *param_hd0;
+@@ -165,13 +199,6 @@ static inline esp_h264_err_t h264_hw_enc_frame_mode_process(esp_h264_hw_handle_t
+         return ESP_H264_ERR_TIMEOUT;
+     }
+     *out_len = h264_hal_get_coded_len(&hw_hd->h264_hal);
+-    esp_h264_cache_check_and_invalidate(out_frame, out_frame_size);
+-    /** CAVLA mustn't be continue zeros.
+-     *  And HW encoding will check output buffer.
+-     *  Maybe start code will be wrote error data after HW encoding.
+-     *  So re-write the right start code. */
+-    *slice_start_code = 0x01000000;
+-    esp_h264_cache_check_and_writeback((uint8_t *)slice_start_code, 4);
+ #if HAL_CONFIG(CHIP_SUPPORT_MIN_REV) < 300
+     bool bs_overflow = h264_hal_get_bs_bit_overflow(&hw_hd->h264_hal);
+ #else
+@@ -186,6 +213,16 @@ static inline esp_h264_err_t h264_hw_enc_frame_mode_process(esp_h264_hw_handle_t
+     if (*out_len + (uint32_t)out_frame_len > out_frame_size) {
+         bs_overflow = true;
+     }
++    uint32_t invalidate_size = h264_output_invalidate_size(out_frame, out_frame_size,
++                                                           out_frame_len, *out_len,
++                                                           bs_overflow);
++    esp_h264_cache_check_and_invalidate(out_frame, invalidate_size);
++    /** CAVLA mustn't be continue zeros.
++     *  And HW encoding will check output buffer.
++     *  Maybe start code will be wrote error data after HW encoding.
++     *  So re-write the right start code. */
++    *slice_start_code = 0x01000000;
++    esp_h264_cache_check_and_writeback((uint8_t *)slice_start_code, 4);
+     /* Skip RC update on overflow: coded statistics are not trustworthy */
+     if (!bs_overflow && rc_hd) {
+         /** Get the encoder bits and MAD, the sum of QP from HW. */

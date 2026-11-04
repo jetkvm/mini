@@ -1,0 +1,79 @@
+diff --git a/managed_components/espressif__esp_libsrtp/libsrtp/crypto/cipher/aes_icm_mbedtls.c b/managed_components/espressif__esp_libsrtp/libsrtp/crypto/cipher/aes_icm_mbedtls.c
+--- a/managed_components/espressif__esp_libsrtp/libsrtp/crypto/cipher/aes_icm_mbedtls.c
++++ b/managed_components/espressif__esp_libsrtp/libsrtp/crypto/cipher/aes_icm_mbedtls.c
+@@ -60,6 +60,26 @@
+     "aes icm mbedtls" /* printable module name       */
+ };
+ 
++#ifndef JETKVM_SRTP_AES_BLOCK_XOR
++#define JETKVM_SRTP_AES_BLOCK_XOR 0
++#endif
++
++#if JETKVM_SRTP_AES_BLOCK_XOR
++/* Fixed-size memcpy keeps word XOR valid for byte buffers under strict
++ * aliasing.  Force this small helper inline so the aligned call site uses
++ * word loads/stores without moving the packet path out of IRAM. */
++static inline __attribute__((always_inline)) void srtp_esp_aes_xor_words(
++    const uint8_t *src, const v128_t *stream, uint8_t *dst)
++{
++    for (size_t i = 0; i < 4; ++i) {
++        uint32_t word;
++        memcpy(&word, src + 4 * i, sizeof(word));
++        word ^= stream->v32[i];
++        memcpy(dst + 4 * i, &word, sizeof(word));
++    }
++}
++#endif
++
+ /* ESP-IDF's public CTR API switches RTP-sized requests to GDMA, where P4
+  * allocates packet-sized alignment buffers and descriptor lists.  libSRTP
+  * callbacks are serialized on the peer task, so hold the normal AES hardware
+@@ -90,6 +110,40 @@
+             return -1;
+         }
+ 
++#if JETKVM_SRTP_AES_BLOCK_XOR
++        while (remaining != 0) {
++            aes_hal_transform_block(c->counter.v8, c->stream_block.v8);
++            for (int i = 15; i >= 0; i--) {
++                if (++c->counter.v8[i] != 0) {
++                    break;
++                }
++            }
++
++            if (remaining < 16) {
++                break;
++            }
++
++            /* RTP payloads are normally word aligned; other callers and
++             * split updates may have arbitrary input/output alignment. */
++            if ((((uintptr_t)src | (uintptr_t)dst) & 3U) == 0) {
++                srtp_esp_aes_xor_words(__builtin_assume_aligned(src, 4),
++                                       &c->stream_block,
++                                       __builtin_assume_aligned(dst, 4));
++            } else {
++                srtp_esp_aes_xor_words(src, &c->stream_block, dst);
++            }
++            src += 16;
++            dst += 16;
++            remaining -= 16;
++        }
++
++        /* The final partial block stays available to the next call. */
++        while (remaining != 0) {
++            *dst++ = (uint8_t)(*src++ ^ c->stream_block.v8[n]);
++            n++;
++            remaining--;
++        }
++#else
+         while (remaining != 0) {
+             if (n == 0) {
+                 aes_hal_transform_block(c->counter.v8,
+@@ -104,6 +158,7 @@
+             n = (n + 1U) & 0x0fU;
+             remaining--;
+         }
++#endif
+         esp_aes_release_hardware();
+     }
+ 

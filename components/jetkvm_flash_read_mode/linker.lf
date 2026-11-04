@@ -1,0 +1,6 @@
+# The change of the cache's flash read mode runs with code from flash out of
+# reach: its code and its constants are in internal RAM.
+[mapping:jetkvm_flash_read_switch]
+archive: libjetkvm_flash_read_mode.a
+entries:
+    flash_read_switch (noflash)

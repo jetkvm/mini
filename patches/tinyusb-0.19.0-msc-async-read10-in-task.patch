@@ -1,0 +1,47 @@
+diff --git a/managed_components/espressif__tinyusb/src/class/msc/msc_device.c b/managed_components/espressif__tinyusb/src/class/msc/msc_device.c
+--- a/managed_components/espressif__tinyusb/src/class/msc/msc_device.c
++++ b/managed_components/espressif__tinyusb/src/class/msc/msc_device.c
+@@ -352,6 +352,17 @@ bool tud_msc_async_io_done(int32_t bytes_io, bool in_isr) {
+   return true;
+ }
+ 
++bool tud_msc_async_read10_done_in_task(void const* data, int32_t bytes_io) {
++  TU_VERIFY(_mscd_itf.pending_io && _mscd_itf.cbw.command[0] == SCSI_CMD_READ_10);
++  if (bytes_io > 0) {
++    memcpy(_mscd_epbuf.buf, data, (size_t) bytes_io);
++  } else {
++    bytes_io = TUD_MSC_RET_ERROR;
++  }
++  proc_async_io_done((void *) (intptr_t) bytes_io);
++  return true;
++}
++
+ //--------------------------------------------------------------------+
+ // USBD Driver API
+ //--------------------------------------------------------------------+
+@@ -397,6 +408,9 @@ static void proc_bot_reset(mscd_interface_t* p_msc) {
+   p_msc->sense_key           = 0;
+   p_msc->add_sense_code      = 0;
+   p_msc->add_sense_qualifier = 0;
++  // The reset ends the command, so a late tud_msc_async_io_done() for it
++  // must not complete the command that follows.
++  p_msc->pending_io = 0;
+ }
+ 
+ // Invoked when a control transfer occurred on an interface of this class
+diff --git a/managed_components/espressif__tinyusb/src/class/msc/msc_device.h b/managed_components/espressif__tinyusb/src/class/msc/msc_device.h
+--- a/managed_components/espressif__tinyusb/src/class/msc/msc_device.h
++++ b/managed_components/espressif__tinyusb/src/class/msc/msc_device.h
+@@ -69,6 +69,12 @@ bool tud_msc_set_sense(uint8_t lun, uint8_t sense_key, uint8_t add_sense_code, u
+ // TUD_MSC_RET_ERROR (-1) for error. Note TUD_MSC_RET_BUSY (0) will be treated as error as well.
+ bool tud_msc_async_io_done(int32_t bytes_io, bool in_isr);
+ 
++// Called by Application from TinyUSB's task to complete a pending asynchronous
++// READ(10) at once: copies bytes_io bytes of data into the class buffer and
++// sends them, or fails the command when bytes_io is not positive. Returns
++// false, and copies nothing, when no READ(10) waits (a bus or BOT reset ended it).
++bool tud_msc_async_read10_done_in_task(void const* data, int32_t bytes_io);
++
+ //--------------------------------------------------------------------+
+ // Application Callbacks (WEAK is optional)
+ //--------------------------------------------------------------------+

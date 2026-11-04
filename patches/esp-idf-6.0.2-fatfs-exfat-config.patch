@@ -1,0 +1,49 @@
+diff --git a/components/fatfs/Kconfig b/components/fatfs/Kconfig
+index b800e6174..b2ea4205c 100644
+--- a/components/fatfs/Kconfig
++++ b/components/fatfs/Kconfig
+@@ -22,5 +22,14 @@ menu "FAT Filesystem support"
+         config FATFS_LFN_STACK
+             bool "Long filename buffer on stack"
+     endchoice
++
++    config FATFS_EXFAT
++        bool "Enable exFAT and 64-bit file offsets"
++        default n
++        depends on !FATFS_LFN_NONE
++        help
++            Enable exFAT filesystem support. FatFs uses a 64-bit FSIZE_t when
++            this option is enabled, allowing files larger than 4 GiB.
++
+     choice FATFS_SECTOR_SIZE
+         prompt "Sector size"
+diff --git a/components/fatfs/src/ffconf.h b/components/fatfs/src/ffconf.h
+index 082067d48..3611991cb 100644
+--- a/components/fatfs/src/ffconf.h
++++ b/components/fatfs/src/ffconf.h
+@@ -52,7 +52,11 @@
+ /  (0:Disable or 1:Enable) Also FF_FS_READONLY needs to be 0 to enable this option. */
+ 
+ 
+-#define FF_USE_LABEL	CONFIG_FATFS_USE_LABEL
++#ifdef CONFIG_FATFS_USE_LABEL
++#define FF_USE_LABEL	1
++#else
++#define FF_USE_LABEL	0
++#endif
+ /* This option switches volume label functions, f_getlabel() and f_setlabel().
+ /  (0:Disable or 1:Enable) */
+ 
+@@ -280,7 +284,11 @@
+ /  buffer in the filesystem object (FATFS) is used for the file data transfer. */
+ 
+ 
+-#define FF_FS_EXFAT		0
++#ifdef CONFIG_FATFS_EXFAT
++#define FF_FS_EXFAT		1
++#else
++#define FF_FS_EXFAT		0
++#endif
+ /* This option switches support for exFAT filesystem. (0:Disable or 1:Enable)
+ /  To enable exFAT, also LFN needs to be enabled. (FF_USE_LFN >= 1)
+ /  Note that enabling exFAT discards ANSI C (C89) compatibility. */

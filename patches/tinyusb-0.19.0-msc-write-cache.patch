@@ -1,0 +1,78 @@
+--- a/managed_components/espressif__tinyusb/src/class/msc/msc_device.h
++++ b/managed_components/espressif__tinyusb/src/class/msc/msc_device.h
+@@ -153,6 +153,11 @@
+ // Invoked to check if device is writable as part of SCSI WRITE10
+ bool tud_msc_is_writable_cb(uint8_t lun);
+ 
++// Invoked to advertise a volatile write-back cache in MODE SENSE(6).
++// When true, the application must implement SYNCHRONIZE CACHE and make all
++// previously acknowledged writes durable before returning success.
++bool tud_msc_has_write_cache_cb(uint8_t lun);
++
+ //--------------------------------------------------------------------+
+ // Internal Class Driver API
+ //--------------------------------------------------------------------+
+--- a/managed_components/espressif__tinyusb/src/class/msc/msc_device.c
++++ b/managed_components/espressif__tinyusb/src/class/msc/msc_device.c
+@@ -270,6 +270,11 @@
+   return true;
+ }
+ 
++TU_ATTR_WEAK bool tud_msc_has_write_cache_cb(uint8_t lun) {
++  (void) lun;
++  return false;
++}
++
+ //--------------------------------------------------------------------+
+ // Debug
+ //--------------------------------------------------------------------+
+@@ -793,19 +798,39 @@
+     break;
+ 
+     case SCSI_CMD_MODE_SENSE_6: {
+-      scsi_mode_sense6_resp_t mode_resp = {
+-        .data_len = 3,
+-        .medium_type = 0,
+-        .write_protected = false,
+-        .reserved = 0,
+-        .block_descriptor_len = 0 // no block descriptor are included
++      struct TU_ATTR_PACKED {
++        scsi_mode_sense6_resp_t header;
++        uint8_t page_code;
++        uint8_t page_length;
++        uint8_t flags;
++        uint8_t reserved[17];
++      } mode_resp = {
++        .header.data_len = 3,
++        .header.medium_type = 0,
++        .header.write_protected = false,
++        .header.reserved = 0,
++        .header.block_descriptor_len = 0 // no block descriptor are included
+       };
+ 
+       bool writable = tud_msc_is_writable_cb(lun);
+-
+-      mode_resp.write_protected = !writable;
+-
+-      resplen = sizeof(mode_resp);
++      bool has_write_cache = tud_msc_has_write_cache_cb(lun);
++      uint8_t page_control = (uint8_t) (scsi_cmd[2] >> 6);
++      uint8_t page_code = (uint8_t) (scsi_cmd[2] & 0x3f);
++      bool include_cache_page =
++        scsi_cmd[3] == 0 && (page_code == 0x08 || page_code == 0x3f);
++
++      mode_resp.header.write_protected = !writable;
++      if (include_cache_page) {
++        mode_resp.header.data_len = sizeof(mode_resp) - 1;
++        mode_resp.page_code = 0x08;
++        mode_resp.page_length = 0x12;
++        // PC=1 requests the changeable mask. MODE SELECT is unsupported, so
++        // no cache field is changeable even though current/default WCE is 1.
++        mode_resp.flags = (has_write_cache && page_control != 1) ? 0x04 : 0;
++        resplen = sizeof(mode_resp);
++      } else {
++        resplen = sizeof(mode_resp.header);
++      }
+       TU_VERIFY(0 == tu_memcpy_s(buffer, bufsize, &mode_resp, (size_t) resplen));
+     }
+     break;

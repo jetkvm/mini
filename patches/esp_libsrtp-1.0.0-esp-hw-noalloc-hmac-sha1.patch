@@ -1,0 +1,281 @@
+diff --git a/managed_components/espressif__esp_libsrtp/CMakeLists.txt b/managed_components/espressif__esp_libsrtp/CMakeLists.txt
+index 14ed4e1..44c783f 100644
+--- a/managed_components/espressif__esp_libsrtp/CMakeLists.txt
++++ b/managed_components/espressif__esp_libsrtp/CMakeLists.txt
+@@ -24,6 +24,12 @@ list(APPEND HASHES_SOURCES_C
+   libsrtp/crypto/hash/auth_test_cases.c
+ )
+ 
++# Use the ESP32-P4 SHA-1 accelerator without the generic PSA HMAC layer.  The
++# auth state owns DMA-capable SHA contexts, so the HMAC backend performs no
++# packet-time allocation while leaving the AES implementation unchanged.
++list(REMOVE_ITEM HASHES_SOURCES_C libsrtp/crypto/hash/hmac_mbedtls.c)
++list(APPEND HASHES_SOURCES_C libsrtp/crypto/hash/hmac_esp_sha1.c)
++
+ set(KERNEL_SOURCES_C
+   libsrtp/crypto/kernel/alloc.c
+   libsrtp/crypto/kernel/crypto_kernel.c
+@@ -56,5 +62,5 @@ set(SRTP_INCLUDE_DIRS
+ )
+ 
+ idf_component_register(SRCS ${SRTP_SRCS} INCLUDE_DIRS ${SRTP_INCLUDE_DIRS}
+-                       PRIV_REQUIRES mbedtls)
++                       PRIV_REQUIRES heap mbedtls esp_hal_security)
+ target_compile_definitions(${COMPONENT_LIB} PUBLIC "-DHAVE_CONFIG_H" PRIVATE ESP_AES)
+diff --git a/managed_components/espressif__esp_libsrtp/libsrtp/crypto/hash/hmac_esp_sha1.c b/managed_components/espressif__esp_libsrtp/libsrtp/crypto/hash/hmac_esp_sha1.c
+new file mode 100644
+index 0000000..8fe21ad
+--- /dev/null
++++ b/managed_components/espressif__esp_libsrtp/libsrtp/crypto/hash/hmac_esp_sha1.c
+@@ -0,0 +1,251 @@
++/*
++ * HMAC-SHA1 authentication for ESP32-P4 using the ESP-IDF SHA driver.
++ *
++ * The generic Mbed TLS 4 HMAC path creates PSA hash operations for every
++ * packet.  ESP-IDF backs each such operation with a DMA-capable heap
++ * allocation.  SRTP authenticates every RTP packet, so those allocations are
++ * both avoidable overhead and a failure mode when the internal heap is tight.
++ *
++ * This implementation allocates all SHA contexts once with the auth session,
++ * precomputes the HMAC ipad/opad states, and copies those states into a single
++ * working context for each packet.  The HMAC backend itself performs no
++ * packet-time allocation.  ESP-IDF's SHA DMA driver can still use a temporary
++ * bounce allocation when encrypted external memory is enabled and the input
++ * is not suitably aligned; that configuration is outside this backend's
++ * control and is not enabled by the current P4 firmware.
++ */
++
++#ifdef HAVE_CONFIG_H
++#include <config.h>
++#endif
++
++#include <string.h>
++
++#include "alloc.h"
++#include "auth.h"
++#include "auth_test_cases.h"
++#include "err.h"
++
++#include "esp_heap_caps.h"
++#include "psa_crypto_driver_esp_sha.h"
++#include "sdkconfig.h"
++#include "soc/soc_caps.h"
++
++#define SHA1_BLOCK_SIZE 64
++#define SHA1_DIGEST_SIZE 20
++
++#if !CONFIG_IDF_TARGET_ESP32P4
++#error "hmac_esp_sha1.c is an ESP32-P4-specific libsrtp backend"
++#endif
++
++#if !CONFIG_MBEDTLS_HARDWARE_SHA || !SOC_SHA_SUPPORTED ||                  \
++    !SOC_SHA_SUPPORT_SHA1
++#error "hmac_esp_sha1.c requires the ESP hardware SHA-1 driver"
++#endif
++
++/* A parallel-engine context can own a live hardware lock across update calls
++ * and therefore cannot be cloned with memcpy.  ESP32-P4 uses the core driver,
++ * which snapshots digest state and releases the hardware on every call. */
++#if CONFIG_SOC_SHA_SUPPORT_PARALLEL_ENG
++#error "hmac_esp_sha1.c requires the lock-free core SHA context model"
++#endif
++
++typedef struct {
++    /* All contexts must remain in internal DMA-capable memory.  In particular,
++     * esp_sha1_update() may pass ctx->buffer to esp_sha_dma() when a partial
++     * block precedes a packet-sized DMA operation. */
++    esp_sha1_context inner_seed;
++    esp_sha1_context outer_seed;
++    esp_sha1_context work;
++    uint8_t digest[SHA1_DIGEST_SIZE];
++} srtp_hmac_esp_sha1_ctx_t;
++
++srtp_debug_module_t srtp_mod_hmac = {
++    false,
++    "hmac sha-1 esp32-p4 hardware"
++};
++
++static srtp_err_status_t srtp_hmac_esp_sha1_alloc(srtp_auth_t **a,
++                                                  size_t key_len,
++                                                  size_t out_len)
++{
++    extern const srtp_auth_type_t srtp_hmac;
++    srtp_hmac_esp_sha1_ctx_t *state;
++
++    /* The SRTP AES-CM/HMAC-SHA1 profiles derive an exact 160-bit auth key.
++     * Keep libsrtp's existing backend contract instead of accepting general
++     * HMAC keys that would require the RFC 2104 long-key reduction path. */
++    if (a == NULL || key_len > SHA1_DIGEST_SIZE ||
++        out_len > SHA1_DIGEST_SIZE) {
++        return srtp_err_status_bad_param;
++    }
++
++    *a = (srtp_auth_t *)srtp_crypto_alloc(sizeof(srtp_auth_t));
++    if (*a == NULL) {
++        return srtp_err_status_alloc_fail;
++    }
++
++    state = (srtp_hmac_esp_sha1_ctx_t *)heap_caps_calloc(
++        1, sizeof(*state),
++        MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
++    if (state == NULL) {
++        srtp_crypto_free(*a);
++        *a = NULL;
++        return srtp_err_status_alloc_fail;
++    }
++
++    (*a)->type = &srtp_hmac;
++    (*a)->state = state;
++    (*a)->out_len = out_len;
++    (*a)->key_len = key_len;
++    (*a)->prefix_len = 0;
++
++    return srtp_err_status_ok;
++}
++
++static srtp_err_status_t srtp_hmac_esp_sha1_dealloc(srtp_auth_t *a)
++{
++    if (a == NULL) {
++        return srtp_err_status_bad_param;
++    }
++
++    if (a->state != NULL) {
++        octet_string_set_to_zero(a->state,
++                                 sizeof(srtp_hmac_esp_sha1_ctx_t));
++        heap_caps_free(a->state);
++    }
++
++    octet_string_set_to_zero(a, sizeof(*a));
++    srtp_crypto_free(a);
++    return srtp_err_status_ok;
++}
++
++static srtp_err_status_t srtp_hmac_esp_sha1_start(void *statev)
++{
++    srtp_hmac_esp_sha1_ctx_t *state =
++        (srtp_hmac_esp_sha1_ctx_t *)statev;
++
++    if (state == NULL) {
++        return srtp_err_status_bad_param;
++    }
++
++    memcpy(&state->work, &state->inner_seed, sizeof(state->work));
++    return srtp_err_status_ok;
++}
++
++static srtp_err_status_t srtp_hmac_esp_sha1_init(void *statev,
++                                                 const uint8_t *key,
++                                                 size_t key_len)
++{
++    srtp_hmac_esp_sha1_ctx_t *state =
++        (srtp_hmac_esp_sha1_ctx_t *)statev;
++    uint8_t ipad[SHA1_BLOCK_SIZE];
++    uint8_t opad[SHA1_BLOCK_SIZE];
++    srtp_err_status_t status = srtp_err_status_auth_fail;
++
++    /* See alloc(): libsrtp's SRTP profile supplies at most a 160-bit key. */
++    if (state == NULL || key_len > SHA1_DIGEST_SIZE ||
++        (key == NULL && key_len != 0)) {
++        return srtp_err_status_bad_param;
++    }
++
++    memset(ipad, 0x36, sizeof(ipad));
++    memset(opad, 0x5c, sizeof(opad));
++    for (size_t i = 0; i < key_len; ++i) {
++        ipad[i] ^= key[i];
++        opad[i] ^= key[i];
++    }
++
++    if (esp_sha1_starts(&state->inner_seed) != 0 ||
++        esp_sha1_update(&state->inner_seed, ipad, sizeof(ipad)) != 0 ||
++        esp_sha1_starts(&state->outer_seed) != 0 ||
++        esp_sha1_update(&state->outer_seed, opad, sizeof(opad)) != 0) {
++        goto out;
++    }
++
++    memcpy(&state->work, &state->inner_seed, sizeof(state->work));
++    status = srtp_err_status_ok;
++
++out:
++    if (status != srtp_err_status_ok) {
++        octet_string_set_to_zero(state, sizeof(*state));
++    }
++    octet_string_set_to_zero(ipad, sizeof(ipad));
++    octet_string_set_to_zero(opad, sizeof(opad));
++    return status;
++}
++
++static srtp_err_status_t srtp_hmac_esp_sha1_update(void *statev,
++                                                   const uint8_t *message,
++                                                   size_t msg_octets)
++{
++    srtp_hmac_esp_sha1_ctx_t *state =
++        (srtp_hmac_esp_sha1_ctx_t *)statev;
++
++    if (state == NULL || (message == NULL && msg_octets != 0)) {
++        return srtp_err_status_bad_param;
++    }
++
++    debug_print(srtp_mod_hmac, "input: %s",
++                srtp_octet_string_hex_string(message, msg_octets));
++
++    if (esp_sha1_update(&state->work, message, msg_octets) != 0) {
++        return srtp_err_status_auth_fail;
++    }
++    return srtp_err_status_ok;
++}
++
++static srtp_err_status_t srtp_hmac_esp_sha1_compute(void *statev,
++                                                    const uint8_t *message,
++                                                    size_t msg_octets,
++                                                    size_t tag_len,
++                                                    uint8_t *result)
++{
++    srtp_hmac_esp_sha1_ctx_t *state =
++        (srtp_hmac_esp_sha1_ctx_t *)statev;
++    srtp_err_status_t status = srtp_err_status_auth_fail;
++
++    if (state == NULL || tag_len > SHA1_DIGEST_SIZE ||
++        (message == NULL && msg_octets != 0) ||
++        (result == NULL && tag_len != 0)) {
++        return srtp_err_status_bad_param;
++    }
++
++    if (esp_sha1_update(&state->work, message, msg_octets) != 0 ||
++        esp_sha1_finish(&state->work, state->digest) != 0) {
++        goto out;
++    }
++
++    memcpy(&state->work, &state->outer_seed, sizeof(state->work));
++    if (esp_sha1_update(&state->work, state->digest,
++                        sizeof(state->digest)) != 0 ||
++        esp_sha1_finish(&state->work, state->digest) != 0) {
++        goto out;
++    }
++
++    if (tag_len != 0) {
++        memcpy(result, state->digest, tag_len);
++    }
++    debug_print(srtp_mod_hmac, "output: %s",
++                srtp_octet_string_hex_string(state->digest, tag_len));
++    status = srtp_err_status_ok;
++
++out:
++    octet_string_set_to_zero(state->digest, sizeof(state->digest));
++    return status;
++}
++
++static const char srtp_hmac_esp_sha1_description[] =
++    "hmac sha-1 authentication using ESP32-P4 hardware SHA";
++
++const srtp_auth_type_t srtp_hmac = {
++    srtp_hmac_esp_sha1_alloc,
++    srtp_hmac_esp_sha1_dealloc,
++    srtp_hmac_esp_sha1_init,
++    srtp_hmac_esp_sha1_compute,
++    srtp_hmac_esp_sha1_update,
++    srtp_hmac_esp_sha1_start,
++    srtp_hmac_esp_sha1_description,
++    &srtp_hmac_test_case_0,
++    SRTP_HMAC_SHA1
++};

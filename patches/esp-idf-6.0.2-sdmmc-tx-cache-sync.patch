@@ -1,0 +1,13 @@
+diff --git a/components/esp_driver_sdmmc/src/sd_trans_sdmmc.c b/components/esp_driver_sdmmc/src/sd_trans_sdmmc.c
+index ce4a2736..12a621ca 100644
+--- a/components/esp_driver_sdmmc/src/sd_trans_sdmmc.c
++++ b/components/esp_driver_sdmmc/src/sd_trans_sdmmc.c
+@@ -574,7 +574,7 @@ esp_err_t sd_host_slot_sdmmc_do_transaction(sd_host_slot_handle_t slot, sdmmc_c
+     slot_ctx->ctlr->is_app_cmd = (ret == ESP_OK && cmdinfo->opcode == MMC_APP_CMD);
+ 
+ #if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
+-    if (cmdinfo->data) {
++    if (cmdinfo->data && (cmdinfo->flags & SCF_CMD_READ)) {
+         ret = esp_cache_msync((void *)cmdinfo->data, cache_sync_len, ESP_CACHE_MSYNC_FLAG_DIR_M2C);
+         if (ret != ESP_OK) {
+             goto out;

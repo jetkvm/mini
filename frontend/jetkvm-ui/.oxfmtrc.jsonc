@@ -1,0 +1,13 @@
+{
+  "trailingComma": "all",
+  "tabWidth": 2,
+  "semi": true,
+  "useTabs": false,
+  "arrowParens": "avoid",
+  "singleQuote": false,
+  "printWidth": 100,
+  "sortTailwindcss": {
+    "functions": ["clsx", "cx"],
+    "stylesheet": "./src/index.css",
+  },
+}

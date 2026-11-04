@@ -1,0 +1,111 @@
+--- a/managed_components/espressif__esp_h264/hw/include/esp_h264_enc_single_hw.h
++++ b/managed_components/espressif__esp_h264/hw/include/esp_h264_enc_single_hw.h
+@@ -6,6 +6,7 @@
+ 
+ #pragma once
+ 
++#include <stddef.h>
+ #include "esp_h264_enc_single.h"
+ #include "esp_h264_enc_param_hw.h"
+ 
+@@ -46,6 +47,23 @@
+  */
+ esp_h264_err_t esp_h264_enc_hw_get_param_hd(esp_h264_enc_handle_t enc, esp_h264_enc_param_hw_handle_t *out_param);
+ 
++/**
++ * @brief  Give the hardware encoder a de-blocking (DB) store that the caller owns
++ *
++ * @note  Every encoder created afterwards uses this store instead of allocating
++ *        its DB buffer, zeroes it when it is created and does not free it. One
++ *        encoder at a time can use the store. Call this before the encoder is
++ *        created; NULL and 0 go back to per-encoder allocation.
++ *
++ * @param[in]  buffer  Cache-aligned PSRAM of `size` bytes, or NULL
++ * @param[in]  size    At least the DB size of the largest resolution to encode
++ *
++ * @return
++ *       - ESP_H264_ERR_OK   Succeeded
++ *       - ESP_H264_ERR_ARG  Invalid arguments, or an encoder uses the store now
++ */
++esp_h264_err_t esp_h264_enc_hw_set_db_pool(void *buffer, size_t size);
++
+ #ifdef __cplusplus
+ }
+ #endif
+--- a/managed_components/espressif__esp_h264/hw/src/esp_h264_enc_hw_param.c
++++ b/managed_components/espressif__esp_h264/hw/src/esp_h264_enc_hw_param.c
+@@ -45,6 +45,7 @@
+     uint8_t                   *mvm_buf;
+     uint32_t                   mvm_buf_len;
+     uint8_t                   *db;
++    bool                       db_uses_pool;
+     uint8_t                   *ref;
+     bool                       ref_uses_static_pool;
+     h264_dma_desc_t           *dsc_ref;
+@@ -59,6 +60,24 @@
+ 
+ static esp_h264_param_t *s_reference_pool_owner;
+ 
++/* A caller-owned DB store that outlives the encoder. When it is set, opening
++ * an encoder takes it instead of allocating 1.4-3.1 MB of PSRAM, so a change
++ * of resolution neither frees nor requests that block again. */
++static uint8_t *s_db_pool;
++static size_t s_db_pool_size;
++static esp_h264_param_t *s_db_pool_owner;
++
++esp_h264_err_t esp_h264_enc_hw_set_db_pool(void *buffer, size_t size)
++{
++    ESP_H264_RET_ON_FALSE((buffer == NULL) == (size == 0U), ESP_H264_ERR_ARG,
++                          TAG, "Invalid DB pool");
++    ESP_H264_RET_ON_FALSE(__atomic_load_n(&s_db_pool_owner, __ATOMIC_ACQUIRE) == NULL,
++                          ESP_H264_ERR_ARG, TAG, "DB pool is in use");
++    s_db_pool = (uint8_t *)buffer;
++    s_db_pool_size = size;
++    return ESP_H264_ERR_OK;
++}
++
+ #if HAL_CONFIG(CHIP_SUPPORT_MIN_REV) >= 300
+ 
+ static h264_dma_pbyte_t esp_h264_get_pbyte_by_pic_type(esp_h264_raw_format_t pic_type)
+@@ -332,7 +351,14 @@
+         } else if (param->ref) {
+             esp_h264_free(param->ref);
+         }
+-        if (param->db) {
++        if (param->db_uses_pool) {
++            esp_h264_param_t *expected_db_owner = param;
++            __atomic_compare_exchange_n(
++                &s_db_pool_owner, &expected_db_owner, NULL, false,
++                __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
++            param->db = NULL;
++            param->db_uses_pool = false;
++        } else if (param->db) {
+             esp_h264_free(param->db);
+         }
+         if (param->dsc_ref) {
+@@ -405,7 +431,24 @@
+     param->ref_uses_static_pool = true;
+     memset(param->ref, 0, sizeof(s_reference_pool));
+     /* DB is valid in cached PSRAM and must not consume scarce internal SRAM. */
+-    param->db = (uint8_t *)esp_h264_aligned_calloc(4, 1, max_db_buffer_size(param->mb_width, param->mb_height), &actual_size, ESP_H264_MEM_SPIRAM);
++    const uint32_t db_size = max_db_buffer_size(param->mb_width, param->mb_height);
++    if (s_db_pool != NULL) {
++        esp_h264_param_t *expected_db_owner = NULL;
++        bool db_pool_claimed = __atomic_compare_exchange_n(
++            &s_db_pool_owner, &expected_db_owner, param, false,
++            __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
++        ESP_H264_GOTO_ON_FALSE(db_pool_claimed, ESP_H264_ERR_MEM, __exit__, TAG,
++                               "DB pool is already in use");
++        param->db_uses_pool = true;
++        ESP_H264_GOTO_ON_FALSE(db_size <= s_db_pool_size, ESP_H264_ERR_MEM, __exit__,
++                               TAG, "DB pool is too small");
++        param->db = s_db_pool;
++        /* The allocation this replaces was zeroed and written back. */
++        memset(param->db, 0, s_db_pool_size);
++        esp_h264_cache_check_and_writeback(param->db, s_db_pool_size);
++    } else {
++        param->db = (uint8_t *)esp_h264_aligned_calloc(4, 1, db_size, &actual_size, ESP_H264_MEM_SPIRAM);
++    }
+     ESP_H264_GOTO_ON_FALSE(param->db, ESP_H264_ERR_MEM, __exit__, TAG, "No memory for data");
+ 
+     /** Allocated descriptor memory*/

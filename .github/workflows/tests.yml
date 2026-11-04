@@ -1,0 +1,88 @@
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host:
+    name: Host tests
+    runs-on: ubuntu-24.04
+    container:
+      image: espressif/idf:v6.0.2
+      # The runner logs in to Docker Hub with the two secrets before it pulls
+      # the image: Docker Hub limits the pulls without a login per address,
+      # and the hosted runners share their addresses. A run that has no
+      # secrets (a pull request from a fork) gets an empty map and pulls
+      # without a login. The map is built here because the runner rejects the
+      # job when `username` or `password` is an empty string.
+      credentials: >-
+        ${{ fromJSON(secrets.DOCKERHUB_USERNAME && secrets.DOCKERHUB_TOKEN
+        && format('{{"username":{0},"password":{1}}}', toJSON(secrets.DOCKERHUB_USERNAME), toJSON(secrets.DOCKERHUB_TOKEN))
+        || '{}') }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install host test dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends libssl-dev zlib1g-dev iproute2 nodejs jq xorriso genisoimage
+      - name: Configure the firmware
+        # Downloads the managed components, applies the project's patches and
+        # writes the sdkconfig that the static tests read. A fresh build
+        # directory can stop once with "Run the build again" (CMakeLists.txt).
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh" > /dev/null
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          python3 -m pip install --quiet pillow pyserial jinja2
+          # components/web_app refuses to configure without a built UI. The
+          # host tests do not read it, so a placeholder page is enough here;
+          # the frontend job builds the real one.
+          mkdir -p frontend/jetkvm-ui/dist-p4
+          echo '<!doctype html><title>host tests</title>' > frontend/jetkvm-ui/dist-p4/index.html
+          idf.py -B build-ci reconfigure || idf.py -B build-ci reconfigure
+      - name: Run the host tests
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh" > /dev/null
+          export SDKCONFIG="$(ls build-ci/sdkconfig.jetkvm-*)"
+          export JETKVM_TEST_TOOLCHAIN_BIN="$(dirname "$(command -v riscv32-esp-elf-objcopy)")"
+          tools/run_all_tests.sh
+
+  frontend:
+    name: UI and e2e suite checks
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: frontend/jetkvm-ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.21.1
+          cache: npm
+          cache-dependency-path: frontend/jetkvm-ui/package-lock.json
+      - run: npm ci
+        env:
+          HUSKY: 0
+      - name: Lint and build the device UI
+        run: |
+          npm run lint
+          npm run build:device -- --outDir dist-p4
+      - name: Typecheck and lint the e2e suite
+        run: |
+          npx tsc -p tsconfig.e2e.json --noEmit
+          npx oxlint --deny-warnings e2e
+          npx oxfmt --check e2e/mini
+      - name: Unit-test the e2e video watch
+        run: node --test e2e/helpers/video-freeze.unit.ts
+      - name: Unit-test the upload time estimate
+        run: node --test tests/upload-eta.mjs

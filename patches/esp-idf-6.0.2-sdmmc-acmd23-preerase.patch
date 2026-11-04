@@ -1,0 +1,206 @@
+diff --git a/components/sdmmc/include/sd_protocol_defs.h b/components/sdmmc/include/sd_protocol_defs.h
+index ba0c32f8..c8050b2c 100644
+--- a/components/sdmmc/include/sd_protocol_defs.h
++++ b/components/sdmmc/include/sd_protocol_defs.h
+@@ -71,9 +71,12 @@ extern "C" {
+ #define SD_APP_SET_BUS_WIDTH            6       /* R1 */
+ #define SD_APP_SD_STATUS                13      /* R2 */
+ #define SD_APP_SEND_NUM_WR_BLOCKS       22      /* R1 */
++#define SD_APP_SET_WR_BLK_ERASE_COUNT   23      /* R1 */
+ #define SD_APP_OP_COND                  41      /* R3 */
+ #define SD_APP_SEND_SCR                 51      /* R1 */
+ 
++#define SD_APP_SET_WR_BLK_ERASE_COUNT_MAX 0x007FFFFFU
++
+ /* SD IO commands */
+ #define SD_IO_SEND_OP_COND              5       /* R4 */
+ #define SD_IO_RW_DIRECT                 52      /* R5 */
+diff --git a/components/sdmmc/include/sdmmc_cmd.h b/components/sdmmc/include/sdmmc_cmd.h
+index 487edf98..5b5c05eb 100644
+--- a/components/sdmmc/include/sdmmc_cmd.h
++++ b/components/sdmmc/include/sdmmc_cmd.h
+@@ -6,6 +6,8 @@
+ 
+ #pragma once
+ 
++#include <stdbool.h>
++#include <stdint.h>
+ #include <stdio.h>
+ #include "esp_err.h"
+ #include "sd_protocol_types.h"
+@@ -66,6 +68,33 @@ esp_err_t sdmmc_get_status(sdmmc_card_t* card);
+ esp_err_t sdmmc_write_sectors(sdmmc_card_t* card, const void* src,
+         size_t start_sector, size_t sector_count);
+ 
++/** Runtime telemetry for the optional SD ACMD23 pre-erase hint experiment. */
++typedef struct {
++    bool enabled;
++    bool unsupported_latched;
++    uint32_t attempts;
++    uint32_t successes;
++    uint32_t unsupported;
++    uint32_t failures;
++    uint32_t last_block_count;
++    esp_err_t last_error;
++} sdmmc_acmd23_stats_t;
++
++/**
++ * Globally enable or disable ACMD23 before native-SD multi-block writes.
++ *
++ * Disabled is the reset default. MMC, SPI-mode, and single-block writes are
++ * never affected. ESP_ERR_NOT_SUPPORTED is counted and latched as a fallback;
++ * all other command errors are returned to the write caller.
++ */
++void sdmmc_acmd23_set_enabled(bool enabled);
++
++/** Reset counters and the unsupported-card latch without changing enablement. */
++void sdmmc_acmd23_reset_stats(void);
++
++/** Copy an atomic-field snapshot of the ACMD23 experiment. */
++esp_err_t sdmmc_acmd23_get_stats(sdmmc_acmd23_stats_t *out_stats);
++
+ /**
+  * Read given number of sectors from the SD/MMC card
+  *
+diff --git a/components/sdmmc/sdmmc_cmd.c b/components/sdmmc/sdmmc_cmd.c
+index 3b652ee3..b42ea793 100644
+--- a/components/sdmmc/sdmmc_cmd.c
++++ b/components/sdmmc/sdmmc_cmd.c
+@@ -5,12 +5,114 @@
+  */
+ 
+ #include <inttypes.h>
++#include <stdatomic.h>
+ #include "freertos/FreeRTOS.h"
+ #include <sys/param.h> // for MIN/MAX
+ #include "esp_private/sdmmc_common.h"
+ 
+ static const char* TAG = "sdmmc_cmd";
+ 
++static atomic_bool s_acmd23_enabled = ATOMIC_VAR_INIT(false);
++static atomic_bool s_acmd23_unsupported_latched = ATOMIC_VAR_INIT(false);
++static atomic_uint_least32_t s_acmd23_attempts = ATOMIC_VAR_INIT(0);
++static atomic_uint_least32_t s_acmd23_successes = ATOMIC_VAR_INIT(0);
++static atomic_uint_least32_t s_acmd23_unsupported = ATOMIC_VAR_INIT(0);
++static atomic_uint_least32_t s_acmd23_failures = ATOMIC_VAR_INIT(0);
++static atomic_uint_least32_t s_acmd23_last_block_count = ATOMIC_VAR_INIT(0);
++static atomic_int_least32_t s_acmd23_last_error = ATOMIC_VAR_INIT(ESP_OK);
++
++void sdmmc_acmd23_set_enabled(bool enabled)
++{
++    atomic_store_explicit(&s_acmd23_enabled, enabled, memory_order_relaxed);
++}
++
++void sdmmc_acmd23_reset_stats(void)
++{
++    atomic_store_explicit(&s_acmd23_unsupported_latched, false,
++                          memory_order_relaxed);
++    atomic_store_explicit(&s_acmd23_attempts, 0, memory_order_relaxed);
++    atomic_store_explicit(&s_acmd23_successes, 0, memory_order_relaxed);
++    atomic_store_explicit(&s_acmd23_unsupported, 0, memory_order_relaxed);
++    atomic_store_explicit(&s_acmd23_failures, 0, memory_order_relaxed);
++    atomic_store_explicit(&s_acmd23_last_block_count, 0, memory_order_relaxed);
++    atomic_store_explicit(&s_acmd23_last_error, ESP_OK, memory_order_relaxed);
++}
++
++esp_err_t sdmmc_acmd23_get_stats(sdmmc_acmd23_stats_t *out_stats)
++{
++    if (out_stats == NULL) {
++        return ESP_ERR_INVALID_ARG;
++    }
++    *out_stats = (sdmmc_acmd23_stats_t) {
++        .enabled = atomic_load_explicit(&s_acmd23_enabled,
++                                        memory_order_relaxed),
++        .unsupported_latched = atomic_load_explicit(
++            &s_acmd23_unsupported_latched, memory_order_relaxed),
++        .attempts = atomic_load_explicit(&s_acmd23_attempts,
++                                         memory_order_relaxed),
++        .successes = atomic_load_explicit(&s_acmd23_successes,
++                                          memory_order_relaxed),
++        .unsupported = atomic_load_explicit(&s_acmd23_unsupported,
++                                            memory_order_relaxed),
++        .failures = atomic_load_explicit(&s_acmd23_failures,
++                                         memory_order_relaxed),
++        .last_block_count = atomic_load_explicit(
++            &s_acmd23_last_block_count, memory_order_relaxed),
++        .last_error = atomic_load_explicit(&s_acmd23_last_error,
++                                           memory_order_relaxed),
++    };
++    return ESP_OK;
++}
++
++static esp_err_t sdmmc_send_acmd23_preerase(sdmmc_card_t *card,
++                                             size_t block_count)
++{
++    if (!atomic_load_explicit(&s_acmd23_enabled, memory_order_relaxed) ||
++        atomic_load_explicit(&s_acmd23_unsupported_latched,
++                             memory_order_relaxed)) {
++        return ESP_OK;
++    }
++
++    atomic_fetch_add_explicit(&s_acmd23_attempts, 1, memory_order_relaxed);
++    atomic_store_explicit(
++        &s_acmd23_last_block_count,
++        block_count > UINT32_MAX ? UINT32_MAX : (uint32_t)block_count,
++        memory_order_relaxed);
++    if (block_count > SD_APP_SET_WR_BLK_ERASE_COUNT_MAX) {
++        atomic_fetch_add_explicit(&s_acmd23_failures, 1,
++                                  memory_order_relaxed);
++        atomic_store_explicit(&s_acmd23_last_error, ESP_ERR_INVALID_SIZE,
++                              memory_order_relaxed);
++        return ESP_ERR_INVALID_SIZE;
++    }
++
++    sdmmc_command_t cmd = {
++        .opcode = SD_APP_SET_WR_BLK_ERASE_COUNT,
++        .arg = (uint32_t)block_count,
++        .flags = SCF_CMD_AC | SCF_RSP_R1,
++    };
++    esp_err_t err = sdmmc_send_app_cmd(card, &cmd);
++    atomic_store_explicit(&s_acmd23_last_error, err, memory_order_relaxed);
++    if (err == ESP_OK) {
++        atomic_fetch_add_explicit(&s_acmd23_successes, 1,
++                                  memory_order_relaxed);
++        return ESP_OK;
++    }
++    if (err == ESP_ERR_NOT_SUPPORTED) {
++        atomic_fetch_add_explicit(&s_acmd23_unsupported, 1,
++                                  memory_order_relaxed);
++        atomic_store_explicit(&s_acmd23_unsupported_latched, true,
++                              memory_order_relaxed);
++        ESP_LOGW(TAG,
++                 "SD ACMD23 unsupported; continuing without pre-erase hints");
++        return ESP_OK;
++    }
++
++    atomic_fetch_add_explicit(&s_acmd23_failures, 1, memory_order_relaxed);
++    ESP_LOGE(TAG, "SD ACMD23 failed for %zu blocks: 0x%x", block_count, err);
++    return err;
++}
++
+ /**
+  * @brief Get the effective chunk size for unaligned multi-block transfers.
+  *
+@@ -555,6 +657,13 @@ esp_err_t sdmmc_write_sectors_dma(sdmmc_card_t* card, const void* src,
+         return ESP_ERR_INVALID_SIZE;
+     }
+     size_t block_size = card->csd.sector_size;
++    esp_err_t err = ESP_OK;
++    if (block_count > 1 && !card->is_mmc && !host_is_spi(card)) {
++        err = sdmmc_send_acmd23_preerase(card, block_count);
++        if (err != ESP_OK) {
++            return err;
++        }
++    }
+     sdmmc_command_t cmd = {
+             .flags = SCF_CMD_ADTC | SCF_RSP_R1,
+             .blklen = block_size,
+@@ -575,7 +684,7 @@ esp_err_t sdmmc_write_sectors_dma(sdmmc_card_t* card, const void* src,
+     }
+ 
+     uint32_t status = 0;
+-    esp_err_t err = sdmmc_send_cmd(card, &cmd);
++    err = sdmmc_send_cmd(card, &cmd);
+     esp_err_t err_cmd13 = sdmmc_send_cmd_send_status(card, &status);
+ 
+     if (err != ESP_OK) {

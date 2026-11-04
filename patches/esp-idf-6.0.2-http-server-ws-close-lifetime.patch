@@ -1,0 +1,29 @@
+--- a/components/esp_http_server/src/httpd_parse.c
++++ b/components/esp_http_server/src/httpd_parse.c
+@@ -738,7 +738,8 @@
+     /* Close the socket when a WebSocket Close request is received */
+     if (ra->sd->ws_close) {
+         ESP_LOGD(TAG, LOG_FMT("Try closing WS connection at FD: %d"), ra->sd->fd);
+-        httpd_sess_trigger_close(r->handle, ra->sd->fd);
++        /* httpd_sess_process retires this session after request cleanup.
++         * Do not queue a sock_db pointer that EOF/accept could reuse first. */
+     }
+ #endif
+
+--- a/components/esp_http_server/src/httpd_sess.c
++++ b/components/esp_http_server/src/httpd_sess.c
+@@ -434,6 +434,14 @@
+     if (httpd_req_delete(hd) != ESP_OK) {
+         return ESP_FAIL;
+     }
++#ifdef CONFIG_HTTPD_WS_SUPPORT
++    /* Cleanup has copied/freed the request context. Return to the HTTPD
++     * session loop to close this exact socket before accepting a replacement.
++     * A shutdown alone is insufficient: ws_close bypasses further reads. */
++    if (session->ws_close) {
++        return ESP_FAIL;
++    }
++#endif
+     ESP_LOGD(TAG, LOG_FMT("success"));
+     session->lru_counter = ++hd->lru_counter;
+     return ESP_OK;

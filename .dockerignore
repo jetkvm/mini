@@ -1,0 +1,15 @@
+# What the Dockerfile's build does not read. The version is a build argument,
+# so .git stays out.
+.git
+.claude
+.e2e-out
+/artifacts
+/build*
+/managed_components
+/sdkconfig
+/sdkconfig.old
+/core.*
+**/node_modules
+**/__pycache__
+frontend/jetkvm-ui/dist-p4
+frontend/jetkvm-ui/test-results

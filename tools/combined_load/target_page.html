@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>JetKVM combined load: target page</title>
+<!--
+  What the target computer shows and plays during a run of
+  tools/combined_load. The tool serves this file and opens it in
+  a browser window on the target computer. The file loads nothing else.
+
+  Picture: a dark page with one moving part, 960 by 540 pixels, at the
+  window's upper left corner:
+    - Eight coloured boxes, 60 by 50 pixels, one below the other. Each one
+      travels to the right at its own speed, 4 to 18 pixels per frame, and
+      starts again at the left. Their colours change with every frame.
+    - The lower left corner of the moving part has the frame number, and
+      the lower right corner the state of the sound.
+  The page draws one frame for each frame of the screen, and every frame
+  differs from the one before. Where the boxes are depends only on the
+  frame's number.
+
+  Noise picture: when the tool asks for it, the window takes the whole
+  screen and shows, behind the moving part, a still picture with the fine
+  detail of a photo: fractal value noise in each colour channel, from fixed
+  seeds, so every run shows the same pixels. Without it the window is dark
+  and has the size and the place that it was opened with.
+
+  Sound, through Web Audio. The page is silent until the tool asks for the
+  sound, and it chooses only the Mini's USB audio output, never the output
+  that the target computer has selected:
+    - A sine tone of 220 Hz at a gain of 0.05 (-26 dBFS), without end.
+    - A sine beep of 1000 Hz at a gain of 0.25 (-12 dBFS), 100 ms long, that
+      starts on each whole second of the page's clock. The first and the
+      last 5 ms of the 100 ms are a linear ramp from and to silence.
+  The page finds the Mini's output by its name among the browser's audio
+  outputs. Its audio context starts without an output device, and gets the
+  Mini's output and nothing else. Without that output, or when the browser
+  does not take it, the page stays silent. When the computer's audio
+  devices change, the sound ends at once and starts again only on the
+  Mini's output: a browser moves the sound of an output that has left to
+  the computer's selected output, and the page ends it some tens of
+  milliseconds after that. The browser needs to be started for this (Chromium:
+  --autoplay-policy=no-user-gesture-required for sound without a click,
+  --use-fake-ui-for-media-stream for the names of the outputs, and
+  --unsafely-treat-insecure-origin-as-secure=<the tool's server> because a
+  browser gives its audio outputs to a secure page only). The corner says
+  "sound off", "sound on" or "no Mini audio".
+
+  Once per second the page sends what it shows to the tool, as JSON, to
+  /target-page/report on the server it came from. The answer says whether
+  the tool wants the sound and the noise picture: {"sound": true, "noise":
+  false}. The page also keeps a request
+  to /target-page/sound open, which the tool answers in the same way as soon
+  as it wants the sound on or off; the page then reports at once.
+-->
+<style>
+  html, body { margin: 0; background: #202020; overflow: hidden; }
+  canvas { display: block; }
+  /* The noise picture lies over the page's background and under the moving part. */
+  #noise { position: fixed; left: 0; top: 0; z-index: 0; display: none; }
+  #picture { position: relative; z-index: 1; }
+</style>
+</head>
+<body>
+<canvas id="noise"></canvas>
+<canvas id="picture" width="960" height="540"></canvas>
+<script id="content">
+// What the picture and the sound are. Nothing here touches the document, so
+// the tool's unit tests run this block alone.
+
+const WIDTH = 960;
+const HEIGHT = 540;
+const BACKGROUND = '#202020';
+const BOXES = 8;
+
+const TONE_HZ = 220;
+const TONE_GAIN = 0.05;
+const BEEP_HZ = 1000;
+const BEEP_GAIN = 0.25;
+const BEEP_SECONDS = 0.1;
+const BEEP_RAMP_SECONDS = 0.005;
+
+// The boxes of frame number n: box i moves (i + 2) * 2 pixels to the right
+// with each frame and starts again at the left after 900 pixels; its hue
+// turns by 3 degrees with each frame.
+function boxes(n) {
+  return Array.from({ length: BOXES }, (unused, i) => ({
+    x: (n * (i + 2) * 2) % 900, y: 20 + i * 62, width: 60, height: 50,
+    colour: `hsl(${(n * 3 + i * 45) % 360} 80% 50%)`,
+  }));
+}
+
+// The noise picture: fractal value noise, with features from 128 pixels wide
+// down to 2, in each colour channel. noisePixels(width, height) returns the
+// picture's RGBA bytes, the same for the same size in every run.
+const NOISE_OCTAVES = 7;
+const NOISE_PERSISTENCE = 0.8;
+const NOISE_CHANNELS = [[330, 11], [300, 23], [360, 37]];
+function noiseLattice(x, y, seed) {
+  let h = Math.imul(x, 374761393) + Math.imul(y, 668265263) + Math.imul(seed, 2147483647);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+function valueNoise(x, y, seed) {
+  const xi = Math.floor(x);
+  const yi = Math.floor(y);
+  const sx = (x - xi) ** 2 * (3 - 2 * (x - xi));
+  const sy = (y - yi) ** 2 * (3 - 2 * (y - yi));
+  const a = noiseLattice(xi, yi, seed);
+  const b = noiseLattice(xi + 1, yi, seed);
+  const c = noiseLattice(xi, yi + 1, seed);
+  const d = noiseLattice(xi + 1, yi + 1, seed);
+  return a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy;
+}
+function fractalNoise(x, y, seed) {
+  let sum = 0;
+  let total = 0;
+  for (let octave = 0, amplitude = 1; octave < NOISE_OCTAVES; octave++, amplitude *= NOISE_PERSISTENCE) {
+    sum += amplitude * valueNoise(x / 2 ** (7 - octave), y / 2 ** (7 - octave), seed + octave);
+    total += amplitude;
+  }
+  return sum / total;
+}
+function noisePixels(width, height) {
+  const pixels = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const at = (y * width + x) * 4;
+      NOISE_CHANNELS.forEach(([gain, seed], channel) => { pixels[at + channel] = gain * fractalNoise(x, y, seed); });
+      pixels[at + 3] = 255;
+    }
+  }
+  return pixels;
+}
+
+// The Mini's USB audio output among the browser's devices
+// (MediaDevices.enumerateDevices), or null: an audio output whose name has
+// the Mini's USB manufacturer or product name. The entries "default" and
+// "communications" stand for whatever output the computer has selected, also
+// when that is the Mini's at the moment, so they are never taken. A browser
+// that does not give the names has no device to take.
+const MINI_AUDIO_NAME = /JetKVM|USB Emulation Device/i;
+function miniAudioOutput(devices) {
+  return devices.find(device => device.kind === 'audiooutput' && MINI_AUDIO_NAME.test(device.label) &&
+    device.deviceId !== 'default' && device.deviceId !== 'communications') ?? null;
+}
+</script>
+<script>
+const canvas = document.getElementById('picture');
+const context = canvas.getContext('2d', { alpha: false });
+
+// The sound. While it plays, `audio` is an audio context whose output is
+// miniAudio; without the sound there is no audio context.
+let audio = null;
+let beep = null;
+let miniAudio = null;
+let soundWanted = false;
+
+function stopSound() {
+  audio?.close().catch(() => undefined);
+  audio = null;
+  beep = null;
+}
+
+// Starts the sound on this output and on no other. The audio context starts
+// without an output device and is then given the Mini's; it gets its tone
+// only after that. A browser that does not do either step would play on the
+// computer's selected output, so nothing is played then.
+async function startSound(device) {
+  let context = null;
+  try {
+    context = new AudioContext({ sinkId: { type: 'none' } });
+    if (context.sinkId?.type !== 'none') throw new Error('the browser cannot start without an output');
+    await context.setSinkId(device.deviceId);
+    if (context.sinkId !== device.deviceId) throw new Error('the browser did not take the output');
+    context.addEventListener('error', stopSound);
+    const tone = context.createOscillator();
+    const toneGain = context.createGain();
+    tone.frequency.value = TONE_HZ;
+    toneGain.gain.value = TONE_GAIN;
+    tone.connect(toneGain).connect(context.destination);
+    tone.start();
+    const beepTone = context.createOscillator();
+    const beepGain = context.createGain();
+    beepTone.frequency.value = BEEP_HZ;
+    beepGain.gain.value = 0;
+    beepTone.connect(beepGain).connect(context.destination);
+    beepTone.start();
+    audio = context;
+    beep = beepGain;
+  } catch {
+    await context?.close();
+  }
+}
+
+// Makes the sound what the tool wants and the Mini's output allows. One
+// call at a time: a call during another one is taken up when that ends.
+let settling = null;
+function settleSound() {
+  settling = (settling ?? Promise.resolve()).then(async () => {
+    const devices = await navigator.mediaDevices?.enumerateDevices?.().catch(() => []) ?? [];
+    miniAudio = miniAudioOutput(devices);
+    if (audio && (!soundWanted || miniAudio?.deviceId !== audio.sinkId)) stopSound();
+    if (soundWanted && miniAudio && !audio) await startSound(miniAudio);
+  }).catch(() => undefined);
+}
+// The Mini's output leaves when the Mini leaves USB, and comes back. When
+// the computer's audio devices change in any way, the sound ends at once,
+// and starts again only when the Mini's output is there.
+navigator.mediaDevices?.addEventListener('devicechange', () => {
+  stopSound();
+  settleSound();
+});
+
+// The beeps are put on the audio clock a little ahead of time, each at the
+// time at which the page's clock reaches its second. The browser says which
+// sample leaves the output at which time only after the output has played
+// for a moment, and not exactly at first; a beep that is placed before that
+// would leave the output late by the output's latency. So no beep is placed
+// in the first second of sound, nor in the second one unless the browser
+// says that time, and each beep is placed at most 0.6 s ahead.
+let nextBeep = 1;
+function scheduleBeeps(startedAt) {
+  if (!audio) return;
+  // The audio clock at a time of performance.now().
+  const output = audio.getOutputTimestamp();
+  if (audio.currentTime < (output.performanceTime > 0 ? 1 : 2)) return;
+  const audioTimeAt = output.performanceTime > 0
+    ? ms => output.contextTime + (ms - output.performanceTime) / 1000
+    : ms => audio.currentTime + (ms - performance.now()) / 1000;
+  const now = (performance.now() - startedAt) / 1000;
+  nextBeep = Math.max(nextBeep, Math.ceil(now + 0.05));
+  for (; nextBeep < now + 0.6; nextBeep++) {
+    const at = audioTimeAt(startedAt + nextBeep * 1000);
+    beep.gain.setValueAtTime(0, at);
+    beep.gain.linearRampToValueAtTime(BEEP_GAIN, at + BEEP_RAMP_SECONDS);
+    beep.gain.setValueAtTime(BEEP_GAIN, at + BEEP_SECONDS - BEEP_RAMP_SECONDS);
+    beep.gain.linearRampToValueAtTime(0, at + BEEP_SECONDS);
+  }
+}
+
+settleSound();
+
+// The noise picture, in the screen's own pixels. While the tool wants it,
+// the page's window takes the whole screen, which a window that the browser
+// opened as an app may do by itself, and the picture is drawn for the size
+// that the window then has, and again when that size changes. Without it
+// the window goes back to the size and the place that it had.
+const noise = document.getElementById('noise');
+let noiseShown = false;
+let noiseSize = '';
+// The picture is drawn for the window's size of this moment.
+let noiseDrawn = false;
+let windowBefore = null;
+function drawNoise() {
+  const width = Math.round(window.innerWidth * window.devicePixelRatio);
+  const height = Math.round(window.innerHeight * window.devicePixelRatio);
+  if (!noiseShown) return;
+  noiseDrawn = true;
+  if (noiseSize === `${width}x${height}`) return;
+  noiseSize = `${width}x${height}`;
+  noise.width = width;
+  noise.height = height;
+  noise.style.width = `${window.innerWidth}px`;
+  noise.style.height = `${window.innerHeight}px`;
+  noise.getContext('2d', { alpha: false }).putImageData(new ImageData(noisePixels(width, height), width, height), 0, 0);
+}
+function wantNoise(wanted) {
+  if (Boolean(wanted) === noiseShown) return;
+  noiseShown = Boolean(wanted);
+  noise.style.display = noiseShown ? 'block' : 'none';
+  if (noiseShown) {
+    windowBefore = { x: window.screenX, y: window.screenY, width: window.outerWidth, height: window.outerHeight };
+    window.moveTo(screen.availLeft ?? 0, screen.availTop ?? 0);
+    window.resizeTo(screen.availWidth, screen.availHeight);
+    // The window gets its new size a moment later, with a resize event,
+    // at which the picture is drawn. A window that keeps its size gets
+    // none: it is drawn after 3 s, and the tool then sees a window that is
+    // smaller than the screen.
+    noiseDrawn = false;
+    setTimeout(drawNoise, 3000);
+  } else if (windowBefore) {
+    window.resizeTo(windowBefore.width, windowBefore.height);
+    window.moveTo(windowBefore.x, windowBefore.y);
+  }
+}
+window.addEventListener('resize', drawNoise);
+
+const startedAt = performance.now();
+let frame = 0;
+
+function draw() {
+  frame++;
+  context.fillStyle = BACKGROUND;
+  context.fillRect(0, 0, WIDTH, HEIGHT);
+  for (const box of boxes(frame)) {
+    context.fillStyle = box.colour;
+    context.fillRect(box.x, box.y, box.width, box.height);
+  }
+  context.fillStyle = '#ffffff';
+  context.font = '28px monospace';
+  context.fillText(String(frame), 20, 530);
+  context.fillText(audio ? 'sound on' : soundWanted && !miniAudio ? 'no Mini audio' : 'sound off', 700, 530);
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+
+setInterval(() => scheduleBeeps(startedAt), 250);
+
+// What the page shows and plays, to the tool. The answer says whether the
+// tool wants the sound.
+let drawnPerSecond = 0;
+function report() {
+  const now = performance.now();
+  return fetch('/target-page/report', {
+    method: 'POST',
+    body: JSON.stringify({
+      seconds: (now - startedAt) / 1000,
+      // The computer's clock, in ms, at that time of the page's clock. The
+      // beeps are on the whole seconds of the page's clock, so the two say
+      // when each beep is on the computer's clock.
+      clock: Date.now(),
+      framesPerSecond: drawnPerSecond,
+      // The window and the moving part in the screen's own pixels.
+      width: Math.round(window.innerWidth * window.devicePixelRatio),
+      height: Math.round(window.innerHeight * window.devicePixelRatio),
+      pictureWidth: Math.round(WIDTH * window.devicePixelRatio),
+      pictureHeight: Math.round(HEIGHT * window.devicePixelRatio),
+      // The name of the Mini's audio output, or null without one, and
+      // whether the sound plays on it.
+      audioOutput: miniAudio?.label ?? null,
+      sound: Boolean(audio),
+      // Whether the noise picture is drawn behind the moving part, and the size of
+      // the screen in its own pixels, which the window has with the picture.
+      noise: noiseShown && noiseDrawn,
+      screenWidth: Math.round(screen.width * window.devicePixelRatio),
+      screenHeight: Math.round(screen.height * window.devicePixelRatio),
+    }),
+  }).then(response => response.json());
+}
+
+// Takes the tool's wish for the sound, and reports at once what the sound
+// then is. Also when the sound is wanted and does not play: the Mini's
+// output can have come since.
+function wantSound(wanted) {
+  if (Boolean(wanted) === soundWanted && Boolean(audio) === soundWanted) return;
+  soundWanted = Boolean(wanted);
+  settleSound();
+  settling.then(report).catch(() => undefined);
+}
+
+// A timer, not a frame: it also runs when the browser draws no frames,
+// which the tool must learn.
+let reportedFrames = 0;
+let reportedAt = startedAt;
+setInterval(() => {
+  const now = performance.now();
+  drawnPerSecond = Math.round((frame - reportedFrames) * 1000 / (now - reportedAt));
+  reportedFrames = frame;
+  reportedAt = now;
+  report().then(answer => {
+    wantNoise(answer.noise);
+    wantSound(answer.sound);
+  }).catch(() => undefined);
+}, 1000);
+
+// The tool's wish for the sound also comes without a wait: the page keeps
+// one request open, which the tool answers when its wish is not the one
+// that the request names, and after 10 seconds at the latest. The tool
+// turns the sound off this way before the Mini leaves USB.
+(async () => {
+  for (;;) {
+    try {
+      const response = await fetch('/target-page/sound?wanted=' + soundWanted);
+      wantSound((await response.json()).sound);
+    } catch {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  }
+})();
+</script>
+</body>
+</html>

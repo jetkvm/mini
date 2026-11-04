@@ -1,0 +1,37 @@
+diff --git a/components/fatfs/src/ff.c b/components/fatfs/src/ff.c
+index dbb64fb0..20b9ee0b 100644
+--- a/components/fatfs/src/ff.c
++++ b/components/fatfs/src/ff.c
+@@ -4215,7 +4215,9 @@ FRESULT f_sync (
+ 						res = store_xdir(&dj);	/* Restore it to the directory */
+ 						if (res == FR_OK) {
+ 							res = sync_fs(fs);
+-							fp->flag &= (BYTE)~FA_MODIFIED;
++							if (res == FR_OK) {
++								fp->flag &= (BYTE)~FA_MODIFIED;
++							}
+ 						}
+ 					}
+ 					FREE_NAMBUF();
+@@ -4233,7 +4235,9 @@ FRESULT f_sync (
+ 					st_word(dir + DIR_LstAccDate, 0);
+ 					fs->wflag = 1;
+ 					res = sync_fs(fs);					/* Restore it to the directory */
+-					fp->flag &= (BYTE)~FA_MODIFIED;
++					if (res == FR_OK) {
++						fp->flag &= (BYTE)~FA_MODIFIED;
++					}
+ 				}
+ 			}
+ 		}
+@@ -4277,7 +4281,9 @@ FRESULT f_close (
+ 		}
+ 	}
+ #if !FF_FS_TINY && FF_USE_DYN_BUFFER
+-    if (fp->buf) {
++    /* A failed f_sync leaves the FIL valid so f_close can be retried. Keep
++     * its dirty sector buffer alive for that retry instead of freeing it. */
++    if (res == FR_OK && fp->buf) {
+         ff_memfree(fp->buf);
+         fp->buf = NULL;
+     }

@@ -1,0 +1,385 @@
+// Known failures of the Ethernet Mini. Format: runner/judge.mjs.
+[
+  // A mount that re-enumerates USB ends the OS Services session: service
+  // video, the clipboard round, the file transfer and the terminal drop out.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/268",
+    "while": { "osVideo": true },
+    "andOneOf": ["httpMountDisk", "tfMountCdrom"],
+    "measure": "framesPerSecond",
+    "tolerateSeconds": 15
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/268",
+    "while": { "osVideo": true },
+    "andOneOf": ["httpMountDisk", "tfMountCdrom"],
+    "measure": "serviceVideo",
+    "tolerateSeconds": 12
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/268",
+    "while": { "osVideo": true },
+    "andOneOf": ["httpMountDisk", "tfMountCdrom"],
+    "measure": "freezeMs",
+    "tolerateSeconds": 5
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/268",
+    "while": { "osClipboard": true },
+    "andOneOf": ["httpMountCdrom", "httpMountDisk", "tfMountCdrom", "tfMountDisk"],
+    "measure": "clipboardWrong",
+    "tolerateSeconds": 5
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/268",
+    "while": { "osFiles": true },
+    "andOneOf": ["httpMountCdrom", "httpMountDisk", "tfMountCdrom", "tfMountDisk"],
+    "measure": "filesFailed",
+    "tolerateSeconds": 2
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/268",
+    "while": { "osTerminal": true },
+    "andOneOf": ["httpMountCdrom", "httpMountDisk", "tfMountCdrom", "tfMountDisk"],
+    "measure": "terminalBytesPerSecond",
+    "tolerateSeconds": 8
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/268",
+    "while": { "osFiles": true, "httpMountDisk": true },
+    "measure": "fileBytesPerSecond",
+    "tolerateSeconds": 8
+  },
+
+  // The same on a macOS host: the file transfer stays under its floor and
+  // clipboard rounds are slow for a few seconds after a mount.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/268",
+    "host": "macos",
+    "while": { "osFiles": true, "tfMountDisk": true },
+    "measure": "fileBytesPerSecond",
+    "tolerateSeconds": 6
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/268",
+    "host": "macos",
+    "while": { "osFiles": true, "tfMountCdrom": true },
+    "measure": "fileBytesPerSecond",
+    "tolerateSeconds": 6
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/268",
+    "host": "macos",
+    "while": { "osClipboard": true, "httpMountDisk": true },
+    "measure": "clipboardMs",
+    "max": 1160,
+    "tolerateSeconds": 6
+  },
+
+  // While the host reads a mount from a URL beside a terminal and a file
+  // transfer, the terminal (and on macOS the file transfer) is under its floor.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/269",
+    "while": { "osTerminal": true, "osFiles": true },
+    "andOneOf": ["httpMountCdrom", "httpMountDisk"],
+    "measure": "terminalBytesPerSecond",
+    "min": 183000,
+    "tolerateSeconds": 18,
+    "recoverySeconds": 3
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/269",
+    "host": "macos",
+    "while": { "osTerminal": true, "osFiles": true },
+    "andOneOf": ["httpMountCdrom", "httpMountDisk"],
+    "measure": "fileBytesPerSecond",
+    "min": 72000,
+    "tolerateSeconds": 18,
+    "recoverySeconds": 3
+  },
+
+  // The same on a macOS host: keys are late and video drops below its rate.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/269",
+    "host": "macos",
+    "while": { "osTerminal": true, "osFiles": true, "httpMountCdrom": true },
+    "measure": "keysLost",
+    "max": 2,
+    "tolerateSeconds": 2,
+    "recoverySeconds": 3
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/269",
+    "host": "macos",
+    "while": { "osTerminal": true, "osFiles": true, "httpMountCdrom": true },
+    // The 5 s percentile stays high 5 s after the late keys.
+    "measure": ["keyLatencyP95Ms", "keyLatencyMaxMs"],
+    "tolerateSeconds": 10,
+    "recoverySeconds": 3
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/269",
+    "host": "macos",
+    "while": { "osTerminal": true, "osFiles": true, "httpMountCdrom": true },
+    "measure": "framesPerSecond",
+    "min": 21.9,
+    "tolerateSeconds": 23,
+    "recoverySeconds": 3
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/269",
+    "host": "macos",
+    "while": { "osTerminal": true, "osFiles": true, "httpMountDisk": true },
+    "measure": "keysLost",
+    "max": 4,
+    "tolerateSeconds": 2
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/269",
+    "host": "macos",
+    "while": { "osTerminal": true, "osFiles": true, "httpMountDisk": true },
+    // The 5 s percentile stays high 5 s after the late keys.
+    "measure": ["keyLatencyP95Ms", "keyLatencyMaxMs"],
+    "tolerateSeconds": 8
+  },
+
+  // Linux host: clipboard rounds are slow after the disk mount from a URL.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/268",
+    "host": "linux",
+    "while": { "osClipboard": true, "httpMountDisk": true },
+    "measure": "clipboardMs",
+    "max": 790,
+    "tolerateSeconds": 6
+  },
+
+  // macOS host: sound beside the session slows the file transfer and keys.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/326",
+    "host": "macos",
+    "while": { "audio": true, "osFiles": true },
+    "measure": "fileBytesPerSecond",
+    "min": 104000,
+    "tolerateSeconds": 11,
+    "recoverySeconds": 3
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/326",
+    "host": "macos",
+    "while": { "audio": true, "hid": true, "osFiles": true },
+    // The 5 s percentile stays high 5 s after the late keys.
+    "measure": ["keyLatencyP95Ms", "keyLatencyMaxMs"],
+    "tolerateSeconds": 8,
+    "recoverySeconds": 3
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/326",
+    "host": "macos",
+    "while": { "audio": true, "hid": true, "osFiles": true },
+    "measure": "keysLost",
+    "max": 2,
+    "tolerateSeconds": 2
+  },
+  // macOS host: when the sound starts, video freezes once and the browser
+  // conceals part of a second of sound.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/326",
+    "host": "macos",
+    "change": { "audio": true },
+    "measure": "freezeMs",
+    "max": 306,
+    "tolerateSeconds": 2,
+    "recoverySeconds": 17
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/326",
+    "host": "macos",
+    "change": { "audio": true },
+    "measure": "audioConcealedMs",
+    "max": 220,
+    "tolerateSeconds": 2,
+    "recoverySeconds": 17
+  },
+  // Linux host: sound beside the session has a concealed second.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/326",
+    "host": "linux",
+    "while": { "audio": true, "osTerminal": true, "osFiles": true },
+    "measure": "audioConcealedMs",
+    "max": 54,
+    "tolerateSeconds": 2
+  },
+
+  // Linux host: the file transfer is under its floor after the TF CD-ROM mount.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/268",
+    "host": "linux",
+    "while": { "osFiles": true, "tfMountCdrom": true },
+    "measure": "fileBytesPerSecond",
+    "tolerateSeconds": 6
+  },
+
+  // macOS host: service video beside a terminal and a file transfer drops
+  // its rate and freezes once after a mount.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/349",
+    "host": "macos",
+    "while": { "osVideo": true, "osTerminal": true, "osFiles": true },
+    "measure": "framesPerSecond",
+    "min": 12,
+    "tolerateSeconds": 47
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/349",
+    "host": "macos",
+    "while": { "osVideo": true, "osTerminal": true, "osFiles": true },
+    "measure": "freezeMs",
+    "max": 550,
+    "tolerateSeconds": 2
+  },
+
+  // The disk mount from a URL beside a terminal and a file transfer ends the
+  // session, so it takes longer to settle.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/268",
+    "change": { "httpMountDisk": true },
+    "while": { "osTerminal": true, "osFiles": true },
+    "max": 9
+  },
+
+  // An upload to the TF card freezes video and leaves gaps in the sound.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/240",
+    "while": { "upload": true },
+    "measure": "freezeMs",
+    "max": 900,
+    "tolerateSeconds": 2,
+    "recoverySeconds": 3
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/240",
+    "while": { "audio": true, "upload": true },
+    "measure": "audioConcealedMs",
+    "max": 174,
+    "tolerateSeconds": 18,
+    "recoverySeconds": 5
+  },
+  // macOS host: video is under its rate during an upload.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/240",
+    "host": "macos",
+    "while": { "upload": true },
+    "measure": "framesPerSecond",
+    "min": 19,
+    "tolerateSeconds": 6
+  },
+
+  // At 1080p30 the encoder takes longer than a frame beside a terminal, a
+  // file transfer, an upload or an HTTPS mount.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/287",
+    "andOneOf": ["osTerminal", "osFiles"],
+    "measure": "encodeMs",
+    "max": 37.8,
+    "tolerateSeconds": 113,
+    "recoverySeconds": 3
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/287",
+    "while": { "osTerminal": true, "osFiles": true },
+    "measure": "keyframeEncodeMs",
+    "max": 34.8,
+    "tolerateSeconds": 5
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/287",
+    "while": { "upload": true },
+    "measure": "encodeMs",
+    "max": 36.7,
+    "tolerateSeconds": 23,
+    "recoverySeconds": 3
+  },
+  // macOS host: HDMI video is under its rate beside a terminal and a file
+  // transfer, and while the host reads an HTTPS mount.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/287",
+    "host": "macos",
+    "while": { "osTerminal": true, "osFiles": true, "osVideo": false },
+    "measure": "framesPerSecond",
+    "min": 18.1,
+    "tolerateSeconds": 5
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/287",
+    "host": "macos",
+    "while": { "httpsMountDisk": true },
+    "measure": "framesPerSecond",
+    "min": 18.4,
+    "tolerateSeconds": 14,
+    "recoverySeconds": 4
+  },
+  // The max covers the second of an update check's handshake, which stalls
+  // the picture.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/287",
+    "while": { "httpsMountDisk": true },
+    "measure": "encodeMs",
+    "max": 123,
+    "tolerateSeconds": 60,
+    "recoverySeconds": 3
+  },
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/287",
+    "while": { "httpsMountDisk": true },
+    "measure": "keyframeEncodeMs",
+    "max": 34.2,
+    "tolerateSeconds": 8
+  },
+
+  // One long HDMI encoder call in the sample where a switch to service video
+  // starts. Values up to 35 ms belong to the encoder entries above.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/296",
+    "change": { "osVideo": true },
+    "while": { "osTerminal": true, "osFiles": true },
+    "measure": "encodeMs",
+    "min": 35,
+    "max": 100,
+    "tolerateSeconds": 2
+  },
+
+  // Known fault, Linux host: a key or mouse move is late at the start of a
+  // switch to service video. The run still fails.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/364",
+    "host": "linux",
+    "fails": true,
+    "change": { "osVideo": true },
+    "while": { "hid": true },
+    "measure": "keysLost",
+    "max": 2,
+    "tolerateSeconds": 2
+  },
+  // After a restart the MQTT reconnect lands as the keys start and delays one.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/425",
+    "change": { "hid": true },
+    "while": { "mqtt": true },
+    "measure": "keysLost",
+    "max": 2,
+    "tolerateSeconds": 2,
+    "recoverySeconds": 3
+  },
+
+  // An update download beside a host reading an HTTPS mount slows the light
+  // terminal's round trips.
+  {
+    "issue": "https://github.com/jetkvm/kvm-mini/issues/386",
+    "change": { "ota": true },
+    "while": { "httpsMountDisk": true, "osTerminalLight": true },
+    "measure": ["terminalLineP95Ms", "terminalLineMaxMs"],
+    "max": 1500,
+    // The 5 s percentile stays high 5 s after the late lines.
+    "tolerateSeconds": 65
+  }
+]

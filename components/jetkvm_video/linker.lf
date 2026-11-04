@@ -1,0 +1,57 @@
+# Keep the frame handoff and encoder dispatch resident while packetization
+# uses the instruction cache. Image buffers and queue capacities are unchanged.
+[mapping:jetkvm_video_hotpath]
+archive:libjetkvm_video.a
+entries:
+    if IDF_TARGET_ESP32P4 = y:
+        jetkvm_video:direct_h264_pipeline_encode_task (noflash)
+        jetkvm_video:h264_pipeline_encode_one (noflash)
+        jetkvm_video:h264_sync_idr_arm (noflash)
+        jetkvm_video:h264_sync_idr_production_complete (noflash)
+        jetkvm_video:video_metrics_add_encode_time (noflash)
+        jetkvm_video:video_metrics_record_failed_encode (noflash)
+        jetkvm_video:video_metrics_record_frame (noflash)
+        jetkvm_video:csi_release_consumed_buffer (noflash)
+        jetkvm_video_helpers:h264_raw_frame_size (noflash)
+
+# Keep encoder frame work resident, but leave codec creation, destruction and
+# ROI configuration in Flash. Do not move entire cold HAL paths into SRAM.
+[mapping:jetkvm_h264_hotpath]
+archive:libespressif__esp_h264.a
+entries:
+    if IDF_TARGET_ESP32P4 = y:
+        esp_h264_enc_single:esp_h264_enc_process (noflash)
+        esp_h264_enc_param:esp_h264_enc_get_gop (noflash)
+        esp_h264_enc_single_hw:enc_process (noflash)
+        esp_h264_enc_single_hw:h264_hw_enc_gop_mode_process (noflash)
+        esp_h264_enc_single_hw:h264_start_gop_mode_enc (noflash)
+        esp_h264_enc_single_hw:h264_output_invalidate_size (noflash)
+        esp_h264_enc_single_hw:h264_gop_isr (noflash)
+        esp_h264_enc_hw_param:get_gop (noflash)
+        esp_h264_enc_hw_param:cfg_dsc (noflash)
+        esp_h264_enc_hw_param:esp_h264_enc_hw_get_mutex (noflash)
+        esp_h264_enc_hw_param:esp_h264_enc_hw_take_force_idr (noflash)
+        esp_h264_enc_hw_param:esp_h264_enc_hw_get_qp_init (noflash)
+        esp_h264_enc_hw_param:esp_h264_enc_hw_get_nal (noflash)
+        esp_h264_enc_hw_param:esp_h264_enc_hw_cfg_dma_yuv_bs (noflash)
+        esp_h264_enc_hw_param:esp_h264_enc_hw_cfg_dma_mvm (noflash)
+        esp_h264_enc_hw_param:esp_h264_enc_hw_set_qp (noflash)
+        esp_h264_enc_hw_param:esp_h264_enc_hw_get_rc_hd (noflash)
+        esp_h264_enc_hw_param:esp_h264_enc_hw_set_rc_rate_pred (noflash)
+        esp_h264_enc_hw_param:esp_h264_enc_hw_get_mbres (noflash)
+        esp_h264_enc_hw_param:esp_h264_enc_hw_set_pbyte (noflash)
+        esp_h264_enc_hw_param:esp_h264_enc_hw_slice_header_align8 (noflash)
+        esp_h264_cache (noflash)
+        h264_hal (noflash)
+        h264_dma_hal (noflash)
+        h264_nal:bs_write_u1 (noflash)
+        h264_nal:bs_write_ue (noflash)
+        h264_nal:esp_h264_enc_hw_set_slice (noflash)
+        h264_nal:i_size0_255 (noflash)
+        h264_rc:esp_h264_rc_start (noflash)
+        h264_rc:esp_h264_rc_end (noflash)
+        h264_hal:h264_hal_init (default)
+        h264_hal:h264_hal_set_roi_reg (default)
+        h264_hal:h264_hal_get_roi_reg (default)
+        h264_dma_hal:h264_dma_hal_init (default)
+        h264_dma_hal:h264_dma_hal_deinit (default)

@@ -1,0 +1,43 @@
+diff --git a/managed_components/espressif__tinyusb/src/portable/synopsys/dwc2/dcd_dwc2.c b/managed_components/espressif__tinyusb/src/portable/synopsys/dwc2/dcd_dwc2.c
+--- a/managed_components/espressif__tinyusb/src/portable/synopsys/dwc2/dcd_dwc2.c
++++ b/managed_components/espressif__tinyusb/src/portable/synopsys/dwc2/dcd_dwc2.c
+@@ -543,6 +543,10 @@ bool dcd_edpt_open(uint8_t rhport, tusb_desc_endpoint_t const* desc_edpt) {
+   return true;
+ }
+ 
++// Register reads that dcd_edpt_close_all() waits at most for one OUT
++// endpoint state change: a few milliseconds.
++#define CLOSE_ALL_WAIT_LOOPS 100000u
++
+ // Close all non-control endpoints, cancel all pending transfers if any.
+ void dcd_edpt_close_all(uint8_t rhport) {
+   dwc2_regs_t* dwc2 = DWC2_REG(rhport);
+@@ -555,6 +559,14 @@ void dcd_edpt_close_all(uint8_t rhport) {
+   // Disable non-control interrupt
+   dwc2->daintmsk = (1 << DAINTMSK_OEPM_Pos) | (1 << DAINTMSK_IEPM_Pos);
+ 
++  // The core disables an OUT endpoint only while Global OUT NAK is in effect.
++  // Without it, EPDIS stays pending until the next open arms the endpoint
++  // again; the next packet for the endpoint then stays at the head of the
++  // shared RX FIFO, in front of every later OUT packet and SETUP. The waits are
++  // bounded because the USB interrupt is masked here.
++  dwc2->dctl |= DCTL_SGONAK;
++  for (uint32_t i = 0; i < CLOSE_ALL_WAIT_LOOPS && (dwc2->gintsts & GINTSTS_BOUTNAKEFF_Msk) == 0; i++) {}
++
+   for (uint8_t n = 1; n < ep_count; n++) {
+     for (uint8_t d = 0; d < 2; d++) {
+       dwc2_dep_t* dep = &dwc2->ep[d][n];
+@@ -565,6 +577,13 @@ void dcd_edpt_close_all(uint8_t rhport) {
+     }
+   }
+ 
++  for (uint8_t n = 1; n < ep_count; n++) {
++    dwc2_dep_t* dep = &dwc2->ep[1][n];
++    for (uint32_t i = 0; i < CLOSE_ALL_WAIT_LOOPS && (dep->doepctl & DOEPCTL_EPENA); i++) {}
++    dep->doepint = DOEPINT_EPDISD;
++  }
++  dwc2->dctl |= DCTL_CGONAK;
++
+   dfifo_flush_tx(dwc2, 0x10); // all tx fifo
+   dfifo_flush_rx(dwc2);
+   dfifo_device_init(rhport); // re-init dfifo

@@ -1,0 +1,15 @@
+menu "JetKVM USB debugging"
+
+config JETKVM_USB_DEBUGGING_DEFAULT_ON
+    bool "USB debugging is on until the setting is changed (bench builds only)"
+    default n
+    help
+        Without a stored USB debugging setting, keep the USB Serial/JTAG port
+        on the Power/EXT connector connected. Bench builds set this option
+        (the Dockerfile, with the USB_DEBUGGING build argument that
+        tools/combined_load/runner/build.mjs gives), because the bench
+        flashes and reads the console over that port. A release leaves it
+        off: the port is then off until a user turns USB debugging on, and
+        tools/release_config.py refuses a release build with this option.
+
+endmenu

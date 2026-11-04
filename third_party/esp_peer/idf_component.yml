@@ -1,0 +1,4 @@
+version: "1.5.5"
+description: "Local ESP32-P4 peer connection component"
+dependencies:
+  espressif/esp_libsrtp: "==1.0.0"

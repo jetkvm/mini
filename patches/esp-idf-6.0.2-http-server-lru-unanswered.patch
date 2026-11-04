@@ -1,0 +1,231 @@
+diff -ruN a/components/esp_http_server/src/esp_httpd_priv.h b/components/esp_http_server/src/esp_httpd_priv.h
+--- a/components/esp_http_server/src/esp_httpd_priv.h
++++ b/components/esp_http_server/src/esp_httpd_priv.h
+@@ -82,6 +82,8 @@
+     char pending_data[PARSER_BLOCK_SIZE];   /*!< Buffer for pending data to be received */
+     size_t pending_len;                     /*!< Length of pending data to be received */
+     bool for_async_req;                     /*!< If true, the socket will not be LRU purged */
++    bool answered;                          /*!< True once the socket has had a request answered */
++    TickType_t accept_tick;                 /*!< The tick count at which the socket was accepted */
+ #ifdef CONFIG_HTTPD_WS_SUPPORT
+     bool ws_handshake_done;                 /*!< True if it has done WebSocket handshake (if this socket is a valid WS) */
+     bool ws_close;                          /*!< Set to true to close the socket later (when WS Close frame received) */
+@@ -308,6 +310,15 @@
+ esp_err_t httpd_sess_close_lru(struct httpd_data *hd);
+ 
+ /**
++ * @brief   Checks if the LRU purge has a session that it may close
++ *
++ * @param[in] hd Server instance data
++ *
++ * @return True if httpd_sess_close_lru() would close a session
++ */
++bool httpd_sess_lru_available(struct httpd_data *hd);
++
++/**
+  * @brief   Closes all sessions
+  *
+  * @param[in] hd  Server instance data
+diff -ruN a/components/esp_http_server/src/httpd_main.c b/components/esp_http_server/src/httpd_main.c
+--- a/components/esp_http_server/src/httpd_main.c
++++ b/components/esp_http_server/src/httpd_main.c
+@@ -53,19 +53,13 @@
+     /* If no space is available for new session, close the least recently used one */
+     if (hd->config.lru_purge_enable == true) {
+         if (!httpd_is_sess_available(hd)) {
+-            /* Queue asynchronous closure of the least recently used session */
+-#if CONFIG_HTTPD_QUEUE_WORK_BLOCKING
+-            /* In case of blocking mode, close the least recently used session directly */
++            /* Close the least recently used session here, in the server task.
++             * A queued close names the slot, not the socket: until it runs,
++             * the pending connection brings the purge back here to queue
++             * another close of the same slot, and the second one closes the
++             * session that the first one made room for. The connection is
++             * accepted on the next pass, into the slot this frees. */
+             return httpd_sess_close_lru_direct(hd);
+-#else
+-            return httpd_sess_close_lru(hd);
+-#endif /* CONFIG_HTTPD_QUEUE_WORK_BLOCKING */
+-            /* Returning from this allows the main server thread to process
+-             * the queued asynchronous control message for closing LRU session.
+-             * Since connection request hasn't been addressed yet using accept()
+-             * therefore httpd_accept_conn() will be called again, but this time
+-             * with space available for one session
+-             */
+         }
+     }
+ 
+@@ -273,7 +267,13 @@
+ {
+     fd_set read_set;
+     FD_ZERO(&read_set);
+-    if (hd->config.lru_purge_enable || httpd_is_sess_available(hd)) {
++    /* With every slot taken and no session that the purge may close, a new
++     * connection waits in the listen backlog until a session ends or may
++     * go; the timeout looks again for the latter. */
++    bool wait_for_slot = hd->config.lru_purge_enable && !httpd_is_sess_available(hd) &&
++                         !httpd_sess_lru_available(hd);
++    struct timeval slot_poll = { .tv_sec = 0, .tv_usec = 100000 };
++    if ((hd->config.lru_purge_enable && !wait_for_slot) || httpd_is_sess_available(hd)) {
+         /* Only listen for new connections if server has capacity to
+          * handle more (or when LRU purge is enabled, in which case
+          * older connections will be closed) */
+@@ -288,12 +288,17 @@
+     maxfd = MAX(hd->ctrl_fd, tmp_max_fd);
+ 
+     ESP_LOGD(TAG, LOG_FMT("doing select maxfd+1 = %d"), maxfd + 1);
+-    int active_cnt = select(maxfd + 1, &read_set, NULL, NULL, NULL);
++    int active_cnt = select(maxfd + 1, &read_set, NULL, NULL, wait_for_slot ? &slot_poll : NULL);
+     if (active_cnt < 0) {
+         ESP_LOGE(TAG, LOG_FMT("error in select (%d)"), errno);
+         httpd_sess_delete_invalid(hd);
+         return ESP_OK;
+     }
++    if (active_cnt == 0) {
++        /* The slot poll timed out: only a request that waits in a session's
++         * buffers, which select() does not see, has work for Case1. */
++        FD_ZERO(&read_set);
++    }
+ 
+     /* Case0: Do we have a control message? */
+     if (FD_ISSET(hd->ctrl_fd, &read_set)) {
+diff -ruN a/components/esp_http_server/src/httpd_sess.c b/components/esp_http_server/src/httpd_sess.c
+--- a/components/esp_http_server/src/httpd_sess.c
++++ b/components/esp_http_server/src/httpd_sess.c
+@@ -60,6 +60,73 @@
+     return fcntl(fd, F_GETFD) != -1 || errno != EBADF;
+ }
+ 
++/* A browser keeps a connection that it opened ahead of a request for about
++ * this long before it drops it unused. */
++#define HTTPD_UNUSED_SESSION_MS 10000
++
++/* A request has reached the session but has no answer yet: its bytes wait in
++ * the socket or in the session's buffers. */
++static bool httpd_sess_unanswered(struct httpd_data *hd, struct sock_db *session)
++{
++    char byte;
++    return httpd_sess_pending(hd, session) ||
++           recv(session->fd, &byte, 1, MSG_PEEK | MSG_DONTWAIT) > 0;
++}
++
++/* The LRU purge may close only an idle session that has answered a request.
++ * A page opens a connection per asset, and each keeps the counter of its
++ * accept while the server, which answers one request at a time, works
++ * through the others; by counter alone it goes before any keep-alive
++ * session that a poller refreshes. Closed with its request unread, or before
++ * the browser has sent it, the request fails, and Chromium does not retry a
++ * connection that it has never used. A session that never sends a request
++ * may go once a browser would have dropped it. */
++static bool httpd_sess_idle(struct httpd_data *hd, struct sock_db *session)
++{
++    if (session->for_async_req || httpd_sess_unanswered(hd, session)) {
++        return false;
++    }
++    return session->answered ||
++           xTaskGetTickCount() - session->accept_tick >= pdMS_TO_TICKS(HTTPD_UNUSED_SESSION_MS);
++}
++
++#ifdef CONFIG_HTTPD_WS_SUPPORT
++typedef struct {
++    struct httpd_data *hd;
++    bool waits;
++} plain_wait_t;
++
++static int httpd_sess_note_plain_wait(struct sock_db *session, void *context)
++{
++    plain_wait_t *wait = (plain_wait_t *) context;
++    if (session->fd == -1 || session->for_async_req || session->ws_handshake_done ||
++        httpd_sess_idle(wait->hd, session)) {
++        return 1;
++    }
++    wait->waits = true;
++    return 0;
++}
++#endif
++
++/* A WebSocket carries a signaling session for as long as the page is open,
++ * while a plain session that may not go yet frees its slot once its request
++ * is answered or its browser drops it: the purge waits for that rather than
++ * close the WebSocket. */
++static bool httpd_sess_purgeable(struct httpd_data *hd, struct sock_db *session)
++{
++#ifdef CONFIG_HTTPD_WS_SUPPORT
++    if (session->ws_handshake_done) {
++        plain_wait_t wait = { .hd = hd, .waits = false };
++        if (!httpd_sess_idle(hd, session)) {
++            return false;
++        }
++        httpd_sess_enum(hd, httpd_sess_note_plain_wait, &wait);
++        return !wait.waits;
++    }
++#endif
++    return httpd_sess_idle(hd, session);
++}
++
+ static int enum_function(struct sock_db *session, void *context)
+ {
+     if ((!session) || (!context)) {
+@@ -108,6 +175,9 @@
+         if (session->fd == -1) {
+             return 0;
+         }
++        if (!httpd_sess_purgeable(ctx->hd, session)) {
++            return 1;
++        }
+         // Only close sockets that are not in use
+         if (session->for_async_req == false) {
+ #ifdef CONFIG_HTTPD_WS_SUPPORT
+@@ -224,6 +294,7 @@
+     session->send_fn = httpd_default_send;
+     session->recv_fn = httpd_default_recv;
+     session->lru_counter = hd->lru_counter;
++    session->accept_tick = xTaskGetTickCount();
+ 
+     // increment number of sessions
+     hd->hd_sd_active_count++;
+@@ -445,6 +516,7 @@
+     if (httpd_req_new(hd, session) != ESP_OK) {
+         return ESP_FAIL;
+     }
++    session->answered = true;
+     ESP_LOGD(TAG, LOG_FMT("httpd_req_delete"));
+     if (httpd_req_delete(hd) != ESP_OK) {
+         return ESP_FAIL;
+@@ -482,12 +554,25 @@
+     return ESP_ERR_NOT_FOUND;
+ }
+ 
++bool httpd_sess_lru_available(struct httpd_data *hd)
++{
++    enum_context_t context = {
++        .task = HTTPD_TASK_FIND_LOWEST_LRU,
++        .lru_counter = UINT64_MAX,
++        .fd = -1,
++        .hd = hd
++    };
++    httpd_sess_enum(hd, enum_function, &context);
++    return context.session != NULL;
++}
++
+ esp_err_t httpd_sess_close_lru(struct httpd_data *hd)
+ {
+     enum_context_t context = {
+         .task = HTTPD_TASK_FIND_LOWEST_LRU,
+         .lru_counter = UINT64_MAX,
+-        .fd = -1
++        .fd = -1,
++        .hd = hd
+     };
+     httpd_sess_enum(hd, enum_function, &context);
+     if (!context.session) {
+@@ -529,7 +614,8 @@
+     enum_context_t context = {
+         .task = HTTPD_TASK_FIND_LOWEST_LRU,
+         .lru_counter = UINT64_MAX,
+-        .fd = -1
++        .fd = -1,
++        .hd = hd
+     };
+     httpd_sess_enum(hd, enum_function, &context);
+     if (!context.session) {

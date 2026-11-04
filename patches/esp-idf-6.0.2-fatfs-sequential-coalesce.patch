@@ -1,0 +1,108 @@
+diff --git a/components/fatfs/src/ff.c b/components/fatfs/src/ff.c
+index dbb64fb0..5e6d7852 100644
+--- a/components/fatfs/src/ff.c
++++ b/components/fatfs/src/ff.c
+@@ -23,6 +23,16 @@
+ #include "ff.h"			/* Declarations of FatFs API */
+ #include "diskio.h"		/* Declarations of device I/O functions */
+ 
++#ifndef JETKVM_FATFS_SEQ_WRITE_COALESCE
++#define JETKVM_FATFS_SEQ_WRITE_COALESCE 0
++#endif
++
++/* Bound one native-SD transaction even when a caller supplies a much larger
++ * buffer.  This keeps the generic FatFs API inside the driver's existing
++ * timeout envelope while still allowing the KVM upload path to issue one
++ * 256 KiB sequential transfer. */
++#define JETKVM_FATFS_SEQ_WRITE_MAX_BYTES (256U * 1024U)
++
+ 
+ /*--------------------------------------------------------------------------
+ 
+@@ -4112,10 +4122,74 @@ FRESULT f_write (
+ 			sect += csect;
+ 			cc = btw / SS(fs);				/* When remaining bytes >= sector size, */
+ 			if (cc > 0) {					/* Write maximum contiguous sectors directly */
+-				if (csect + cc > fs->csize) {	/* Clip at cluster boundary */
++				int seq_reserved = 0;
++#if FF_FS_EXFAT && JETKVM_FATFS_SEQ_WRITE_COALESCE
++				DWORD seq_first_extra = 0;
++				DWORD seq_extra = 0;
++				DWORD seq_end_clust = fp->clust;
++				DWORD seq_saved_last = 0;
++				DWORD seq_saved_free = 0;
++				BYTE seq_saved_fsi = 0;
++				/* The KVM uploader is a strict append-only stream.  Reserve only
++				 * the additional contiguous clusters consumed by this direct
++				 * write, without advancing the logical file size.  This turns one
++				 * aligned 64/256 KiB f_write into one CMD25 while preserving the
++				 * ordinary .incomplete size as the committed resume offset. */
++				if (fs->fs_type == FS_EXFAT && fp->obj.stat == 2 &&
++					fp->obj.sclust >= 2 && fp->fptr == fp->obj.objsize
++#if FF_USE_FASTSEEK
++					&& fp->cltbl == 0
++#endif
++				) {
++					UINT max_cc = JETKVM_FATFS_SEQ_WRITE_MAX_BYTES / SS(fs);
++					if (cc > max_cc) cc = max_cc;
++					DWORD extra = (DWORD)((csect + cc - 1U) / fs->csize);
++					if (extra > 0 && fp->clust >= fp->obj.sclust &&
++						fp->clust < fs->n_fatent &&
++						extra < fs->n_fatent - fp->clust &&
++						(fs->free_clst > fs->n_fatent - 2 ||
++						 fs->free_clst >= extra)) {
++						DWORD first = fp->clust + 1;
++						DWORD found = find_bitmap(fs, first, extra);
++						if (found == 0xFFFFFFFF) ABORT(fs, FR_DISK_ERR);
++						if (found == first) {
++							seq_saved_last = fs->last_clst;
++							seq_saved_free = fs->free_clst;
++							seq_saved_fsi = fs->fsi_flag;
++							res = change_bitmap(fs, first, extra, 1);
++							if (res != FR_OK) ABORT(fs, res);
++							seq_first_extra = first;
++							seq_extra = extra;
++							seq_end_clust = fp->clust + extra;
++							seq_reserved = 1;
++							fs->last_clst = seq_end_clust;
++							if (fs->free_clst <= fs->n_fatent - 2) {
++								fs->free_clst -= extra;
++							}
++							fs->fsi_flag |= 1;
++						}
++					}
++				}
++#endif
++				if (!seq_reserved && csect + cc > fs->csize) {	/* Clip at cluster boundary */
+ 					cc = fs->csize - csect;
+ 				}
+-				if (disk_write(fs->pdrv, wbuff, sect, cc) != RES_OK) ABORT(fs, FR_DISK_ERR);
++				if (disk_write(fs->pdrv, wbuff, sect, cc) != RES_OK) {
++#if FF_FS_EXFAT && JETKVM_FATFS_SEQ_WRITE_COALESCE
++					if (seq_reserved) {
++						FRESULT rollback = change_bitmap(
++							fs, seq_first_extra, seq_extra, 0);
++						if (rollback == FR_OK) {
++							fs->last_clst = seq_saved_last;
++							fs->free_clst = seq_saved_free;
++							fs->fsi_flag = seq_saved_fsi;
++						} else {
++							ABORT(fs, rollback);
++						}
++					}
++#endif
++					ABORT(fs, FR_DISK_ERR);
++				}
+ #if FF_FS_MINIMIZE <= 2
+ #if FF_FS_TINY
+ 				if (fs->winsect - sect < cc) {	/* Refill sector cache if it gets invalidated by the direct write */
+@@ -4128,6 +4202,9 @@ FRESULT f_write (
+ 					fp->flag &= (BYTE)~FA_DIRTY;
+ 				}
+ #endif
++#endif
++#if FF_FS_EXFAT && JETKVM_FATFS_SEQ_WRITE_COALESCE
++				if (seq_reserved) fp->clust = seq_end_clust;
+ #endif
+ 				wcnt = SS(fs) * cc;		/* Number of bytes transferred */
+ 				continue;

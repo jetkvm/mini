@@ -1,0 +1,164 @@
+CONFIG_SPIRAM=y
+CONFIG_JETKVM_SCREEN_ROTATION_0=y
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=1024
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=49152
+CONFIG_SPIRAM_MODE_HEX=y
+CONFIG_SPIRAM_SPEED_250M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+# Static buffers that only tasks touch live in PSRAM (EXT_RAM_BSS_ATTR and
+# components/jetkvm_memory_policy/linker.lf). Internal RAM is what every TLS
+# connection is admitted against.
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+
+# 64-byte L2 lines: the WebRTC peer task is bound by code fetches from flash,
+# and a short line costs less per miss.
+CONFIG_CACHE_L2_CACHE_128KB=y
+CONFIG_CACHE_L2_CACHE_LINE_64B=y
+
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# A new image boots pending-verify and confirms itself once capture and HTTP
+# serving are healthy; otherwise the bootloader rolls back on the next reset.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+# app_main initializes every service before it starts the capture task; the
+# 3584-byte default overflows. The stack is freed when app_main returns.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# A watchdog report blocks interrupts for about 100 ms on the 115200 baud
+# console, enough to break audio and capture, and core 0's idle task can
+# legitimately wait many seconds under load. 60 s is the ESP-IDF maximum.
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=60
+
+# Bound recursive parsing of untrusted JSON on small network task stacks.
+CONFIG_CJSON_NESTING_LIMIT=16
+
+# LVGL allocates from jetkvm_memory_policy's dedicated PSRAM sub-heap, so it
+# cannot take internal RAM or fragment the PSRAM needed by video.
+# CONFIG_LV_USE_BUILTIN_MALLOC is not set
+# CONFIG_LV_USE_CLIB_MALLOC is not set
+CONFIG_LV_USE_CUSTOM_MALLOC=y
+# CONFIG_LV_BUILD_EXAMPLES is not set
+# CONFIG_LV_BUILD_DEMOS is not set
+
+# The target host uses the USB2 HS controller. The USB Serial/JTAG port is the
+# secondary console; jetkvm_usb_debugging disconnects it at start unless USB
+# debugging is on (off by default).
+CONFIG_USJ_ENABLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y
+CONFIG_TINYUSB_HID_COUNT=4
+CONFIG_TINYUSB_SUSPEND_CALLBACK=y
+CONFIG_TINYUSB_RESUME_CALLBACK=y
+# CONFIG_TINYUSB_CDC_ENABLED is not set
+CONFIG_TINYUSB_MSC_ENABLED=y
+CONFIG_TINYUSB_MSC_CUSTOM_BACKEND=y
+CONFIG_TINYUSB_MSC_BUFSIZE=16384
+
+# esp_peer uses DTLS-SRTP and creates its X.509 certificate at runtime.
+CONFIG_MBEDTLS_SSL_PROTO_DTLS=y
+CONFIG_MBEDTLS_SSL_DTLS_SRTP=y
+CONFIG_MBEDTLS_X509_CREATE_C=y
+# api.jetkvm.com serves a cross-signed Google Trust Services chain.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y
+# Native HTTPS must accept full TLS application records, including uploads.
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=16384
+CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=16384
+CONFIG_IDF_EXPERIMENTAL_FEATURES=y
+
+# The cloud WebSocket's transport needs its 1 KB buffer (internal RAM) only
+# for the HTTP upgrade; free it once the socket is connected.
+CONFIG_WS_DYNAMIC_BUFFER=y
+
+# MQTT runs on core 0, away from the media path, with its outbox and stack in
+# PSRAM. Its task must not call the flash driver (see MQTT_CLIENT_TASK_STACK
+# in jetkvm_mqtt.c).
+CONFIG_MQTT_USE_CUSTOM_CONFIG=y
+CONFIG_MQTT_PROTOCOL_311=y
+CONFIG_MQTT_TRANSPORT_SSL=y
+# CONFIG_MQTT_TRANSPORT_WEBSOCKET is not set
+CONFIG_MQTT_SKIP_PUBLISH_IF_DISCONNECTED=y
+CONFIG_MQTT_BUFFER_SIZE=2048
+CONFIG_MQTT_TASK_STACK_SIZE=6144
+CONFIG_MQTT_TASK_PRIORITY=4
+CONFIG_MQTT_EVENT_QUEUE_SIZE=4
+CONFIG_MQTT_TASK_CORE_SELECTION_ENABLED=y
+CONFIG_MQTT_USE_CORE_0=y
+CONFIG_MQTT_OUTBOX_DATA_ON_EXTERNAL_MEMORY=y
+CONFIG_MQTT_TASK_STACK_ON_EXTERNAL_MEMORY=y
+
+CONFIG_WEBRTC_TRANSPORT_MAX_AU_BYTES=524288
+CONFIG_WEBRTC_TRANSPORT_RTP_POOL_BYTES=1048576
+
+# Browsers open up to six HTTP/1.1 connections, beside the HTTP server's own
+# descriptors and the WebRTC UDP socket.
+CONFIG_LWIP_MAX_SOCKETS=16
+# User-provided NTP servers ahead of the public fallback.
+CONFIG_LWIP_SNTP_MAX_SERVERS=4
+
+# Receive window: the bandwidth-delay product of 100 Mbit/s at 100 ms RTT,
+# in PSRAM. The HTTP upload admission accounts for it in the ingress budget.
+# cmake/configure_lwip_tcpip_mbox.cmake sets the Wi-Fi board's window and the
+# mailbox sizes below.
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+CONFIG_LWIP_WND_SCALE=y
+CONFIG_LWIP_TCP_RCV_SCALE=6
+CONFIG_LWIP_TCP_WND_DEFAULT=1310720
+CONFIG_WEBRTC_TRANSPORT_DATA_CHANNEL_SEND_CACHE_BYTES=262144
+CONFIG_WEBRTC_TRANSPORT_DATA_CHANNEL_RECEIVE_CACHE_BYTES=262144
+# Mailbox slots are 4-byte pointers in internal RAM. 256 per connection cover
+# the tcpip thread's drain gap at 100 Mbit/s.
+CONFIG_LWIP_TCP_RECVMBOX_SIZE=256
+CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=256
+# The peer task leaves its UDP socket unread for the length of a 1080p IDR
+# send; an overflow drops HID packets until SCTP retransmits them.
+CONFIG_LWIP_UDP_RECVMBOX_SIZE=32
+CONFIG_LWIP_TCP_OOSEQ_MAX_PBUFS=0
+CONFIG_LWIP_TCP_SACK_OUT=y
+# A connection sends at most one send buffer per round trip. Payloads are in
+# PSRAM and only while unacknowledged.
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=23040
+
+# One 1518-byte Ethernet frame per EMAC descriptor.
+CONFIG_ETH_DMA_BUFFER_SIZE=1536
+CONFIG_ETH_DMA_RX_BUFFER_NUM=20
+CONFIG_ETH_DMA_TX_BUFFER_NUM=4
+CONFIG_ETH_SOFT_FLOW_CONTROL=y
+CONFIG_ETH_IRAM_OPTIMIZATION=y
+
+CONFIG_WEBRTC_TRANSPORT_TASK_CORE=1
+
+# Below the encoder (7): esp_peer sends a whole access unit synchronously, and
+# capture keeps only the latest frame, so nothing queues up meanwhile.
+CONFIG_WEBRTC_TRANSPORT_TASK_PRIORITY=6
+# Added by patches/esp-idf-6.0.2-fatfs-exfat-config.patch: exFAT, 64-bit FSIZE_t.
+CONFIG_FATFS_EXFAT=y
+# SDMMC requires DMA-capable, cache-line-safe data buffers. Keep FatFs sector
+# windows in internal RAM instead of the default PSRAM preference.
+# CONFIG_FATFS_ALLOC_PREFER_EXTRAM is not set
+
+CONFIG_HTTPD_WS_SUPPORT=y
+# /adopt carries the Google ID token in its query string, and the adopt page
+# sends that URL as Referer. The URI limit is a compile-time array size.
+CONFIG_HTTPD_MAX_URI_LEN=8192
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=16384
+
+# One entry per BSSID on both bands.
+CONFIG_NETWORK_PROV_SCAN_MAX_ENTRIES=64
+
+# Keep the CSI DMA interrupt running while flash writes disable the cache, or
+# the capture DMA ring runs into a descriptor that was not re-armed.
+CONFIG_CAM_CTLR_MIPI_CSI_ISR_CACHE_SAFE=y
+
+# Tailscale: same peer limit in the control-plane table and WireGuard.
+CONFIG_ML_MAX_PEERS=64
+CONFIG_MBEDTLS_CHACHA20_C=y
+CONFIG_MBEDTLS_CHACHAPOLY_C=y
+CONFIG_LWIP_ESP_NETIF_CLIENT_DATA=y
+CONFIG_ML_H2_BUFFER_SIZE_KB=512
+CONFIG_ML_JSON_BUFFER_SIZE_KB=512
