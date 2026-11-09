@@ -33,6 +33,7 @@
 #include "jetkvm_ethernet_stats.h"
 #include "jetkvm_hid_input.h"
 #include "jetkvm_memory_policy.h"
+#include "jetkvm_timing_log.h"
 #include "jetkvm_usb_service.h"
 #include "playout_delay.h"
 #include "web_app.h"
@@ -559,6 +560,36 @@ static esp_err_t signal_handler(httpd_req_t *req)
  * are built below it. */
 #define STATS_BUILD_PRIORITY 3
 
+/* The timing log (jetkvm_timing_log.h) for timing=<action>: "start" starts
+ * an empty log first, "stop" stops the log after; each other value only
+ * reads. NULL with *error set when there is no memory. */
+static char *render_timing_log(const char *action, esp_err_t *error)
+{
+    *error = strcmp(action, "start") == 0 ? jetkvm_timing_log_start() : ESP_OK;
+    if (*error != ESP_OK) {
+        return NULL;
+    }
+    char *json = jetkvm_timing_log_json();
+    if (strcmp(action, "stop") == 0) {
+        jetkvm_timing_log_stop();
+    }
+    if (json == NULL) {
+        *error = ESP_ERR_NO_MEM;
+    }
+    return json;
+}
+
+/* Sends the timing log's string and frees it. It is from the system heap:
+ * send_json_string() frees to cJSON's own heap. */
+static esp_err_t send_timing_log(httpd_req_t *req, char *json)
+{
+    set_common_headers(req);
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t err = httpd_resp_sendstr(req, json);
+    free(json);
+    return err;
+}
+
 /* The stats the query asks for, printed; NULL with *error set when they
  * could not be built. */
 static char *render_stats(const char *query, bool has_query, esp_err_t *error)
@@ -593,9 +624,13 @@ static esp_err_t stats_handler(httpd_req_t *req)
 {
     char query[64];
     const bool has_query = httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK;
+    char timing[8];
+    const bool timing_log = has_query &&
+        httpd_query_key_value(query, "timing", timing, sizeof(timing)) == ESP_OK;
     vTaskPrioritySet(NULL, STATS_BUILD_PRIORITY);
     esp_err_t error = ESP_OK;
-    char *json = render_stats(query, has_query, &error);
+    char *json = timing_log ? render_timing_log(timing, &error) :
+                              render_stats(query, has_query, &error);
     /* The configured priority, not the one read before: a task waiting on
      * the access guard's mutex may have lent this task its own. */
     vTaskPrioritySet(NULL, JETKVM_HTTP_SERVER_TASK_PRIORITY);
@@ -605,7 +640,7 @@ static esp_err_t stats_handler(httpd_req_t *req)
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
                                    message);
     }
-    return send_json_string(req, json);
+    return timing_log ? send_timing_log(req, json) : send_json_string(req, json);
 }
 
 

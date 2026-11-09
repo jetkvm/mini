@@ -41,11 +41,17 @@ static void *allocations[256];
 static size_t live_count, tree_count;
 static unsigned send_calls, error_calls, header_calls;
 static bool fail_allocations, borrowed_tree, detailed_called, bitrate_called;
+/* The timing log's string while the handler has it. It is from the system
+ * heap, not from cJSON's. */
+static char *timing_string;
 static esp_err_t send_result, create_result;
 static cJSON *tree;
 static const char *expected_error;
 static const char expected_body[] =
     "{\"modeValid\":true,\"sequence\":7,\"nested\":{\"frame\":30}}";
+static const char timing_body[] = "{\"running\":true,\"keys\":[[1000,4]]}";
+/* The body that the handler is to send. */
+static const char *sent_body = expected_body;
 
 static void *tracked_malloc(size_t size)
 {
@@ -69,7 +75,7 @@ static void tracked_free(void *ptr)
 static void assert_tree_ownership(bool has_string)
 {
     /* No request bytes may become visible while stats still owns its AST. */
-    assert(live_count == (borrowed_tree ? tree_count : 0) + (has_string ? 1 : 0));
+    assert(live_count == (borrowed_tree ? tree_count : 0) + (has_string && !timing_string ? 1 : 0));
 }
 static esp_err_t httpd_resp_set_hdr(httpd_req_t *req, const char *key, const char *value)
 {
@@ -86,7 +92,7 @@ static esp_err_t httpd_resp_set_type(httpd_req_t *req, const char *value)
 static esp_err_t httpd_resp_sendstr(httpd_req_t *req, const char *json)
 {
     (void)req; assert_tree_ownership(true); ++send_calls;
-    assert(strcmp(json, expected_body) == 0);
+    assert(strcmp(json, sent_body) == 0);
     assert(header_calls == 2);
     return send_result;
 }
@@ -112,12 +118,30 @@ static esp_err_t httpd_query_key_value(const char *query, const char *key, char 
     }
     return ESP_FAIL;
 }
+/* The timing log: what the handler did with it, in order ("s" start, "j"
+ * json, "x" stop). */
+static char timing_calls[8];
+static esp_err_t timing_start_result;
+static bool timing_no_json;
+static esp_err_t jetkvm_timing_log_start(void) { strcat(timing_calls, "s"); return timing_start_result; }
+static void jetkvm_timing_log_stop(void) { strcat(timing_calls, "x"); }
+static char *jetkvm_timing_log_json(void)
+{
+    strcat(timing_calls, "j");
+    if (timing_no_json) return NULL;
+    assert(!timing_string);
+    timing_string = malloc(sizeof(timing_body)); assert(timing_string);
+    memcpy(timing_string, timing_body, sizeof(timing_body));
+    return timing_string;
+}
+static unsigned stats_builds;
 static unsigned interval_resets;
 static void webrtc_transport_reset_video_intervals(void) { ++interval_resets; }
 static esp_err_t make_stats(cJSON **out, bool detailed)
 {
     /* Building the stats must not keep the OS Services task off its core. */
     assert(task_priority < OS_SERVICES_PRIORITY);
+    ++stats_builds;
     detailed_called = detailed;
     if (create_result != ESP_OK) return create_result;
     bool fail_render = fail_allocations;
@@ -138,7 +162,18 @@ static void reset(void)
     tree_count = 0; send_calls = error_calls = header_calls = interval_resets = 0;
     fail_allocations = borrowed_tree = detailed_called = bitrate_called = false;
     send_result = create_result = ESP_OK; tree = NULL; expected_error = NULL;
+    sent_body = expected_body; timing_calls[0] = 0; stats_builds = 0;
+    timing_start_result = ESP_OK; timing_no_json = false;
+    assert(!timing_string);
 }
+/* The handler frees the timing log's string to the system heap. A string
+ * that it frees to cJSON's heap stops the test in tracked_free. */
+static void system_free(void *ptr)
+{
+    assert(ptr && ptr == timing_string);
+    (free)(ptr); timing_string = NULL;
+}
+#define free(ptr) system_free(ptr)
 '''
 checks = r'''
 int main(void)
@@ -187,6 +222,36 @@ int main(void)
     reset(); create_result = ESP_FAIL; expected_error = "stats unavailable";
     assert(stats_handler(&req) == ESP_FAIL);
     assert(!send_calls && error_calls == 1 && !live_count);
+
+    /* timing=<action> sends the timing log in place of the stats: "start"
+     * starts it before the read, "stop" stops it after. */
+    const struct { const char *query, *calls; } timing[] = {
+        {"timing=start", "sj"}, {"timing=read", "j"}, {"timing=stop", "jx"},
+    };
+    for (size_t i = 0; i < sizeof(timing) / sizeof(timing[0]); ++i) {
+        reset(); req.query = timing[i].query; sent_body = timing_body;
+        assert(stats_handler(&req) == ESP_OK);
+        assert(strcmp(timing_calls, timing[i].calls) == 0);
+        assert(send_calls == 1 && !error_calls && !stats_builds && !live_count);
+        assert(!timing_string);
+    }
+
+    /* The string is also freed when the send fails. */
+    reset(); req.query = "timing=read"; sent_body = timing_body; send_result = ESP_FAIL;
+    assert(stats_handler(&req) == ESP_FAIL);
+    assert(send_calls == 1 && !timing_string);
+
+    /* A log that did not start is not read. */
+    reset(); req.query = "timing=start"; timing_start_result = ESP_ERR_NO_MEM;
+    expected_error = "no memory";
+    assert(stats_handler(&req) == ESP_FAIL);
+    assert(strcmp(timing_calls, "s") == 0 && !send_calls && error_calls == 1);
+
+    reset(); req.query = "timing=read"; timing_no_json = true;
+    expected_error = "no memory";
+    assert(stats_handler(&req) == ESP_FAIL);
+    assert(!send_calls && error_calls == 1 && !live_count);
+    req.query = NULL;
 
     /* The shared helper still borrows other handlers' trees, both on success
      * and send/allocation failure; only the serialized string is consumed. */

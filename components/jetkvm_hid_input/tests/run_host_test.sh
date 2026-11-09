@@ -10,7 +10,9 @@ cc -std=c11 -Wall -Wextra -Werror -pthread \
   -I"$repo_root/components/jetkvm_hid_input/tests" \
   -I"$repo_root/components/jetkvm_hid_input/include" \
   -I"$repo_root/components/control_protocol/include" \
+  -I"$repo_root/components/jetkvm_timing_log/include" \
   "$repo_root/components/jetkvm_hid_input/jetkvm_hid_input.c" \
+  "$repo_root/components/jetkvm_timing_log/jetkvm_timing_log.c" \
   "$repo_root/components/jetkvm_hid_input/tests/fake_runtime.c" \
   "$repo_root/components/jetkvm_hid_input/tests/test_jetkvm_hid_input.c" \
   -o "$binary"

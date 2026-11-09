@@ -20,7 +20,7 @@ idf_component_register(
     PRIV_INCLUDE_DIRS "."
     REQUIRES esp_https_server jetkvm_access esp_app_format esp_eth esp_http_server esp_netif esp_ringbuf esp_timer esp_system heap lwip mbedtls
              jetkvm_factory_reset cloud_signaling control_protocol device_api jetkvm_cloud_registration espressif__cjson espressif__esp_libsrtp
-             esp_peer jetkvm_device_state jetkvm_ethernet_stats jetkvm_hid_input jetkvm_hid_profiles jetkvm_memory_policy
+             esp_peer jetkvm_device_state jetkvm_ethernet_stats jetkvm_hid_input jetkvm_hid_profiles jetkvm_memory_policy jetkvm_timing_log
              jetkvm_audio jetkvm_screen jetkvm_settings jetkvm_network_settings jetkvm_c5_wifi jetkvm_usb_service jetkvm_video_quality
              jetkvm_ota jetkvm_virtual_media jetkvm_virtual_media_http jetkvm_wol web_app
     EMBED_TXTFILES "acceptance_page.html"
