@@ -68,7 +68,7 @@ Targets stay between 256 kbit/s and the ceiling. A new peer starts at the ceilin
 
 `/webrtc/stats` has three views. The default view is cheap and safe during streaming; heap and task-stack details in it are cached samples. `?details=1` takes fresh heap and stack samples with interrupts masked, which disturbs video timing, so do not use it for frame-rate or latency measurements. `?bitrate=1` returns the controller inputs (`videoBitrateStep*`), receiver loss, peer-loop timing, frame-interval histograms (reset with `&resetVideoIntervals=1`), and the `guestVideo`, `videoEncode`, and `hdmiReceiver` objects. Field meanings are documented in `webrtc_stats_json.c` and `include/webrtc_transport.h`. Stats requests read cached copies and never touch the HDMI receiver chip.
 
-`/webrtc/stats?timing=<action>` returns the timing log in place of the stats: when each keyboard report left on USB and when each OS Services video frame was complete, both on the Mini's clock (`jetkvm_timing_log.h`). A tool that measures the time from a key to the frame that shows it reads both times here, so the network is not part of its result. `timing=start` starts an empty log, `timing=read` reads it, and `timing=stop` reads it and frees its memory.
+`/webrtc/stats?timing=<action>` returns the timing log in place of the stats: when each keyboard report left on USB and when each OS Services video frame was complete, both on the Mini's clock (`jetkvm_timing_log.h`). A tool that measures the time from a key to the frame that shows it reads both times here, so the network is not part of its result. `timing=start` starts an empty log, `timing=read` reads it, and `timing=stop` frees its memory and answers with the stopped log, which has no entries.
 
 ## esp_peer dependency
 

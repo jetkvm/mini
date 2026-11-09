@@ -224,9 +224,9 @@ int main(void)
     assert(!send_calls && error_calls == 1 && !live_count);
 
     /* timing=<action> sends the timing log in place of the stats: "start"
-     * starts it before the read, "stop" stops it after. */
+     * starts it before the read, and "stop" stops it before the read. */
     const struct { const char *query, *calls; } timing[] = {
-        {"timing=start", "sj"}, {"timing=read", "j"}, {"timing=stop", "jx"},
+        {"timing=start", "sj"}, {"timing=read", "j"}, {"timing=stop", "xj"},
     };
     for (size_t i = 0; i < sizeof(timing) / sizeof(timing[0]); ++i) {
         reset(); req.query = timing[i].query; sent_body = timing_body;
@@ -251,6 +251,12 @@ int main(void)
     expected_error = "no memory";
     assert(stats_handler(&req) == ESP_FAIL);
     assert(!send_calls && error_calls == 1 && !live_count);
+
+    /* A stop frees the log also when there is no memory for the answer. */
+    reset(); req.query = "timing=stop"; timing_no_json = true;
+    expected_error = "no memory";
+    assert(stats_handler(&req) == ESP_FAIL);
+    assert(strcmp(timing_calls, "xj") == 0 && !send_calls && error_calls == 1);
     req.query = NULL;
 
     /* The shared helper still borrows other handlers' trees, both on success

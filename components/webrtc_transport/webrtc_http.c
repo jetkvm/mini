@@ -561,18 +561,20 @@ static esp_err_t signal_handler(httpd_req_t *req)
 #define STATS_BUILD_PRIORITY 3
 
 /* The timing log (jetkvm_timing_log.h) for timing=<action>: "start" starts
- * an empty log first, "stop" stops the log after; each other value only
- * reads. NULL with *error set when there is no memory. */
+ * an empty log first, "stop" stops the log first, so the answer is the
+ * stopped log, which has no entries; each other value only reads. The stop
+ * is before the read so that the log's memory is free also when there is
+ * none for the answer. NULL with *error set when there is no memory. */
 static char *render_timing_log(const char *action, esp_err_t *error)
 {
     *error = strcmp(action, "start") == 0 ? jetkvm_timing_log_start() : ESP_OK;
     if (*error != ESP_OK) {
         return NULL;
     }
-    char *json = jetkvm_timing_log_json();
     if (strcmp(action, "stop") == 0) {
         jetkvm_timing_log_stop();
     }
+    char *json = jetkvm_timing_log_json();
     if (json == NULL) {
         *error = ESP_ERR_NO_MEM;
     }
