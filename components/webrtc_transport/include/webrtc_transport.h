@@ -631,6 +631,13 @@ esp_err_t webrtc_transport_reserve_guest_access_unit(
     uint16_t width, uint16_t height, uint16_t fps,
     webrtc_transport_au_reservation_t *reservation);
 
+/** The RTP timestamp of the packets of an access unit with this presentation
+ * time: esp_peer takes the time in whole milliseconds. */
+static inline uint32_t webrtc_transport_rtp_timestamp(uint32_t pts_90khz)
+{
+    return (pts_90khz / 90U) * 90U;
+}
+
 /** commit/cancel for a lease the CPU wrote (size or written bytes): the next
  * DMA lease of the slot writes those cache lines back first. */
 bool webrtc_transport_commit_cpu_access_unit(

@@ -28,6 +28,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "jetkvm_memory_policy.h"
+#include "jetkvm_timing_log.h"
 #include "jetkvm_video.h"
 #include "jetkvm_video_quality.h"
 #include "nvs.h"
@@ -1159,8 +1160,13 @@ static bool platform_frame_commit(void *ctx, const osvc_video_frame_t *frame)
         .fps = (uint16_t)frame->fps,
         .keyframe = frame->keyframe,
     };
-    return webrtc_transport_commit_cpu_access_unit(&s_video.lease,
-                                                   frame->length, &meta);
+    const bool committed = webrtc_transport_commit_cpu_access_unit(
+        &s_video.lease, frame->length, &meta);
+    if (committed) {
+        jetkvm_timing_log_frame(webrtc_transport_rtp_timestamp(frame->pts_90k),
+                                frame->received_us);
+    }
+    return committed;
 }
 
 static void platform_frame_cancel(void *ctx, size_t written)

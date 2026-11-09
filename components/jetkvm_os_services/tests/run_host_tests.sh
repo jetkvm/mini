@@ -134,11 +134,13 @@ cc -std=c11 -Wall -Wextra -Wno-unused-parameter -Werror -pedantic -g -O1 -fsanit
   -I"$repo_root/components/webrtc_transport/include" \
   -I"$repo_root/components/jetkvm_video/include" \
   -I"$repo_root/components/jetkvm_video_quality/include" \
+  -I"$repo_root/components/jetkvm_timing_log/include" \
   -I"$monocypher" -I"$ota_include" \
   "${core_sources[@]}" "${update_sources[@]}" "$component/os_services_settings.c" \
   "$component/os_services_channels.c" "$component/os_services_edid.c" \
   "$component/tests/host_hash.c" \
   "$repo_root/components/webrtc_transport/rpc_events.c" \
+  "$repo_root/components/jetkvm_timing_log/jetkvm_timing_log.c" \
   "$component/tests/test_os_services_task.c" \
   "$build_dir/monocypher.o" "$build_dir/monocypher-ed25519.o" \
   "$build_dir/cJSON.o" -lcrypto -lm -o "$build_dir/test_task"

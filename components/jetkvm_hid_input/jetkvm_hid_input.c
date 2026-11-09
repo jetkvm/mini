@@ -13,6 +13,7 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "jetkvm_timing_log.h"
 
 #define BRIDGE_TASK_NAME "jetkvm_hid"
 #define BRIDGE_TASK_STACK_SIZE 4096U
@@ -865,6 +866,10 @@ static void process_command(const input_command_t *command,
             s_ctx.stats.keyboard_write_slow++;
         }
         portEXIT_CRITICAL(&s_state_lock);
+        jetkvm_timing_log_key(
+            command->type == COMMAND_KEYBOARD ? command->data.keyboard.keys[0] :
+            command->data.keypress.pressed ? command->data.keypress.key : 0U,
+            now_us);
         note_keyboard_changed();
     }
     if (error == ESP_OK && command->type == COMMAND_KEYBOARD) {
