@@ -24,9 +24,9 @@ The panel runs big-endian RGB565 with color inversion on. Rotation uses the ST77
 
 ## UI
 
-The LVGL canvas and all thirteen pages are native 240x240 and map one-to-one onto the panel. In AUTO mode, network changes switch only among the boot, home and no-network pages and never leave the menu, status, about or regulatory pages.
+The LVGL canvas and all pages (thirteen on the Wi-Fi board, twelve on the Ethernet board) are native 240x240 and map one-to-one onto the panel. In AUTO mode, network changes switch only among the boot, home and no-network pages and never leave the menu, status, about or regulatory pages.
 
-The menu reads Set up Wi-Fi (Wi-Fi board only), Regulatory, Advanced, Status, About. Menu > Regulatory shows the FCC e-label: from the home screen, Menu, Down and a hold open it on the Wi-Fi board, and Menu and a hold on the Ethernet board. Back returns to the menu. `jetkvm_screen_regulatory.c` builds the page with the About page's styles, since the generated UI has no such page. The text is in `regulatory.c`, fixed per board variant at build time; no setting, RPC or web UI changes it. A new marking is one more entry there.
+The menu reads Set up Wi-Fi and Regulatory (both on the Wi-Fi board only), Advanced, Status, About. On the Wi-Fi board, Menu > Regulatory shows the FCC e-label: from the home screen, Menu, Down and a hold open it. Back returns to the menu. The Ethernet board has no such entry and no such page. `jetkvm_screen_regulatory.c` builds the page with the About page's styles, since the generated UI has no such page. The text is in `regulatory.c`, fixed at build time; no setting, RPC or web UI changes it. A new marking is one more entry there.
 
 Without a network, the Wi-Fi board points the user to `jetkvm.com/wireless` and the Ethernet board shows `Connect Ethernet cable`. After a failed Wi-Fi join, two red lines show the reason and the network name. The texts come from `components/jetkvm_c5_wifi/wifi_join_failure.c`, shared with the web UI's `connect_error`. They stay until the device has an address again. `localDisplay.wifiFailureShown` and `wifiFailureShows` record the last text and how often one appeared.
 
@@ -48,4 +48,4 @@ Firmware boots in H.264-only mode. SW3 (active low; GPIO17 on the Wi-Fi board, G
 
 ## Tests
 
-`components/jetkvm_screen/tests/run_host_tests.sh` runs the host tests. `components/jetkvm_screen/tests/render_ui_screens.sh <dir> wifi|ethernet` renders all twelve generated pages and the Regulatory page to PPM (and PNG with ImageMagick) using the LVGL software renderer, with no hardware.
+`components/jetkvm_screen/tests/run_host_tests.sh` runs the host tests. `components/jetkvm_screen/tests/render_ui_screens.sh <dir> wifi|ethernet` renders all twelve generated pages and, for `wifi`, the Regulatory page to PPM (and PNG with ImageMagick) using the LVGL software renderer, with no hardware.

@@ -1,13 +1,17 @@
 #include "jetkvm_screen_regulatory.h"
 
+#include <stdbool.h>
 #include <stddef.h>
 
+#include "jetkvm_board_config.h"
 #include "regulatory.h"
 #include "ui/screens.h"
 #include "ui/styles.h"
 
 static lv_obj_t *s_entry, *s_screen, *s_list;
+static bool s_ready;
 
+#if JETKVM_BOARD_WIFI
 /* A transparent container without padding, as the generated pages use. */
 static lv_obj_t *box(lv_obj_t *parent)
 {
@@ -39,12 +43,8 @@ static void entry_init(void)
     lv_obj_t *label = lv_label_create(s_entry);
     add_style_menu_button_label(label);
     lv_label_set_text(label, "Regulatory");
-    /* The menu reads Set up Wi-Fi (the Wi-Fi board only), Regulatory,
-     * Advanced, Status, About: Regulatory follows the hidden Access entry,
-     * and Status moves down to just above About. */
+    /* Regulatory follows the hidden Access entry. */
     lv_obj_move_to_index(s_entry, lv_obj_get_index(objects.menu_btn_access) + 1);
-    lv_obj_move_foreground(objects.menu_btn_status);
-    lv_obj_move_foreground(objects.menu_btn_about);
 }
 
 /* The About page's tree: header row, then a scrolling column of 80 %. */
@@ -91,13 +91,21 @@ static void screen_init(void)
     }
 }
 
+#endif /* JETKVM_BOARD_WIFI */
+
 void jetkvm_screen_regulatory_init(void)
 {
-    if (s_screen != NULL) {
+    if (s_ready) {
         return;
     }
+    s_ready = true;
+#if JETKVM_BOARD_WIFI
     screen_init();
     entry_init();
+#endif
+    /* Status moves down to just above About, on both boards. */
+    lv_obj_move_foreground(objects.menu_btn_status);
+    lv_obj_move_foreground(objects.menu_btn_about);
 }
 
 lv_obj_t *jetkvm_screen_regulatory_entry(void)
