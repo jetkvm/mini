@@ -3,9 +3,10 @@
 #include <stddef.h>
 
 /*
- * The regulatory text that Menu > Regulatory shows, one paragraph per entry,
- * in the order shown. The text is fixed in the image for its board variant
- * (JETKVM_BOARD_WIFI): no setting, RPC or web UI changes or hides it. To
+ * The regulatory text that Menu > Regulatory shows on the Wi-Fi board, one
+ * paragraph per entry, in the order shown. The Ethernet board has no such
+ * page. The text is fixed in the image: no setting, RPC or web UI changes
+ * or hides it. To
  * show another marking, such as an ISED number or a Japan mark, add an entry
  * in regulatory.c; the page lays out every entry.
  */

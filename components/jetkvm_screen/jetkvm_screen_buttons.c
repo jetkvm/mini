@@ -111,7 +111,8 @@ static uint32_t s_changed;
 
 static lv_obj_t *strip, *top_icon, *bottom_icon, *hold_hint, *track, *fill;
 static lv_obj_t *home_marks, *top_dot, *bottom_dot, *menu_label;
-static lv_obj_t *screens[13];
+/* The Wi-Fi board has one screen more: Menu > Regulatory. */
+static lv_obj_t *screens[12 + JETKVM_BOARD_WIFI];
 /* The clockwise turn of the picture on the panel. */
 static uint16_t s_degrees;
 /* The hold bar serves SW2 (else SW3) and shows this many pixels. */
@@ -319,8 +320,8 @@ static void changed(lv_event_t *event)
         /* In the order of jetkvm_screen_regulatory_init(). */
 #if JETKVM_BOARD_WIFI
         items[item_count++] = objects.menu_btn_network; /* Set up Wi-Fi */
-#endif
         items[item_count++] = jetkvm_screen_regulatory_entry();
+#endif
         items[item_count++] = objects.menu_btn_advanced;
         items[item_count++] = objects.menu_btn_status;
         items[item_count++] = objects.menu_btn_about;
@@ -408,20 +409,26 @@ static void buttons_fit(void)
         objects.menu_screen, objects.menu_advanced_screen, objects.menu_network_screen,
         objects.about_screen, objects.status_screen, objects.reset_config_screen,
         objects.reboot_screen, objects.rebooting_screen, objects.switch_dhcp_client_screen,
-        jetkvm_screen_regulatory_screen()};
+#if JETKVM_BOARD_WIFI
+        jetkvm_screen_regulatory_screen(),
+#endif
+    };
     _Static_assert(sizeof(all) == sizeof(screens), "screens holds every screen");
     for (unsigned i = 0; i < sizeof(screens) / sizeof(screens[0]); i++) {
         screens[i] = all[i];
         lv_obj_set_size(screens[i], 240, 240);
         lv_obj_add_event_cb(screens[i], changed, LV_EVENT_SCREEN_LOADED, NULL);
     }
-    lv_obj_t *main_items[] = {objects.menu_btn_status, jetkvm_screen_regulatory_entry(),
-                              objects.menu_btn_network, objects.menu_btn_advanced,
-                              objects.menu_btn_about};
+    lv_obj_t *main_items[] = {
+        objects.menu_btn_status,
+#if JETKVM_BOARD_WIFI
+        jetkvm_screen_regulatory_entry(),
+#endif
+        objects.menu_btn_network, objects.menu_btn_advanced, objects.menu_btn_about};
     lv_obj_t *advanced_items[] = {objects.menu_btn_advanced_reboot,
                                   objects.menu_btn_advanced_reset_config,
                                   objects.menu_btn_advanced_usb_emulation};
-    menu_style(main_items, 5);
+    menu_style(main_items, sizeof(main_items) / sizeof(main_items[0]));
     menu_style(advanced_items, 3);
     /* The Mini has one DHCP client, so the RV1106's client switch is hidden. */
     lv_obj_add_flag(objects.menu_btn_dhcp_client, LV_OBJ_FLAG_HIDDEN);

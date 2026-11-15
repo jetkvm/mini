@@ -218,6 +218,7 @@ int main(int argc, char **argv)
         }
     }
 
+#if JETKVM_BOARD_WIFI
     /* Menu with Regulatory highlighted, then the page at its top and after
      * one bottom-button scroll, beside the button strip as on the device. */
     lv_obj_t *entry = jetkvm_screen_regulatory_entry();
@@ -243,6 +244,41 @@ int main(int argc, char **argv)
             return 1;
         }
     }
+#else
+    /* The Ethernet board has no Regulatory entry and no such page: the menu
+     * holds Advanced, Status and About, in that order, beside the hidden
+     * generated entries. */
+    if (jetkvm_screen_regulatory_entry() != NULL || jetkvm_screen_regulatory_screen() != NULL) {
+        fprintf(stderr, "the Ethernet board has a Regulatory page\n");
+        return 1;
+    }
+    static const char *const menu[] = {"Advanced", "Status", "About"};
+    lv_obj_t *entries = lv_obj_get_parent(objects.menu_btn_status);
+    size_t shown = 0;
+    /* jetkvm_screen.c hides these two on the Ethernet board. */
+    lv_obj_add_flag(objects.menu_btn_network, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(objects.menu_btn_access, LV_OBJ_FLAG_HIDDEN);
+    for (uint32_t i = 0; i < lv_obj_get_child_count(entries); ++i) {
+        lv_obj_t *entry = lv_obj_get_child(entries, i);
+        if (lv_obj_has_flag(entry, LV_OBJ_FLAG_HIDDEN)) {
+            continue;
+        }
+        const char *text = lv_label_get_text(lv_obj_get_child(entry, 0));
+        if (shown >= sizeof(menu) / sizeof(menu[0]) || strcmp(text, menu[shown]) != 0) {
+            fprintf(stderr, "menu entry %zu is \"%s\"\n", shown + 1, text);
+            return 1;
+        }
+        ++shown;
+    }
+    if (shown != sizeof(menu) / sizeof(menu[0])) {
+        fprintf(stderr, "the menu shows %zu entries\n", shown);
+        return 1;
+    }
+    lv_obj_set_style_pad_right(objects.menu_screen, 34, 0);
+    if (render_screen(argv[1], SCREEN_ID_MENU_SCREEN, "menu-ethernet") != 0) {
+        return 1;
+    }
+#endif
 
     printf("rendered %zu screens at %ux%u from a %ux%u LVGL canvas\n",
            sizeof(screen_names) / sizeof(screen_names[0]), (unsigned)PANEL_WIDTH,
