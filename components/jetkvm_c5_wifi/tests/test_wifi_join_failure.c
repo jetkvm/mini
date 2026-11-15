@@ -23,6 +23,24 @@ static void test_wrong_password(void)
     }
 }
 
+static void test_auth_expire_on_both_attempts_is_a_wrong_password(void)
+{
+    char text[WIFI_JOIN_FAILURE_TEXT_CAPACITY];
+    /* A WPA3 AP that drops a wrong confirm: AUTH_EXPIRE, twice. */
+    wifi_join_failure_t twice = wifi_join_failure_after_retry(2, 2, true);
+    assert(twice.kind == WIFI_JOIN_WRONG_PASSWORD);
+    (void)wifi_join_failure_text(twice, text, sizeof(text));
+    assert(strcmp(text, "Wrong password") == 0);
+    /* An open network has no password to be wrong. */
+    assert(wifi_join_failure_after_retry(2, 2, false).kind == WIFI_JOIN_OTHER);
+    /* One AUTH_EXPIRE beside another reason is as the second reason alone. */
+    wifi_join_failure_t once = wifi_join_failure_after_retry(205, 2, true);
+    assert(once.kind == WIFI_JOIN_OTHER && once.reason == 2);
+    assert(wifi_join_failure_after_retry(2, 205, true).kind == WIFI_JOIN_OTHER);
+    assert(wifi_join_failure_after_retry(2, 201, true).kind == WIFI_JOIN_NOT_FOUND);
+    assert(wifi_join_failure_after_retry(2, 203, true).kind == WIFI_JOIN_REFUSED);
+}
+
 static void test_not_found(void)
 {
     const uint16_t reasons[] = {201, 210, 211, 212};
@@ -93,6 +111,7 @@ static void test_ok_cancelled_and_capacity(void)
 int main(void)
 {
     test_wrong_password();
+    test_auth_expire_on_both_attempts_is_a_wrong_password();
     test_not_found();
     test_refused();
     test_other_reasons_show_their_number();

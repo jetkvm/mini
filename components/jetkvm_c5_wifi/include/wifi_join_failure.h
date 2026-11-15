@@ -10,6 +10,7 @@
 
 /* The disconnect reasons of wifi_err_reason_t that the classification names;
  * jetkvm_c5_wifi.c checks them against esp_wifi_types. */
+#define WIFI_JOIN_REASON_AUTH_EXPIRE 2U
 #define WIFI_JOIN_REASON_ASSOC_TOOMANY 5U
 #define WIFI_JOIN_REASON_MIC_FAILURE 14U
 #define WIFI_JOIN_REASON_4WAY_HANDSHAKE_TIMEOUT 15U
@@ -52,6 +53,16 @@ typedef struct {
 
 /* The failure that a disconnect with `reason` during a join means. */
 wifi_join_failure_t wifi_join_failure_from_reason(uint16_t reason);
+
+/* The failure of a join with a password whose two attempts both ended in a
+ * disconnect, with `first_reason` and then `second_reason`. As
+ * wifi_join_failure_from_reason(second_reason), except for AUTH_EXPIRE on
+ * both attempts, which is a wrong password: a WPA3 (SAE) AP that checks the
+ * station's confirm first drops a wrong one without an answer, and the
+ * station's authentication then times out. One AUTH_EXPIRE alone is
+ * transient and proves nothing. */
+wifi_join_failure_t wifi_join_failure_after_retry(uint16_t first_reason, uint16_t second_reason,
+                                                  bool has_password);
 
 /* The failure of a join that ended without a disconnect: no address when the
  * AP admitted the station, else a time-out. */

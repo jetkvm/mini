@@ -1640,6 +1640,7 @@ static void c5_conn_disconnect(void)
     c5_conn_clear(C5_NOTIFY_DISCONNECTED | C5_NOTIFY_GOT_IP);
 }
 
+_Static_assert(WIFI_JOIN_REASON_AUTH_EXPIRE == WIFI_REASON_AUTH_EXPIRE, "reason");
 _Static_assert(WIFI_JOIN_REASON_ASSOC_TOOMANY == WIFI_REASON_ASSOC_TOOMANY, "reason");
 _Static_assert(WIFI_JOIN_REASON_MIC_FAILURE == WIFI_REASON_MIC_FAILURE, "reason");
 _Static_assert(WIFI_JOIN_REASON_4WAY_HANDSHAKE_TIMEOUT == WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT,
@@ -1705,6 +1706,7 @@ static c5_join_result_t c5_join(const wifi_saved_network_t *network, uint8_t cha
 
     c5_join_result_t result = C5_JOIN_FAILED;
     wifi_join_failure_t why = {.kind = WIFI_JOIN_OTHER, .reason = 0};
+    uint16_t first_reason = 0;
     for (unsigned attempt = 0; attempt < 2U; ++attempt) {
         result = C5_JOIN_FAILED;
         why = (wifi_join_failure_t){.kind = WIFI_JOIN_OTHER, .reason = 0};
@@ -1760,6 +1762,15 @@ static c5_join_result_t c5_join(const wifi_saved_network_t *network, uint8_t cha
             result = C5_JOIN_NOT_FOUND;
             break;
         }
+        if (attempt > 0U) {
+            /* Two attempts, two disconnects: the pair can name the failure
+             * where the second reason alone cannot. The result stays a
+             * failed join, so the saved network is tried again as before. */
+            why = wifi_join_failure_after_retry(first_reason, why.reason,
+                                                network->password_len > 0U);
+            break;
+        }
+        first_reason = why.reason;
         /* Scan every channel and prefer signal on the second attempt. */
         config.sta.channel = 0;
         config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
