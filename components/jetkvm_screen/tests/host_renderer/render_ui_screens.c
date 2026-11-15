@@ -255,9 +255,6 @@ int main(int argc, char **argv)
     static const char *const menu[] = {"Advanced", "Status", "About"};
     lv_obj_t *entries = lv_obj_get_parent(objects.menu_btn_status);
     size_t shown = 0;
-    /* jetkvm_screen.c hides these two on the Ethernet board. */
-    lv_obj_add_flag(objects.menu_btn_network, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(objects.menu_btn_access, LV_OBJ_FLAG_HIDDEN);
     for (uint32_t i = 0; i < lv_obj_get_child_count(entries); ++i) {
         lv_obj_t *entry = lv_obj_get_child(entries, i);
         if (lv_obj_has_flag(entry, LV_OBJ_FLAG_HIDDEN)) {

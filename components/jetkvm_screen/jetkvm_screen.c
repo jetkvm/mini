@@ -833,9 +833,11 @@ static jetkvm_screen_page_t rendered_page(void)
             return (jetkvm_screen_page_t)(i + 1U);
         }
     }
+#if JETKVM_BOARD_WIFI
     if (active == jetkvm_screen_regulatory_screen()) {
         return JETKVM_SCREEN_PAGE_REGULATORY;
     }
+#endif
     return JETKVM_SCREEN_PAGE_BOOT;
 }
 
