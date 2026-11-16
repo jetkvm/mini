@@ -23,7 +23,7 @@ static void test_wrong_password(void)
     }
 }
 
-static void test_auth_expire_on_both_attempts_is_a_wrong_password(void)
+static void test_no_answer_to_an_unproven_password_is_a_wrong_password(void)
 {
     char text[WIFI_JOIN_FAILURE_TEXT_CAPACITY];
     /* A WPA3 AP that drops a wrong confirm: AUTH_EXPIRE, twice. */
@@ -31,14 +31,28 @@ static void test_auth_expire_on_both_attempts_is_a_wrong_password(void)
     assert(twice.kind == WIFI_JOIN_WRONG_PASSWORD);
     (void)wifi_join_failure_text(twice, text, sizeof(text));
     assert(strcmp(text, "Wrong password") == 0);
-    /* An open network has no password to be wrong. */
-    assert(wifi_join_failure_after_retry(2, 2, false).kind == WIFI_JOIN_OTHER);
+    /* The AP rejected the first attempt (AUTH_FAIL, 4WAY_HANDSHAKE_TIMEOUT)
+     * and gave no answer to the second. */
+    assert(wifi_join_failure_after_retry(202, 2, true).kind == WIFI_JOIN_WRONG_PASSWORD);
+    assert(wifi_join_failure_after_retry(15, 2, true).kind == WIFI_JOIN_WRONG_PASSWORD);
     /* One AUTH_EXPIRE beside another reason is as the second reason alone. */
     wifi_join_failure_t once = wifi_join_failure_after_retry(205, 2, true);
     assert(once.kind == WIFI_JOIN_OTHER && once.reason == 2);
     assert(wifi_join_failure_after_retry(2, 205, true).kind == WIFI_JOIN_OTHER);
     assert(wifi_join_failure_after_retry(2, 201, true).kind == WIFI_JOIN_NOT_FOUND);
     assert(wifi_join_failure_after_retry(2, 203, true).kind == WIFI_JOIN_REFUSED);
+}
+
+static void test_no_answer_to_a_proven_password_shows_its_number(void)
+{
+    char text[WIFI_JOIN_FAILURE_TEXT_CAPACITY];
+    /* A saved network whose AP is out of reach or busy, or an open network:
+     * the same two AUTH_EXPIRE do not blame the password. */
+    wifi_join_failure_t twice = wifi_join_failure_after_retry(2, 2, false);
+    assert(twice.kind == WIFI_JOIN_OTHER && twice.reason == 2);
+    (void)wifi_join_failure_text(twice, text, sizeof(text));
+    assert(strcmp(text, "Wi-Fi error 2") == 0);
+    assert(wifi_join_failure_after_retry(202, 2, false).kind == WIFI_JOIN_OTHER);
 }
 
 static void test_not_found(void)
@@ -111,7 +125,8 @@ static void test_ok_cancelled_and_capacity(void)
 int main(void)
 {
     test_wrong_password();
-    test_auth_expire_on_both_attempts_is_a_wrong_password();
+    test_no_answer_to_an_unproven_password_is_a_wrong_password();
+    test_no_answer_to_a_proven_password_shows_its_number();
     test_not_found();
     test_refused();
     test_other_reasons_show_their_number();

@@ -1679,11 +1679,13 @@ static void c5_show_failure(const uint8_t *ssid, size_t ssid_len, wifi_join_fail
 /* Join one network and wait for an address. `channel` is where the last
  * scan saw its strongest AP (0 if unknown); the first attempt starts there
  * instead of scanning every channel again. A failure other than a wrong
- * password or a missing AP is tried once more with a full scan. `failure`
- * (may be NULL) receives why the join failed; a failure other than a
- * cancel also goes to the display. */
+ * password or a missing AP is tried once more with a full scan.
+ * `password_unproven` says that the network's password has not joined it
+ * before (see wifi_join_failure_after_retry). `failure` (may be NULL)
+ * receives why the join failed; a failure other than a cancel also goes to
+ * the display. */
 static c5_join_result_t c5_join(const wifi_saved_network_t *network, uint8_t channel,
-                                wifi_join_failure_t *failure)
+                                bool password_unproven, wifi_join_failure_t *failure)
 {
     wifi_config_t config = {0};
     memcpy(config.sta.ssid, network->ssid, network->ssid_len);
@@ -1744,6 +1746,7 @@ static c5_join_result_t c5_join(const wifi_saved_network_t *network, uint8_t cha
         }
         why = wifi_join_failure_from_reason(
             __atomic_load_n(&s_disconnect_reason, __ATOMIC_ACQUIRE));
+        if (attempt == 0U) first_reason = why.reason;
         if (why.kind == WIFI_JOIN_WRONG_PASSWORD) {
             result = C5_JOIN_AUTH;
             if (attempt > 0U) break;
@@ -1766,11 +1769,9 @@ static c5_join_result_t c5_join(const wifi_saved_network_t *network, uint8_t cha
             /* Two attempts, two disconnects: the pair can name the failure
              * where the second reason alone cannot. The result stays a
              * failed join, so the saved network is tried again as before. */
-            why = wifi_join_failure_after_retry(first_reason, why.reason,
-                                                network->password_len > 0U);
+            why = wifi_join_failure_after_retry(first_reason, why.reason, password_unproven);
             break;
         }
-        first_reason = why.reason;
         /* Scan every channel and prefer signal on the second attempt. */
         config.sta.channel = 0;
         config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
@@ -2201,7 +2202,7 @@ static c5_conn_state_t c5_conn_join_candidates(const wifi_network_list_t *snapsh
     c5_conn_state_t next = C5_CONN_OFFLINE;
     for (size_t i = 0; i < count && (s_conn_pending & C5_NOTIFY_COMMANDS) == 0U; ++i) {
         const wifi_saved_network_t *network = &snapshot->items[candidates[i].index];
-        c5_join_result_t result = c5_join(network, candidates[i].channel, NULL);
+        c5_join_result_t result = c5_join(network, candidates[i].channel, false, NULL);
         if (result == C5_JOIN_OK || result == C5_JOIN_AUTH) {
             c5_auth_failure_set(network->ssid, network->ssid_len, result == C5_JOIN_AUTH);
         }
@@ -2285,7 +2286,7 @@ static c5_conn_state_t c5_conn_connected(wifi_saved_network_t *current)
         if (c5_conn_wait(C5_NOTIFY_COMMANDS | C5_NOTIFY_RESCAN, backoff_ms[i]) != 0U) {
             return C5_CONN_SCAN;
         }
-        if (c5_join(current, 0U, NULL) == C5_JOIN_OK) {
+        if (c5_join(current, 0U, false, NULL) == C5_JOIN_OK) {
             return C5_CONN_CONNECTED;
         }
     }
@@ -2546,6 +2547,25 @@ static c5_conn_state_t c5_conn_offline(wifi_saved_network_t *current)
     return next;
 }
 
+/* True when `request` has a password that is not the saved one of its
+ * network: the user has just entered it, and it has not joined the network
+ * yet. A saved password counts as proven: connect-now saves a network only
+ * after it connects. */
+static bool c5_password_unproven(const wifi_saved_network_t *request)
+{
+    if (request->password_len == 0U) return false;
+    bool unproven = true;
+    xSemaphoreTake(s_networks_lock, portMAX_DELAY);
+    int index = wifi_network_list_find(&s_networks, request->ssid, request->ssid_len);
+    if (index >= 0) {
+        const wifi_saved_network_t *saved = &s_networks.items[index];
+        unproven = saved->password_len != request->password_len ||
+                   memcmp(saved->password, request->password, request->password_len) != 0;
+    }
+    xSemaphoreGive(s_networks_lock);
+    return unproven;
+}
+
 static c5_conn_state_t c5_conn_connect_now(wifi_saved_network_t *current)
 {
     /* Deliver the RPC acknowledgement before the scan interrupts the current
@@ -2593,7 +2613,7 @@ static c5_conn_state_t c5_conn_connect_now(wifi_saved_network_t *current)
 
     c5_conn_disconnect();
     wifi_join_failure_t failure;
-    c5_join_result_t result = c5_join(&request, 0U, &failure);
+    c5_join_result_t result = c5_join(&request, 0U, c5_password_unproven(&request), &failure);
     char failure_text[WIFI_JOIN_FAILURE_TEXT_CAPACITY];
     const char *error = NULL;
     if (result == C5_JOIN_OK) {

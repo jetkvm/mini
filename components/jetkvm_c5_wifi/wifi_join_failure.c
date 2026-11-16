@@ -32,11 +32,12 @@ wifi_join_failure_t wifi_join_failure_from_reason(uint16_t reason)
 }
 
 wifi_join_failure_t wifi_join_failure_after_retry(uint16_t first_reason, uint16_t second_reason,
-                                                  bool has_password)
+                                                  bool password_unproven)
 {
     wifi_join_failure_t failure = wifi_join_failure_from_reason(second_reason);
-    if (has_password && first_reason == WIFI_JOIN_REASON_AUTH_EXPIRE &&
-        second_reason == WIFI_JOIN_REASON_AUTH_EXPIRE) {
+    if (password_unproven && second_reason == WIFI_JOIN_REASON_AUTH_EXPIRE &&
+        (first_reason == WIFI_JOIN_REASON_AUTH_EXPIRE ||
+         wifi_join_failure_from_reason(first_reason).kind == WIFI_JOIN_WRONG_PASSWORD)) {
         failure.kind = WIFI_JOIN_WRONG_PASSWORD;
     }
     return failure;
