@@ -1,0 +1,82 @@
+diff --git a/components/lwip/lwip/src/core/tcp_in.c b/components/lwip/lwip/src/core/tcp_in.c
+--- a/components/lwip/lwip/src/core/tcp_in.c
++++ b/components/lwip/lwip/src/core/tcp_in.c
+@@ -96,6 +96,12 @@
+ static u8_t recv_flags;
+ static struct pbuf *recv_data;
+ 
++/* JetKVM: tcp_tw_syn is set while tcp_input() gives the listening PCBs a SYN
++   that has ended a connection in TIME-WAIT. tcp_tw_syn_snd_nxt is then the
++   snd_nxt of that connection. */
++static u8_t tcp_tw_syn;
++static u32_t tcp_tw_syn_snd_nxt;
++
+ struct tcp_pcb *tcp_input_pcb;
+ 
+ /* Forward declarations. */
+@@ -294,6 +300,9 @@
+   if (pcb == NULL) {
+     /* If it did not go to an active connection, we check the connections
+        in the TIME-WAIT state. */
++    /* JetKVM: tcp_listen_input() is called only further down in this block,
++       so the mark of an earlier SYN cannot reach this segment. */
++    tcp_tw_syn = 0;
+     for (pcb = tcp_tw_pcbs; pcb != NULL; pcb = pcb->next) {
+       LWIP_ASSERT("tcp_input: TIME-WAIT pcb->state == TIME-WAIT", pcb->state == TIME_WAIT);
+ 
+@@ -311,6 +320,43 @@
+            of the list since we are not very likely to receive that
+            many segments for connections in TIME-WAIT. */
+         LWIP_DEBUGF(TCP_INPUT_DEBUG, ("tcp_input: packed for TIME_WAITing connection.\n"));
++        /* JetKVM: a client that opens a connection from the port of one that
++           this side has just closed must not wait for 2 * TCP_MSL. Stock code
++           answers its SYN with an ACK of the old connection, the client
++           answers that ACK with a RST, and TIME-WAIT ignores the RST
++           (RFC 1337). A browser meets this right after a page load.
++           The two rules below apply only to a PCB that nothing owns. A
++           netconn that has only shut down its send side still points to its
++           PCB in TIME-WAIT; a full close clears callback_arg and errf.
++           - A SYN without ACK, RST and FIN, with a sequence number beyond the
++             old rcv_nxt, ends the old connection and goes on to the listening
++             PCBs (RFC 1122 4.2.2.13). tcp_listen_input() starts the new
++             connection at least 65537 beyond the old snd_nxt, the distance
++             that Linux uses. The timestamp test of RFC 6191 is absent:
++             LWIP_TCP_TIMESTAMPS is off. The old connection does not come
++             back if the SYN was an old duplicate.
++           - A RST with exactly the old rcv_nxt ends the old connection and is
++             dropped. A client sends it in answer to the ACK when its SYN was
++             before the old rcv_nxt; its next SYN then finds no connection in
++             TIME-WAIT.
++           Every other segment goes to tcp_timewait_input() as before. */
++        if (pcb->callback_arg == NULL && pcb->errf == NULL) {
++          if ((flags & (TCP_SYN | TCP_ACK | TCP_RST | TCP_FIN)) == TCP_SYN &&
++              TCP_SEQ_GT(seqno, pcb->rcv_nxt)) {
++            tcp_tw_syn = 1;
++            tcp_tw_syn_snd_nxt = pcb->snd_nxt;
++            tcp_pcb_remove(&tcp_tw_pcbs, pcb);
++            tcp_free(pcb);
++            pcb = NULL;
++            break;
++          }
++          if ((flags & TCP_RST) && seqno == pcb->rcv_nxt) {
++            tcp_pcb_remove(&tcp_tw_pcbs, pcb);
++            tcp_free(pcb);
++            pbuf_free(p);
++            return;
++          }
++        }
+ #ifdef LWIP_HOOK_TCP_INPACKET_PCB
+         if (LWIP_HOOK_TCP_INPACKET_PCB(pcb, tcphdr, tcphdr_optlen, tcphdr_opt1len,
+                                        tcphdr_opt2, p) == ERR_OK)
+@@ -694,6 +740,11 @@
+     npcb->rcv_nxt = seqno + 1;
+     npcb->rcv_ann_right_edge = npcb->rcv_nxt;
+     iss = tcp_next_iss(npcb);
++    /* JetKVM: a SYN that has ended a connection in TIME-WAIT (see tcp_input())
++       starts beyond the sequence numbers that the old connection used. */
++    if (tcp_tw_syn && !TCP_SEQ_GT(iss, tcp_tw_syn_snd_nxt + 65537)) {
++      iss = tcp_tw_syn_snd_nxt + 65537;
++    }
+     npcb->snd_wl2 = iss;
+     npcb->snd_nxt = iss;
+     npcb->lastack = iss;
