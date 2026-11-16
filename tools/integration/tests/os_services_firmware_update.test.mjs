@@ -422,7 +422,10 @@ describe('OS Services across firmware updates', () => {
     assert.ok(port.samples.filter(sample => sample.at >= times.backAt).every(sample => sample.osServices === 'none'),
       'nothing left of the interface');
     // The sender keeps looking without holding anything, and keeps running.
-    await host.waitForSenderLog(times.backAt, /no OS Services USB interface found/, 30);
+    // A sender from 0.4.6 on logs a repeated error one time: the line comes
+    // once the Mini has left the bus, and not again while the release runs.
+    assert.notEqual(times.goneAt, undefined, `the Mini left the host's bus: ${JSON.stringify(port.samples)}`);
+    await host.waitForSenderLog(times.goneAt - 1000, /no OS Services USB interface found/, 30);
     assert.equal((await host.sender()).running, true, 'the sender keeps running');
     t.diagnostic(`into ${PREVIOUS_VERSION}: off the bus until enumerated again: ${times.backAt - times.goneAt} ms (host clock)`);
 
