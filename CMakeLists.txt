@@ -71,6 +71,9 @@ if(JETKVM_TF_SD_ACMD23)
     apply_idf_patch(patches/esp-idf-6.0.2-sdmmc-acmd23-preerase.patch)
 endif()
 apply_idf_patch(patches/esp-idf-6.0.2-lwip-large-receive-window.patch)
+# A browser opens a connection from the port of one that the Mini has just
+# closed; lwIP must take that SYN and not hold the port for 2 * TCP_MSL.
+apply_idf_patch(patches/esp-idf-6.0.2-lwip-timewait-new-syn.patch)
 # The WireGuard interface of the Tailscale client keeps its driver state in
 # netif->state; ESP-NETIF then keeps its handle in a client-data slot.
 apply_idf_patch(patches/esp-idf-6.0.2-lwip-raw-netif-state.patch)

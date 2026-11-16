@@ -1,0 +1,25 @@
+diff --git a/components/lwip/lwip/src/core/tcp_in.c b/components/lwip/lwip/src/core/tcp_in.c
+--- a/components/lwip/lwip/src/core/tcp_in.c
++++ b/components/lwip/lwip/src/core/tcp_in.c
+@@ -311,6 +311,21 @@
+            of the list since we are not very likely to receive that
+            many segments for connections in TIME-WAIT. */
+         LWIP_DEBUGF(TCP_INPUT_DEBUG, ("tcp_input: packed for TIME_WAITing connection.\n"));
++        /* JetKVM: a new SYN beyond the old connection's receive sequence
++           reopens the connection (RFC 1122 4.2.2.13, RFC 6191), as BSD and
++           Linux do. Without this the SYN gets an ACK of the old connection,
++           the client answers that ACK with a RST, TIME-WAIT ignores the RST
++           (RFC 1337), and the client cannot connect from that port for
++           2 * TCP_MSL. A browser meets this when it opens a connection from
++           the port of one that this side has just closed. End the old
++           connection and let a listening PCB take the SYN. */
++        if ((flags & (TCP_SYN | TCP_ACK | TCP_RST | TCP_FIN)) == TCP_SYN &&
++            TCP_SEQ_GT(seqno, pcb->rcv_nxt)) {
++          tcp_pcb_remove(&tcp_tw_pcbs, pcb);
++          tcp_free(pcb);
++          pcb = NULL;
++          break;
++        }
+ #ifdef LWIP_HOOK_TCP_INPACKET_PCB
+         if (LWIP_HOOK_TCP_INPACKET_PCB(pcb, tcphdr, tcphdr_optlen, tcphdr_opt1len,
+                                        tcphdr_opt2, p) == ERR_OK)
