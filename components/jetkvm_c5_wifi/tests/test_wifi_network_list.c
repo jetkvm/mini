@@ -28,6 +28,53 @@ static void test_upsert_replaces_password_without_duplicate(void)
     assert(wifi_network_list_find(&list, S("home")) == -1);
 }
 
+static void test_joined(void)
+{
+    wifi_network_list_t list;
+    wifi_network_list_init(&list);
+    assert(wifi_network_list_upsert(&list, S("Home"), S("password1")) == WIFI_NETWORK_LIST_OK);
+    assert(wifi_network_list_upsert(&list, S("Cafe"), S("")) == WIFI_NETWORK_LIST_OK);
+    /* A password saved without a join is not proven, like one of a network
+     * that is not saved. An open network has no password to prove. */
+    assert(wifi_network_list_password_unproven(&list, S("Home"), S("password1")));
+    assert(wifi_network_list_password_unproven(&list, S("Other"), S("password1")));
+    assert(!wifi_network_list_password_unproven(&list, S("Cafe"), S("")));
+    assert(!wifi_network_list_password_unproven(&list, S("Other"), S("")));
+
+    /* A join with a password that is not the saved one records nothing. */
+    assert(!wifi_network_list_set_joined(&list, S("Home"), S("password2")));
+    assert(!wifi_network_list_set_joined(&list, S("Home"), S("password")));
+    assert(!wifi_network_list_set_joined(&list, S("Other"), S("password1")));
+    assert(wifi_network_list_password_unproven(&list, S("Home"), S("password1")));
+
+    /* Only the first join changes the list, so only it is written to flash. */
+    assert(wifi_network_list_set_joined(&list, S("Home"), S("password1")));
+    assert(!wifi_network_list_set_joined(&list, S("Home"), S("password1")));
+    assert(!wifi_network_list_password_unproven(&list, S("Home"), S("password1")));
+    /* Another password for the joined network is not proven. */
+    assert(wifi_network_list_password_unproven(&list, S("Home"), S("password2")));
+    assert(wifi_network_list_password_unproven(&list, S("Home"), S("password")));
+
+    /* Saving the same password again keeps the join; a new password loses
+     * it, also when the old password comes back later. */
+    assert(wifi_network_list_upsert(&list, S("Home"), S("password1")) == WIFI_NETWORK_LIST_OK);
+    assert(!wifi_network_list_password_unproven(&list, S("Home"), S("password1")));
+    assert(wifi_network_list_upsert(&list, S("Home"), S("password2")) == WIFI_NETWORK_LIST_OK);
+    assert(wifi_network_list_password_unproven(&list, S("Home"), S("password2")));
+    assert(wifi_network_list_upsert(&list, S("Home"), S("password1")) == WIFI_NETWORK_LIST_OK);
+    assert(wifi_network_list_password_unproven(&list, S("Home"), S("password1")));
+
+    /* The join stays with its network when an entry before it is removed,
+     * and a network that is removed and saved again starts without it. */
+    assert(wifi_network_list_upsert(&list, S("Office"), S("password3")) == WIFI_NETWORK_LIST_OK);
+    assert(wifi_network_list_set_joined(&list, S("Office"), S("password3")));
+    assert(wifi_network_list_remove(&list, S("Home")) == WIFI_NETWORK_LIST_OK);
+    assert(!wifi_network_list_password_unproven(&list, S("Office"), S("password3")));
+    assert(wifi_network_list_remove(&list, S("Office")) == WIFI_NETWORK_LIST_OK);
+    assert(wifi_network_list_upsert(&list, S("Office"), S("password3")) == WIFI_NETWORK_LIST_OK);
+    assert(wifi_network_list_password_unproven(&list, S("Office"), S("password3")));
+}
+
 static void test_limits(void)
 {
     wifi_network_list_t list;
@@ -150,11 +197,17 @@ static void test_decode(void)
     wifi_network_list_t loaded;
     assert(wifi_network_list_decode(&loaded, &list, sizeof(list)));
     assert(loaded.count == 1 && wifi_network_list_find(&loaded, S("Home")) == 0);
-    /* The reserved byte (a hidden flag in development builds) is ignored. */
-    wifi_network_list_t flagged = list;
-    flagged.items[0].reserved = 1;
-    assert(wifi_network_list_decode(&loaded, &flagged, sizeof(flagged)) && loaded.count == 1 &&
-           loaded.items[0].reserved == 0);
+    /* Firmware before the `joined` flag wrote 0 in its byte, as here: the
+     * record loads as not joined, and its password is not proven. */
+    assert(wifi_network_list_password_unproven(&loaded, S("Home"), S("password1")));
+    /* A recorded join survives the load, for its network only. */
+    wifi_network_list_t joined = list;
+    assert(wifi_network_list_upsert(&joined, S("Office"), S("password2")) == WIFI_NETWORK_LIST_OK);
+    assert(wifi_network_list_set_joined(&joined, S("Office"), S("password2")));
+    assert(wifi_network_list_decode(&loaded, &joined, sizeof(joined)) && loaded.count == 2);
+    assert(wifi_network_list_password_unproven(&loaded, S("Home"), S("password1")));
+    assert(!wifi_network_list_password_unproven(&loaded, S("Office"), S("password2")));
+    assert(!wifi_network_list_set_joined(&loaded, S("Office"), S("password2")));
 
     assert(!wifi_network_list_decode(&loaded, &list, sizeof(list) - 1));
     assert(loaded.count == 0);
@@ -195,6 +248,7 @@ static void test_legacy(void)
 int main(void)
 {
     test_upsert_replaces_password_without_duplicate();
+    test_joined();
     test_limits();
     test_passwords();
     test_remove();
