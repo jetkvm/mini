@@ -91,6 +91,7 @@ apply_idf_patch(patches/esp-idf-6.0.2-aes-dma-alloc-failure-cleanup.patch)
 # of RX descriptors, and a check that CONFIG_ETH_DMA_BUFFER_SIZE is a multiple
 # of the cache line.
 apply_idf_patch(patches/esp-idf-6.0.2-emac-dma-status.patch)
+apply_idf_patch(patches/esp-idf-6.0.2-hp-ldo-off-delay.patch)
 include(cmake/configure_lwip_tcpip_mbox.cmake)
 include(cmake/configure_usb_audio.cmake)
 # third_party/microlink is exported from jetkvm/microlink at 80d0f8aee5; make

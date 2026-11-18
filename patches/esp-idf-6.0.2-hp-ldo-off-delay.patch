@@ -1,0 +1,19 @@
+--- a/components/esp_hw_support/port/esp32p4/rtc_clk_init.c
++++ b/components/esp_hw_support/port/esp32p4/rtc_clk_init.c
+@@ -77,7 +77,7 @@ void rtc_clk_init(rtc_clk_config_t cfg)
+     pmu_ll_set_dcdc_switch_force_power_down(&PMU, false);
+     pmu_ll_hp_set_dcm_vset(&PMU, PMU_MODE_HP_ACTIVE, hp_dcmvset);
+     SET_PERI_REG_MASK(PMU_HP_ACTIVE_HP_REGULATOR0_REG, PMU_DIG_REGULATOR0_DBIAS_SEL); // Hand over control of dbias to pmu
+-    esp_rom_delay_us(1000);
++    esp_rom_delay_us(2000);
+ #if CONFIG_ESP32P4_REV_MIN_FULL >= 300
+     if (ESP_CHIP_REV_ABOVE(chip_version, 301)) {
+         REG_SET_FIELD(LP_SYSTEM_REG_SYS_CTRL_REG, LP_SYSTEM_REG_LP_FIB_SEL, 0xEF);// lp_fib_sel bit4 set to 0: select dig_fib_reg instead of ana_fib_reg
+@@ -85,6 +85,7 @@ void rtc_clk_init(rtc_clk_config_t cfg)
+         esp_rom_delay_us(10);
+     }
+ #endif
++    esp_rom_delay_us(1000);
+     pmu_ll_hp_set_regulator_xpd(&PMU, PMU_MODE_HP_ACTIVE, false);
+ 
+     soc_xtal_freq_t xtal_freq = cfg.xtal_freq;
