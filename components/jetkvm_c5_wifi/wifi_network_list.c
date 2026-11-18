@@ -53,6 +53,21 @@ int wifi_network_list_find(const wifi_network_list_t *list,
     return -1;
 }
 
+/* Index of the entry with this SSID and this password, or -1. */
+static int find_with_password(const wifi_network_list_t *list,
+                              const uint8_t *ssid, size_t ssid_len,
+                              const uint8_t *password, size_t password_len)
+{
+    int index = wifi_network_list_find(list, ssid, ssid_len);
+    if (index < 0) return -1;
+    const wifi_saved_network_t *item = &list->items[index];
+    if (item->password_len != password_len ||
+        (password_len > 0U && memcmp(item->password, password, password_len) != 0)) {
+        return -1;
+    }
+    return index;
+}
+
 wifi_network_list_result_t wifi_network_list_upsert(
     wifi_network_list_t *list, const uint8_t *ssid, size_t ssid_len,
     const uint8_t *password, size_t password_len)
@@ -61,6 +76,9 @@ wifi_network_list_result_t wifi_network_list_upsert(
         !wifi_network_password_valid(password, password_len)) {
         return WIFI_NETWORK_LIST_INVALID;
     }
+    /* A new password has not joined the network. */
+    int same = find_with_password(list, ssid, ssid_len, password, password_len);
+    uint8_t joined = same >= 0 ? list->items[same].joined : 0U;
     int index = wifi_network_list_find(list, ssid, ssid_len);
     if (index < 0) {
         if (list->count >= WIFI_NETWORK_LIST_MAX) return WIFI_NETWORK_LIST_FULL;
@@ -72,7 +90,27 @@ wifi_network_list_result_t wifi_network_list_upsert(
     item->ssid_len = (uint8_t)ssid_len;
     if (password_len > 0U) memcpy(item->password, password, password_len);
     item->password_len = (uint8_t)password_len;
+    item->joined = joined;
     return WIFI_NETWORK_LIST_OK;
+}
+
+bool wifi_network_list_set_joined(
+    wifi_network_list_t *list, const uint8_t *ssid, size_t ssid_len,
+    const uint8_t *password, size_t password_len)
+{
+    int index = find_with_password(list, ssid, ssid_len, password, password_len);
+    if (index < 0 || list->items[index].joined != 0U) return false;
+    list->items[index].joined = 1U;
+    return true;
+}
+
+bool wifi_network_list_password_unproven(
+    const wifi_network_list_t *list, const uint8_t *ssid, size_t ssid_len,
+    const uint8_t *password, size_t password_len)
+{
+    if (password_len == 0U) return false;
+    int index = find_with_password(list, ssid, ssid_len, password, password_len);
+    return index < 0 || list->items[index].joined == 0U;
 }
 
 wifi_network_list_result_t wifi_network_list_remove(
@@ -161,6 +199,10 @@ bool wifi_network_list_decode(wifi_network_list_t *list, const void *blob,
                 WIFI_NETWORK_LIST_OK) {
             wifi_network_list_init(list);
             return false;
+        }
+        if (item->joined != 0U) {
+            (void)wifi_network_list_set_joined(list, item->ssid, item->ssid_len,
+                                               item->password, item->password_len);
         }
     }
     return true;

@@ -17,7 +17,10 @@ typedef struct {
     uint8_t ssid_len;
     uint8_t password[WIFI_NETWORK_PASSWORD_MAX];
     uint8_t password_len;
-    uint8_t reserved; /* written as 0; ignored on load */
+    /* 1 once the station has joined the network with this password. Firmware
+     * before this flag wrote 0 here, so its records count as not joined
+     * until their next join. */
+    uint8_t joined;
 } wifi_saved_network_t;
 
 typedef struct {
@@ -70,9 +73,23 @@ bool wifi_network_password_valid(const uint8_t *password, size_t length);
 int wifi_network_list_find(const wifi_network_list_t *list,
                            const uint8_t *ssid, size_t ssid_len);
 
-/** Add a network or replace the password of the one with this SSID. */
+/** Add a network or replace the password of the one with this SSID. The
+ *  entry stays `joined` only when the password does not change. */
 wifi_network_list_result_t wifi_network_list_upsert(
     wifi_network_list_t *list, const uint8_t *ssid, size_t ssid_len,
+    const uint8_t *password, size_t password_len);
+
+/** Record that the station joined a network with this password. Returns true
+ *  when that changed the list: the network is saved with this password and
+ *  was not `joined`. */
+bool wifi_network_list_set_joined(
+    wifi_network_list_t *list, const uint8_t *ssid, size_t ssid_len,
+    const uint8_t *password, size_t password_len);
+
+/** True for a password that has not joined its network before: there is a
+ *  password, and it is not the one of a saved network that is `joined`. */
+bool wifi_network_list_password_unproven(
+    const wifi_network_list_t *list, const uint8_t *ssid, size_t ssid_len,
     const uint8_t *password, size_t password_len);
 
 /** Remove a network. The last network cannot be removed. */
