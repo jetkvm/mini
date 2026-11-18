@@ -916,6 +916,11 @@ static size_t append_hid_function_descriptor(
     }
 }
 
+/* The Mini takes its power from the target's port. With capture and the
+ * network running it needs more than the 100 mA of a low-power device, so it
+ * asks for the most a USB 2.0 port gives. */
+#define USB_BUS_CURRENT_MA 500
+
 static esp_err_t build_configuration_descriptor(
     const hid_descriptor_bank_t *bank,
     uint8_t interval,
@@ -924,7 +929,7 @@ static esp_err_t build_configuration_descriptor(
     const uint8_t header[] = {
         TUD_CONFIG_DESCRIPTOR(
             1, bank->interface_count, 0, bank->configuration_length,
-            TUSB_DESC_CONFIG_ATT_REMOTE_WAKEUP, 100),
+            TUSB_DESC_CONFIG_ATT_REMOTE_WAKEUP, USB_BUS_CURRENT_MA),
     };
     memcpy(destination, header, sizeof(header));
     size_t offset = sizeof(header);
