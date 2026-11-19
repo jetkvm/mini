@@ -43,7 +43,12 @@ class PresetTests(unittest.TestCase):
                     vics.extend(x & 127 for x in block)
                 pos += size + 1
             self.assertEqual(pos, ext[2])
-            self.assertEqual(vics, [34, 62, 4])  # 1080p30, 720p30, 720p60
+            self.assertEqual(vics, [34, 62, 4, 1])  # 1080p30, 720p30, 720p60, 640x480p60
+            # IT formats underscanned, one native detailed timing, and a Video
+            # Capability Data Block with selectable quantization ranges.
+            self.assertTrue(ext[3] & 0x80)
+            self.assertEqual(ext[3] & 0x0f, 1)
+            self.assertIn(bytes([0xe2, 0x00, 0xcf]), bytes(ext[4:ext[2]]))
             modes = []
             for d in [data[54:72]] + [ext[i:i+18] for i in range(ext[2], 110, 18)]:
                 clock = int.from_bytes(d[:2], 'little') * 10000
