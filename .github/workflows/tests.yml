@@ -86,3 +86,5 @@ jobs:
         run: node --test e2e/helpers/video-freeze.unit.ts
       - name: Unit-test the upload time estimate
         run: node --test tests/upload-eta.mjs
+      - name: Unit-test the connection diagnosis
+        run: node --test tests/diagnosis.mjs

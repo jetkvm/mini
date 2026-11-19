@@ -65,6 +65,13 @@ const SettingsMacrosRoute = lazy(() => import("@routes/devices.$id.settings.macr
 const SettingsMacrosAddRoute = lazy(() => import("@routes/devices.$id.settings.macros.add"));
 const SettingsMacrosEditRoute = lazy(() => import("@routes/devices.$id.settings.macros.edit"));
 
+// Pages for UI work that the Vite dev server serves and a build leaves out:
+// `import.meta.env.DEV` is false in a build, so the import below is removed.
+const DiagnosisLabRoute = import.meta.env.DEV ? lazy(() => import("@routes/dev.diagnosis")) : null;
+const devRoutes: RouteObject[] = DiagnosisLabRoute
+  ? [{ path: "/dev/diagnosis", element: <DiagnosisLabRoute /> }]
+  : [];
+
 export const isOnDevice = import.meta.env.MODE === "device";
 export const isInCloud = !isOnDevice;
 
@@ -283,6 +290,7 @@ if (isOnDevice) {
           loader: AdoptRoute.loader,
           errorElement: <ErrorBoundary />,
         },
+        ...devRoutes,
       ],
     },
   ]);
@@ -293,6 +301,7 @@ if (isOnDevice) {
       HydrateFallback: () => null,
       errorElement: <ErrorBoundary />,
       children: [
+        ...devRoutes,
         { path: "signup", element: <SignupRoute /> },
         { path: "login", element: <LoginRoute /> },
         {
