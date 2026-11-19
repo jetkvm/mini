@@ -844,6 +844,16 @@ static void test_hidrpc(void)
     assert(observed.rel_mouse.dy == INT8_MAX);
     assert(observed.rel_mouse.buttons == 0x03);
 
+    const uint8_t wheel[] = { 0x04, 0x80, 0x7f };
+    expect_hidrpc_event(wheel, sizeof(wheel), &observed);
+    assert(observed.type == JETKVM_HIDRPC_EVENT_WHEEL_REPORT);
+    assert(observed.wheel.wheel_y == INT8_MIN);
+    assert(observed.wheel.wheel_x == INT8_MAX);
+    const uint8_t wheel_down[] = { 0x04, 0xff, 0x01 };
+    expect_hidrpc_event(wheel_down, sizeof(wheel_down), &observed);
+    assert(observed.wheel.wheel_y == -1);
+    assert(observed.wheel.wheel_x == 1);
+
     const uint8_t macro[] = {
         0x07, 0x01, 0x00, 0x00, 0x00, 0x02,
         0x02, 0x04, 0x05, 0x00, 0x00, 0x00, 0x00, 0x01, 0x2c,
@@ -921,6 +931,11 @@ static void test_hidrpc(void)
     expect_malformed_hidrpc(rel_mouse, sizeof(rel_mouse) - 1U);
     const uint8_t rel_mouse_long[] = { 0x06, 0, 0, 0, 0 };
     expect_malformed_hidrpc(rel_mouse_long, sizeof(rel_mouse_long));
+    expect_malformed_hidrpc(wheel, sizeof(wheel) - 1U);
+    const uint8_t wheel_type_only[] = { 0x04 };
+    const uint8_t wheel_long[] = { 0x04, 0, 0, 0 };
+    expect_malformed_hidrpc(wheel_type_only, sizeof(wheel_type_only));
+    expect_malformed_hidrpc(wheel_long, sizeof(wheel_long));
     const uint8_t macro_short[] = { 0x07, 0, 0, 0, 0 };
     const uint8_t macro_bad_bool[] = { 0x07, 2, 0, 0, 0, 0 };
     const uint8_t macro_missing_step[] = { 0x07, 0, 0, 0, 0, 1 };
