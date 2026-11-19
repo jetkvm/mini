@@ -68,6 +68,8 @@ void jetkvm_usb_config_defaults(jetkvm_usb_config_t *config)
            sizeof(JETKVM_USB_DEFAULT_MANUFACTURER));
     memcpy(config->product, JETKVM_USB_DEFAULT_PRODUCT,
            sizeof(JETKVM_USB_DEFAULT_PRODUCT));
+    memcpy(config->configuration, JETKVM_USB_DEFAULT_CONFIGURATION,
+           sizeof(JETKVM_USB_DEFAULT_CONFIGURATION));
     config->keyboard = true;
     config->absolute_mouse = true;
     config->relative_mouse = true;
@@ -98,6 +100,7 @@ bool jetkvm_usb_config_validate(const jetkvm_usb_config_t *config)
            printable_ascii(config->serial_number, true) &&
            printable_ascii(config->manufacturer, true) &&
            printable_ascii(config->product, true) &&
+           printable_ascii(config->configuration, true) &&
            (config->keyboard || config->absolute_mouse ||
             config->relative_mouse || config->mass_storage || config->audio) &&
            !config->serial_console;
@@ -113,6 +116,7 @@ bool jetkvm_usb_config_equal(const jetkvm_usb_config_t *left,
            bounded_string_equal(left->serial_number, right->serial_number) &&
            bounded_string_equal(left->manufacturer, right->manufacturer) &&
            bounded_string_equal(left->product, right->product) &&
+           bounded_string_equal(left->configuration, right->configuration) &&
            left->keyboard == right->keyboard &&
            left->absolute_mouse == right->absolute_mouse &&
            left->relative_mouse == right->relative_mouse &&
@@ -142,6 +146,17 @@ esp_err_t jetkvm_usb_config_set_identity(
     copy_string(updated.manufacturer, manufacturer);
     copy_string(updated.product, product);
     *config = updated;
+    return ESP_OK;
+}
+
+esp_err_t jetkvm_usb_config_set_configuration_string(
+    jetkvm_usb_config_t *config, const char *configuration)
+{
+    if (!config || !printable_ascii(configuration, true)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    copy_string(config->configuration, configuration);
+    config->schema_version = JETKVM_USB_CONFIG_SCHEMA_VERSION;
     return ESP_OK;
 }
 

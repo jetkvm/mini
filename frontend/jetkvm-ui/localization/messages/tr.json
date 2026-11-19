@@ -1000,6 +1000,8 @@
     "usb_config_update_identifiers": "USB Tanımlayıcılarını Güncelle",
     "usb_config_vendor_id_label": "Üretici Kimliği",
     "usb_config_vendor_id_placeholder": "Üretici Kimliği Girin",
+    "usb_config_configuration_label": "Yapılandırma",
+    "usb_config_configuration_placeholder": "Yapılandırmayı Girin",
     "usb_device_classes_description": "Kompozit cihazdaki USB cihaz sınıfları",
     "usb_device_classes_title": "Sınıflar",
     "usb_device_custom": "Özel",

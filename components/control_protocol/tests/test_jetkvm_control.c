@@ -1841,6 +1841,7 @@ int main(void)
             .serial_number = "ESP32-P4",
             .manufacturer = "JetKVM",
             .product = "JetKVM USB Emulation Device",
+            .configuration = "Config 1: HID",
             .absolute_mouse = true,
             .relative_mouse = true,
             .keyboard = true,
@@ -2667,7 +2668,7 @@ int main(void)
     expect_rpc_context(
         &context,
         "{\"jsonrpc\":\"2.0\",\"method\":\"getUsbConfig\",\"id\":432}",
-        "{\"jsonrpc\":\"2.0\",\"id\":432,\"result\":{\"vendor_id\":\"0x303a\",\"product_id\":\"0x400c\",\"serial_number\":\"ESP32-P4\",\"manufacturer\":\"JetKVM\",\"product\":\"JetKVM USB Emulation Device\"}}");
+        "{\"jsonrpc\":\"2.0\",\"id\":432,\"result\":{\"vendor_id\":\"0x303a\",\"product_id\":\"0x400c\",\"serial_number\":\"ESP32-P4\",\"manufacturer\":\"JetKVM\",\"product\":\"JetKVM USB Emulation Device\",\"configuration\":\"Config 1: HID\"}}");
 
     expect_rpc_context(
         &context,
@@ -2686,6 +2687,33 @@ int main(void)
                "") == 0);
     assert(strcmp(observed_usb_configuration.last_descriptor_config.product,
                   "JetKVM P4~") == 0);
+    /* A page from before the configuration field leaves it out. */
+    assert(!observed_usb_configuration.last_descriptor_config
+                .has_configuration);
+
+    expect_rpc_context(
+        &context,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"setUsbConfig\",\"params\":{\"usbConfig\":{\"vendor_id\":\"0x046d\",\"product_id\":\"0xc52b\",\"serial_number\":\"\",\"manufacturer\":\"Logitech (x64)\",\"product\":\"Logitech USB Input Device\",\"configuration\":\"RQR24.11_B0036\"}},\"id\":43211}",
+        "{\"jsonrpc\":\"2.0\",\"id\":43211,\"result\":null}");
+    assert(observed_usb_configuration.descriptor_change_calls == 2U);
+    assert(observed_usb_configuration.last_descriptor_config
+               .has_configuration);
+    assert(strcmp(
+               observed_usb_configuration.last_descriptor_config.configuration,
+               "RQR24.11_B0036") == 0);
+    assert(strcmp(observed_usb_configuration.last_descriptor_config.product,
+                  "Logitech USB Input Device") == 0);
+
+    /* An empty configuration string is a setting, not a missing field. */
+    expect_rpc_context(
+        &context,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"setUsbConfig\",\"params\":{\"usbConfig\":{\"configuration\":\"\",\"vendor_id\":\"0x303a\",\"product_id\":\"0x400c\",\"serial_number\":\"P4\",\"manufacturer\":\"JetKVM\",\"product\":\"KVM\"}},\"id\":43212}",
+        "{\"jsonrpc\":\"2.0\",\"id\":43212,\"result\":null}");
+    assert(observed_usb_configuration.descriptor_change_calls == 3U);
+    assert(observed_usb_configuration.last_descriptor_config
+               .has_configuration);
+    assert(observed_usb_configuration.last_descriptor_config
+               .configuration[0] == '\0');
 
     expect_rpc_context(
         &context,
@@ -2853,6 +2881,33 @@ int main(void)
         &context,
         "{\"jsonrpc\":\"2.0\",\"method\":\"setUsbConfig\",\"params\":{\"usbConfig\":{\"vendor_id\":\"0x303a\",\"product_id\":\"0x400c\",\"serial_number\":\"P4\",\"manufacturer\":\"J\\u00e9tKVM\",\"product\":\"KVM\"}},\"id\":43451}",
         "{\"jsonrpc\":\"2.0\",\"id\":43451,\"error\":{\"code\":-32602,\"message\":\"Invalid params\",\"data\":\"usbConfig must contain valid vendor_id, product_id, serial_number, manufacturer, and product fields\"}}");
+    const char *invalid_configurations[] = {
+        "\"12345678901234567890123456789012\"",
+        "\"Config\\t1\"",
+        "1",
+        "null",
+    };
+    for (size_t i = 0; i < sizeof(invalid_configurations) /
+                               sizeof(invalid_configurations[0]);
+         ++i) {
+        char request[384];
+        char response[320];
+        int id = 43460 + (int)i;
+        assert(snprintf(
+                   request, sizeof(request),
+                   "{\"jsonrpc\":\"2.0\",\"method\":\"setUsbConfig\",\"params\":{\"usbConfig\":{\"vendor_id\":\"0x303a\",\"product_id\":\"0x400c\",\"serial_number\":\"P4\",\"manufacturer\":\"JetKVM\",\"product\":\"KVM\",\"configuration\":%s}},\"id\":%d}",
+                   invalid_configurations[i], id) > 0);
+        assert(snprintf(
+                   response, sizeof(response),
+                   "{\"jsonrpc\":\"2.0\",\"id\":%d,\"error\":{\"code\":-32602,\"message\":\"Invalid params\",\"data\":\"usbConfig must contain valid vendor_id, product_id, serial_number, manufacturer, and product fields\"}}",
+                   id) > 0);
+        expect_rpc_context(&context, request, response);
+    }
+    /* The configuration field does not stand in for a required one. */
+    expect_rpc_context(
+        &context,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"setUsbConfig\",\"params\":{\"usbConfig\":{\"vendor_id\":\"0x303a\",\"product_id\":\"0x400c\",\"serial_number\":\"P4\",\"manufacturer\":\"JetKVM\",\"configuration\":\"KVM\"}},\"id\":43464}",
+        "{\"jsonrpc\":\"2.0\",\"id\":43464,\"error\":{\"code\":-32602,\"message\":\"Invalid params\",\"data\":\"usbConfig must contain valid vendor_id, product_id, serial_number, manufacturer, and product fields\"}}");
     expect_rpc_context(
         &context,
         "{\"jsonrpc\":\"2.0\",\"method\":\"setUsbConfig\",\"params\":{\"usbConfig\":{\"vendor_id\":\"0x303a\",\"product_id\":\"0x400c\",\"serial_number\":\"P4\",\"manufacturer\":\"JetKVM\"}},\"id\":4346}",

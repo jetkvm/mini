@@ -15,8 +15,12 @@
 extern "C" {
 #endif
 
-#define JETKVM_USB_CONFIG_SCHEMA_VERSION 1U
-#define JETKVM_USB_CONFIG_RECORD_VERSION 1U
+#define JETKVM_USB_CONFIG_SCHEMA_VERSION 2U
+#define JETKVM_USB_CONFIG_RECORD_VERSION 2U
+/* Records written before the configuration string. Loading one gives the
+ * default configuration string and keeps all other settings. */
+#define JETKVM_USB_CONFIG_LEGACY_SCHEMA_VERSION 1U
+#define JETKVM_USB_CONFIG_LEGACY_RECORD_VERSION 1U
 #define JETKVM_USB_STRING_CAPACITY 32U
 
 /* JetKVM's own USB ID. The IP-KVM OS Services Linux udev rule matches it to
@@ -31,6 +35,8 @@ extern "C" {
 #define JETKVM_USB_DEFAULT_SERIAL_NUMBER ""
 #define JETKVM_USB_DEFAULT_MANUFACTURER "JetKVM"
 #define JETKVM_USB_DEFAULT_PRODUCT "USB Emulation Device"
+/* The configuration descriptor string (iConfiguration), as upstream. */
+#define JETKVM_USB_DEFAULT_CONFIGURATION "Config 1: HID"
 
 /**
  * Complete persistent USB identity and function selection.
@@ -47,6 +53,7 @@ typedef struct {
     char serial_number[JETKVM_USB_STRING_CAPACITY];
     char manufacturer[JETKVM_USB_STRING_CAPACITY];
     char product[JETKVM_USB_STRING_CAPACITY];
+    char configuration[JETKVM_USB_STRING_CAPACITY];
     bool keyboard;
     bool absolute_mouse;
     bool relative_mouse;
@@ -99,6 +106,14 @@ esp_err_t jetkvm_usb_config_set_identity(
     uint16_t vendor_id, uint16_t product_id,
     const char *serial_number, const char *manufacturer,
     const char *product);
+
+/**
+ * Replace the configuration descriptor string. The rules are the same as for
+ * the identity strings; an empty string gives iConfiguration 0. An invalid
+ * string returns ESP_ERR_INVALID_ARG and leaves `config` unchanged.
+ */
+esp_err_t jetkvm_usb_config_set_configuration_string(
+    jetkvm_usb_config_t *config, const char *configuration);
 
 /**
  * Atomically replace the enabled USB functions.
