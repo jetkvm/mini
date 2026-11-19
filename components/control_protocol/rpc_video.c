@@ -49,7 +49,9 @@ static bool add_capability(cJSON *list, bool present, const char *name)
  * "usb_debugging": the build registered the USB debugging setting, so the UI
  * shows its switch (getUsbDebuggingState, setUsbDebuggingState).
  * "extra_hostnames": the web server takes other names for the device
- * (getExtraHostnames, setExtraHostnames), so the UI shows that setting. */
+ * (getExtraHostnames, setExtraHostnames), so the UI shows that setting.
+ * "mdns": the network settings carry mdns_mode, so the UI shows the mDNS
+ * setting. */
 static cJSON *device_capabilities_json(const jetkvm_control_context_t *context)
 {
     cJSON *result = cJSON_CreateArray();
@@ -72,7 +74,9 @@ static cJSON *device_capabilities_json(const jetkvm_control_context_t *context)
         !add_capability(result, s_default_usb_debugging.get && s_default_usb_debugging.set,
                         "usb_debugging") ||
         !add_capability(result, s_default_extra_hostnames.get && s_default_extra_hostnames.set,
-                        "extra_hostnames")) {
+                        "extra_hostnames") ||
+        !add_capability(result, context && context->get_network_settings &&
+                        context->set_network_settings, "mdns")) {
         cJSON_Delete(result);
         return NULL;
     }

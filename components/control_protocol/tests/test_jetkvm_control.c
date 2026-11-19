@@ -2573,7 +2573,7 @@ int main(void)
     expect_rpc_context(
         &context,
         "{\"jsonrpc\":\"2.0\",\"method\":\"getNetworkSettings\",\"id\":3}",
-        "{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"read_only_fields\":[\"dhcp_client\",\"domain\",\"http_proxy\",\"ipv6_mode\",\"lldp_mode\",\"mdns_mode\",\"tailscale\"],\"hostname\":\"p4-kvm\",\"ipv4_mode\":\"static\",\"dhcp_client\":\"lwip\",\"domain\":\"local\",\"http_proxy\":\"\",\"ipv6_mode\":\"disabled\",\"lldp_mode\":\"disabled\",\"mdns_mode\":\"disabled\",\"time_sync_mode\":\"ntp_only\",\"time_sync_ntp_servers\":[],\"time_sync_disable_fallback\":false,\"ipv4_static\":{\"address\":\"192.168.50.2\",\"netmask\":\"255.255.255.0\",\"gateway\":\"192.168.50.1\",\"dns\":[\"8.8.8.8\",\"1.1.1.1\"]}}}");
+        "{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"read_only_fields\":[\"dhcp_client\",\"domain\",\"http_proxy\",\"ipv6_mode\",\"lldp_mode\",\"tailscale\"],\"hostname\":\"p4-kvm\",\"ipv4_mode\":\"static\",\"mdns_mode\":\"auto\",\"dhcp_client\":\"lwip\",\"domain\":\"local\",\"http_proxy\":\"\",\"ipv6_mode\":\"disabled\",\"lldp_mode\":\"disabled\",\"time_sync_mode\":\"ntp_only\",\"time_sync_ntp_servers\":[],\"time_sync_disable_fallback\":false,\"ipv4_static\":{\"address\":\"192.168.50.2\",\"netmask\":\"255.255.255.0\",\"gateway\":\"192.168.50.1\",\"dns\":[\"8.8.8.8\",\"1.1.1.1\"]}}}");
     expect_rpc_context(
         &context,
         "{\"jsonrpc\":\"2.0\",\"method\":\"getDeviceID\",\"params\":{},\"id\":31}",

@@ -101,6 +101,18 @@ CONFIG_LWIP_MAX_SOCKETS=16
 # User-provided NTP servers ahead of the public fallback.
 CONFIG_LWIP_SNTP_MAX_SERVERS=4
 
+# mDNS responder (components/jetkvm_mdns): the Ethernet or the Wi-Fi station
+# interface and one service. It only answers, so no browse and no console
+# commands. Its task stack and heap are in PSRAM; the task does no flash
+# operations.
+CONFIG_MDNS_MAX_INTERFACES=2
+CONFIG_MDNS_MAX_SERVICES=1
+CONFIG_MDNS_PREDEF_NETIF_AP=n
+CONFIG_MDNS_ENABLE_BROWSE=n
+CONFIG_MDNS_ENABLE_CONSOLE_CLI=n
+CONFIG_MDNS_TASK_CREATE_FROM_SPIRAM=y
+CONFIG_MDNS_MEMORY_ALLOC_SPIRAM=y
+
 # Receive window: the bandwidth-delay product of 100 Mbit/s at 100 ms RTT,
 # in PSRAM. The HTTP upload admission accounts for it in the ingress budget.
 # cmake/configure_lwip_tcpip_mbox.cmake sets the Wi-Fi board's window and the
