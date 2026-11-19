@@ -4019,6 +4019,70 @@ esp_err_t jetkvm_virtual_media_abort_upload_owned(
     return abort_upload_with_token(upload_id, token);
 }
 
+esp_err_t jetkvm_virtual_media_discard_upload_owned(
+    const char *upload_id, jetkvm_virtual_media_upload_token_t token)
+{
+    ESP_RETURN_ON_FALSE(
+        token != JETKVM_VIRTUAL_MEDIA_UPLOAD_TOKEN_INVALID,
+        ESP_ERR_INVALID_ARG, TAG, "invalid upload owner token");
+    ESP_RETURN_ON_ERROR(lock_context(), TAG, "failed to lock");
+    if (!upload_token_matches(upload_id, token)) {
+        esp_err_t error = upload_matches(upload_id) ? ESP_ERR_INVALID_STATE :
+                                                      ESP_ERR_NOT_FOUND;
+        unlock_context();
+        return error;
+    }
+    /* A mounted image does not stop the delete, as it stops
+     * jetkvm_virtual_media_delete_file: the path is the one this session
+     * holds open, and a mount refuses .incomplete names. The image could
+     * still be the same file under a FatFs alias of that name; then the
+     * partial file stays. */
+    const bool image_is_upload =
+        s_ctx.image_open &&
+        s_ctx.source == JETKVM_VIRTUAL_MEDIA_SOURCE_STORAGE &&
+        s_ctx.image.obj.fs == s_ctx.upload.obj.fs &&
+        s_ctx.image.obj.sclust == s_ctx.upload.obj.sclust;
+    char incomplete_path[sizeof(s_ctx.upload_incomplete_path)];
+    char identity_path[sizeof(s_ctx.upload_identity_path)];
+    char temporary_path[sizeof(s_ctx.upload_identity_path) +
+                        sizeof(TF_UPLOAD_IDENTITY_TEMP_SUFFIX)];
+    memcpy(incomplete_path, s_ctx.upload_incomplete_path,
+           sizeof(incomplete_path));
+    memcpy(identity_path, s_ctx.upload_identity_path, sizeof(identity_path));
+    esp_err_t path_error = append_path_suffix(
+        identity_path, TF_UPLOAD_IDENTITY_TEMP_SUFFIX, temporary_path,
+        sizeof(temporary_path));
+    unlock_context();
+
+    esp_err_t error = abort_upload_with_token(upload_id, token);
+    if (error != ESP_OK) {
+        return error;
+    }
+    if (image_is_upload) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    ESP_RETURN_ON_ERROR(lock_context(), TAG, "failed to lock");
+    if (!s_ctx.filesystem_mounted) {
+        unlock_context();
+        return ESP_ERR_INVALID_STATE;
+    }
+    /* Another session can have started on the same name since the abort. */
+    error = s_ctx.upload_open &&
+                    strcmp(s_ctx.upload_incomplete_path, incomplete_path) == 0 ?
+                ESP_ERR_INVALID_STATE : service_upload_metadata_locked();
+    if (error == ESP_OK) {
+        error = unlink_upload_artifact_locked(incomplete_path, NULL);
+    }
+    if (error == ESP_OK && identity_path[0] != '\0') {
+        error = unlink_upload_artifact_locked(identity_path, NULL);
+    }
+    if (error == ESP_OK && path_error == ESP_OK) {
+        error = unlink_upload_artifact_locked(temporary_path, NULL);
+    }
+    unlock_context();
+    return error;
+}
+
 esp_err_t jetkvm_virtual_media_abort_upload(const char *upload_id)
 {
     return abort_upload_with_token(

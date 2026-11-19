@@ -51,6 +51,9 @@ static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 static jetkvm_storage_download_state_t s_state;
 static jetkvm_storage_download_hooks_t s_hooks;
 static bool s_running;
+/* Set by jetkvm_storage_download_cancel while s_running; the task reads it
+ * before each read from the server. */
+static bool s_cancel;
 
 void jetkvm_storage_download_set_hooks(
     const jetkvm_storage_download_hooks_t *hooks)
@@ -66,6 +69,14 @@ void jetkvm_storage_download_get_state(jetkvm_storage_download_state_t *state)
     portENTER_CRITICAL(&s_lock);
     *state = s_state;
     portEXIT_CRITICAL(&s_lock);
+}
+
+static bool cancel_requested(void)
+{
+    portENTER_CRITICAL(&s_lock);
+    bool cancel = s_cancel;
+    portEXIT_CRITICAL(&s_lock);
+    return cancel;
 }
 
 static void notify(void)
@@ -179,12 +190,15 @@ static bool check_response(int status, int64_t content_length,
     }
 }
 
-/* Read exactly `size` body bytes. */
+/* Read exactly `size` body bytes. False without an error after a cancel. */
 static bool read_body(esp_http_client_handle_t client, uint8_t *buffer,
                       size_t size)
 {
     size_t filled = 0U;
     while (filled < size) {
+        if (cancel_requested()) {
+            return false;
+        }
         int got = esp_http_client_read(client, (char *)buffer + filled,
                                        (int)(size - filled));
         if (got <= 0) {
@@ -254,6 +268,7 @@ static void download_task(void *argument)
         JETKVM_VIRTUAL_MEDIA_UPLOAD_TOKEN_INVALID;
     uint8_t *buffer = NULL;
     bool reused = false;
+    bool complete = false;
     bool paused = false;
     uint64_t total = 0U;
     uint64_t skip = 0U;
@@ -307,7 +322,11 @@ static void download_task(void *argument)
     if (jetkvm_virtual_media_file_size(request->filename, &existing) ==
             ESP_OK && existing == total) {
         reused = true;
+        complete = true;
         written = total;
+        goto done;
+    }
+    if (cancel_requested()) {
         goto done;
     }
     if (!start_session(request->filename, total, &upload)) {
@@ -408,6 +427,7 @@ static void download_task(void *argument)
     finished = jetkvm_virtual_media_finish_upload_owned(upload.upload_id, token);
     if (finished == ESP_OK) {
         token = JETKVM_VIRTUAL_MEDIA_UPLOAD_TOKEN_INVALID;
+        complete = true;
     } else {
         /* A failed close keeps the session and this lease; the abort below
          * retries the close and releases the lease either way. */
@@ -415,10 +435,25 @@ static void download_task(void *argument)
                   request->filename, esp_err_to_name(finished));
     }
 
-done:
-    if (token != JETKVM_VIRTUAL_MEDIA_UPLOAD_TOKEN_INVALID) {
+done:;
+    const jetkvm_download_end_t end =
+        jetkvm_download_end(complete, cancel_requested());
+    char kept[JETKVM_STORAGE_DOWNLOAD_ERROR_CAPACITY] = "";
+    if (token != JETKVM_VIRTUAL_MEDIA_UPLOAD_TOKEN_INVALID &&
+        end == JETKVM_DOWNLOAD_END_CANCELLED) {
+        esp_err_t discarded = jetkvm_virtual_media_discard_upload_owned(
+            upload.upload_id, token);
+        if (discarded != ESP_OK) {
+            snprintf(kept, sizeof(kept),
+                     "Could not delete the partial %.64s on the TF card (%s).",
+                     request->filename, esp_err_to_name(discarded));
+        }
+    } else if (token != JETKVM_VIRTUAL_MEDIA_UPLOAD_TOKEN_INVALID) {
         /* Keeps the .incomplete prefix for the next attempt to resume. */
         (void)jetkvm_virtual_media_abort_upload_owned(upload.upload_id, token);
+    }
+    if (end == JETKVM_DOWNLOAD_END_FAILED && s_task_error[0] == '\0') {
+        set_error("The download stopped.");
     }
     if (client != NULL) {
         (void)esp_http_client_close(client);
@@ -429,9 +464,12 @@ done:
     if (paused) {
         s_hooks.video_pause(false, s_hooks.video_pause_ctx);
     }
-    const bool failed = s_task_error[0] != '\0';
     const int64_t elapsed_ms = (esp_timer_get_time() - started_us) / 1000;
-    if (failed) {
+    if (end == JETKVM_DOWNLOAD_END_CANCELLED) {
+        ESP_LOGI(TAG, "%s: cancelled after %" PRId64 " ms at %" PRIu64
+                 " bytes%s%s", request->filename, elapsed_ms, written,
+                 kept[0] != '\0' ? ": " : "", kept);
+    } else if (end == JETKVM_DOWNLOAD_END_FAILED) {
         ESP_LOGW(TAG, "%s: failed after %" PRId64 " ms at %" PRIu64
                  " bytes: %s", request->filename, elapsed_ms, written,
                  s_task_error);
@@ -441,14 +479,20 @@ done:
                  reused ? "already on the card" : "downloaded", elapsed_ms);
     }
     portENTER_CRITICAL(&s_lock);
-    s_state.phase = failed ? JETKVM_STORAGE_DOWNLOAD_ERROR :
-                             JETKVM_STORAGE_DOWNLOAD_DONE;
+    s_state.phase = end == JETKVM_DOWNLOAD_END_DONE ?
+                        JETKVM_STORAGE_DOWNLOAD_DONE :
+                    end == JETKVM_DOWNLOAD_END_CANCELLED ?
+                        JETKVM_STORAGE_DOWNLOAD_CANCELLED :
+                        JETKVM_STORAGE_DOWNLOAD_ERROR;
     s_state.bytes = written;
     s_state.total = total;
     s_state.reused = reused;
     s_state.video_paused = false;
-    memcpy(s_state.error, s_task_error, sizeof(s_state.error));
+    memcpy(s_state.error,
+           end == JETKVM_DOWNLOAD_END_FAILED ? s_task_error : kept,
+           sizeof(s_state.error));
     s_running = false;
+    s_cancel = false;
     portEXIT_CRITICAL(&s_lock);
     notify();
     jetkvm_memory_policy_control_free(request->url);
@@ -523,6 +567,7 @@ esp_err_t jetkvm_storage_download_start(const char *url, const char *filename,
     bool busy = s_running;
     if (!busy) {
         s_running = true;
+        s_cancel = false;
         memset(&s_state, 0, sizeof(s_state));
         s_state.phase = JETKVM_STORAGE_DOWNLOAD_DOWNLOADING;
         memcpy(s_state.filename, request->filename, sizeof(s_state.filename));
@@ -553,4 +598,18 @@ esp_err_t jetkvm_storage_download_start(const char *url, const char *filename,
     }
     ESP_LOGI(TAG, "downloading %s to %s", url, filename);
     return ESP_OK;
+}
+
+bool jetkvm_storage_download_cancel(void)
+{
+    portENTER_CRITICAL(&s_lock);
+    const bool running = s_running;
+    if (running) {
+        s_cancel = true;
+    }
+    portEXIT_CRITICAL(&s_lock);
+    if (running) {
+        ESP_LOGI(TAG, "cancel requested");
+    }
+    return running;
 }

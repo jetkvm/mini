@@ -10,7 +10,7 @@ The control protocol exposes these RPCs:
 - `formatStorage` creates an exFAT filesystem with 64 KiB clusters and an empty images folder. It is refused without a card, while an image is mounted, while an upload or download writes to the card, and during a firmware update.
 - `checkMountUrl` sends `Range: bytes=0-0` and requires a `206` response with a parseable total size. `mountWithHTTP` then serves the object read-only.
 - `mountBuiltinInstaller` mounts the built-in installer disc.
-- `downloadToStorage`, `getStorageDownloadState` and the `storageDownloadState` event download an object into the images folder.
+- `startStorageDownload`, `cancelStorageDownload`, `getStorageDownloadState` and the `storageDownloadState` event download an object into the images folder, as upstream's. The state carries upstream's `status`, `received` and `size`, and the older `state`, `bytes` and `total`. `downloadToStorage` is the older name of the start; it answers `null`.
 
 Mount state uses JetKVM's `HTTP`, `Storage`, `CDROM` and `Disk` values, plus `Builtin`. Only a local `Disk` image is writable. Browser uploads arrive through `POST /storage/upload` in `jetkvm_virtual_media_http`.
 
@@ -20,7 +20,7 @@ The component mounts the existing FAT or exFAT filesystem at `/sdcard` and never
 
 Each mount and unmount advances a medium generation. Every read and write names its generation, so a transfer for one image never reaches another.
 
-Uploads and downloads write `<filename>.incomplete` in order and rename it after the last byte. A new file first tries `f_expand` to reserve a contiguous extent. The committed offset advances only by bytes FatFs reports written; a retry resumes there (`alreadyUploadedBytes`). The resume key is filename plus size, as in the upstream UI, stored in a CRC-protected sidecar; an optional `sha256` adds digest matching. Only the final `f_close` syncs. Downloads (`storage_download.c`) resume with `Range: bytes=<n>-` and hold `WEBRTC_VIDEO_PAUSE_STORAGE_DOWNLOAD` while the body transfers.
+Uploads and downloads write `<filename>.incomplete` in order and rename it after the last byte. A new file first tries `f_expand` to reserve a contiguous extent. The committed offset advances only by bytes FatFs reports written; a retry resumes there (`alreadyUploadedBytes`). The resume key is filename plus size, as in the upstream UI, stored in a CRC-protected sidecar; an optional `sha256` adds digest matching. Only the final `f_close` syncs. Downloads (`storage_download.c`) resume with `Range: bytes=<n>-` and hold `WEBRTC_VIDEO_PAUSE_STORAGE_DOWNLOAD` while the body transfers. A cancel stops a download before its next read from the server and deletes its `.incomplete` file, also while an image is mounted.
 
 Reads and writes from the host:
 
