@@ -8,6 +8,7 @@ idf_component_register(
          "rpc_ota.c"
          "rpc_tls.c"
          "rpc_extra_hostnames.c"
+         "rpc_session_timeout.c"
          "rpc_tailscale.c"
          "rpc_mqtt.c"
          "rpc_macros.c"

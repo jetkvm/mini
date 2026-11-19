@@ -111,6 +111,18 @@ static const char *extra_hostnames_set(const char *const *names, size_t count, v
     (void)ctx;
     return jetkvm_access_set_extra_host_names(names, count);
 }
+_Static_assert(JETKVM_SESSION_TIMEOUT_MAX_MINUTES == JETKVM_ACCESS_MAX_IDLE_MINUTES,
+               "the RPC carries the access gate's idle timeout");
+static unsigned session_timeout_get(void *ctx)
+{
+    (void)ctx;
+    return jetkvm_access_get_idle_minutes();
+}
+static const char *session_timeout_set(unsigned minutes, void *ctx)
+{
+    (void)ctx;
+    return jetkvm_access_set_idle_minutes(minutes);
+}
 
 #define P4_STAGED_DIAGNOSTIC 0
 #define P4_SKIP_VIDEO_DIAGNOSTIC 0
@@ -1262,6 +1274,8 @@ void app_main(void)
     jetkvm_access_set_host_names(access_host_names);
     jetkvm_control_set_default_extra_hostnames_context(&(jetkvm_extra_hostnames_context_t){
         .get = extra_hostnames_get, .set = extra_hostnames_set});
+    jetkvm_control_set_default_session_timeout_context(&(jetkvm_session_timeout_context_t){
+        .get = session_timeout_get, .set = session_timeout_set});
     ESP_ERROR_CHECK(webrtc_transport_start());
     if (s_cloud_oidc_validator) {
         ret = jetkvm_cloud_service_start(s_cloud_oidc_validator);
