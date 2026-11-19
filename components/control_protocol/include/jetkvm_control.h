@@ -1032,6 +1032,23 @@ typedef struct {
 } jetkvm_extra_hostnames_context_t;
 void jetkvm_control_set_default_extra_hostnames_context(const jetkvm_extra_hostnames_context_t *context);
 
+/* Idle timeout of the local login in minutes, 0 for off
+ * (getLocalAuthSessionTimeout, setLocalAuthSessionTimeout). set takes a value
+ * of at most JETKVM_SESSION_TIMEOUT_MAX_MINUTES and returns NULL, or why it
+ * did not store it. */
+#define JETKVM_SESSION_TIMEOUT_MAX_MINUTES 1440U
+typedef struct {
+    unsigned (*get)(void *ctx);
+    const char *(*set)(unsigned minutes, void *ctx);
+    void *ctx;
+} jetkvm_session_timeout_context_t;
+void jetkvm_control_set_default_session_timeout_context(const jetkvm_session_timeout_context_t *context);
+/* Activity of a local login, as upstream counts it: an RPC call that changes
+ * state (not get*, list*, check*, is* or ping), and HID input other than the
+ * keepalive of a held key. */
+bool jetkvm_control_rpc_counts_as_activity(const char *method);
+bool jetkvm_control_hidrpc_counts_as_activity(jetkvm_hidrpc_event_type_t type);
+
 #define JETKVM_TAILSCALE_CONTROL_URL_CAPACITY 128U
 #define JETKVM_TAILSCALE_AUTH_KEY_CAPACITY 128U
 typedef struct {
@@ -1214,6 +1231,9 @@ typedef struct {
     jetkvm_guest_file_context_t guest_file;
     void *network_ctx;
     void *hid_state_ctx;
+    /** Called for each known method that counts as activity
+     *  (jetkvm_control_rpc_counts_as_activity); set for local sessions. */
+    void (*note_local_activity)(void);
 } jetkvm_control_context_t;
 
 /** `context` supplies the providers the capability list is derived from;

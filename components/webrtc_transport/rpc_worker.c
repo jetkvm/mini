@@ -272,6 +272,8 @@ static void run_job(rpc_job_t *job, rpc_queue_t queue)
         .deregister_device_ctx = job,
         .guest_clipboard = jetkvm_control_default_guest_clipboard_context(),
         .guest_file = jetkvm_control_default_guest_file_context(),
+        /* Input of a cloud session does not keep the local login. */
+        .note_local_activity = job->cloud_authority ? NULL : jetkvm_access_note_activity,
     };
     char *output = job->reply.json;
     size_t capacity = sizeof(job->reply.json);
