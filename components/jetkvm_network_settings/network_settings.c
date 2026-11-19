@@ -34,6 +34,17 @@ static bool s_wifi_known;
 static char s_wifi_ssid[JETKVM_WIFI_SSID_CAPACITY];
 static char s_static_ssid[JETKVM_WIFI_SSID_CAPACITY];
 static char s_previous_static_ssid[JETKVM_WIFI_SSID_CAPACITY];
+static void (*s_listener)(const jetkvm_network_settings_t *settings);
+
+/* Caller holds s_lock. */
+static void notify_listener(void)
+{
+    if (s_listener) s_listener(&s_settings);
+}
+void jetkvm_network_settings_set_listener(void (*listener)(const jetkvm_network_settings_t *settings))
+{
+    s_listener = listener;
+}
 
 static esp_netif_t *active_netif(void)
 {
@@ -169,9 +180,11 @@ static void apply_worker(void *arg)
          * its new settings, the servers go back to the ones that were running. */
         jetkvm_network_settings_t rollback = s_previous;
         memcpy(&rollback, &s_settings, JETKVM_NETWORK_SETTINGS_LEGACY_SIZE);
+        rollback.mdns_mode = s_settings.mdns_mode;
         s_settings = rollback;
         s_apply_failed = save(&s_settings) != ESP_OK || apply_time_sync(&s_settings) != ESP_OK;
     }
+    notify_listener();
     s_pending = false;
     s_task = NULL;
     xSemaphoreGive(s_lock);
@@ -300,17 +313,19 @@ const char *jetkvm_network_settings_set(const jetkvm_network_settings_t *request
     if (s_pending) error = "Network settings are still being applied";
     else if (!s_apply_failed && memcmp(&s_settings, settings, sizeof(*settings)) == 0) error = NULL;
     else if (!s_apply_failed && jetkvm_network_settings_connectivity_equal(&s_settings, settings)) {
-        /* Upstream saves time sync directly; the interface stays as it is.
-         * Configure before persisting so a failed SNTP restart is reported
-         * and the saved servers are the ones in effect. */
-        if (apply_time_sync(settings) != ESP_OK) {
+        /* Upstream saves time sync and mdns_mode directly; the interface
+         * stays as it is. Configure before persisting so a failed SNTP
+         * restart is reported and the saved servers are the ones in effect. */
+        bool time_sync = memcmp(&s_settings, settings, JETKVM_NETWORK_SETTINGS_TIME_SYNC_SIZE) != 0;
+        if (time_sync && apply_time_sync(settings) != ESP_OK) {
             (void)apply_time_sync(&s_settings);
             error = "Could not apply time sync servers";
         } else if (save(settings) != ESP_OK) {
-            (void)apply_time_sync(&s_settings);
+            if (time_sync) (void)apply_time_sync(&s_settings);
             error = "Could not save network settings";
         } else {
             s_settings = *settings;
+            notify_listener();
         }
     }
     else if (xTaskCreateWithCaps(apply_worker, "jk_network", 4096, NULL, 4, &s_task,

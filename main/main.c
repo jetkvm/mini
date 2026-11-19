@@ -20,6 +20,7 @@
 #include "esp_log.h"
 #include "esp_rom_sys.h"
 #include "esp_system.h"
+#include "esp_app_desc.h"
 #include "esp_timer.h"
 #include "esp_private/startup_internal.h"
 #include "nvs_flash.h"
@@ -46,6 +47,7 @@
 #include "jetkvm_hid_input.h"
 #include "jetkvm_hid_profiles.h"
 #include "jetkvm_hdmi_bridge.h"
+#include "jetkvm_mdns.h"
 #include "jetkvm_memory_policy.h"
 #include "jetkvm_mqtt.h"
 #include "jetkvm_tailscale.h"
@@ -110,6 +112,33 @@ static const char *extra_hostnames_set(const char *const *names, size_t count, v
 {
     (void)ctx;
     return jetkvm_access_set_extra_host_names(names, count);
+}
+
+/* The mDNS advertisement follows the hostname and mdns_mode, the setup state
+ * and the HTTPS listener (jetkvm_mdns.h). */
+static void mdns_network_changed(const jetkvm_network_settings_t *settings)
+{
+    jetkvm_mdns_set_network(settings->hostname, settings->mdns_mode);
+}
+static void mdns_setup_changed(void)
+{
+    jetkvm_mdns_set_setup(jetkvm_access_is_setup());
+}
+static void mdns_prepare(void)
+{
+    char device_id[JETKVM_DEVICE_ID_CAPACITY] = {0};
+    if (jetkvm_device_state_get_id(device_id, sizeof(device_id)) != ESP_OK) device_id[0] = '\0';
+    jetkvm_mdns_init(device_id, esp_app_get_description()->version, CONFIG_WEBRTC_TRANSPORT_HTTP_PORT);
+    jetkvm_network_settings_set_listener(mdns_network_changed);
+    jetkvm_access_set_setup_listener(mdns_setup_changed);
+    webrtc_transport_set_https_listener(jetkvm_mdns_set_https_port);
+}
+static void mdns_advertise(void)
+{
+    jetkvm_network_settings_t network;
+    if (jetkvm_network_settings_get(&network, NULL)) mdns_network_changed(&network);
+    mdns_setup_changed();
+    jetkvm_mdns_start();
 }
 
 #define P4_STAGED_DIAGNOSTIC 0
@@ -1262,7 +1291,11 @@ void app_main(void)
     jetkvm_access_set_host_names(access_host_names);
     jetkvm_control_set_default_extra_hostnames_context(&(jetkvm_extra_hostnames_context_t){
         .get = extra_hostnames_get, .set = extra_hostnames_set});
+    /* Before the transport start, which applies the saved TLS setting and so
+     * reports the HTTPS port. */
+    mdns_prepare();
     ESP_ERROR_CHECK(webrtc_transport_start());
+    mdns_advertise();
     if (s_cloud_oidc_validator) {
         ret = jetkvm_cloud_service_start(s_cloud_oidc_validator);
         if (ret != ESP_OK) {

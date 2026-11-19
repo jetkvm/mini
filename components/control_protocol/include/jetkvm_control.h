@@ -951,7 +951,19 @@ typedef struct {
     bool time_sync_custom;
     bool time_sync_disable_fallback;
     char time_sync_ntp_servers[JETKVM_TIME_SYNC_MAX_SERVERS][JETKVM_TIME_SYNC_SERVER_CAPACITY];
+    /* A jetkvm_mdns_mode_t. Appended after the time-sync layout; older blobs
+     * load as 0, upstream's default "auto". */
+    uint8_t mdns_mode;
 } jetkvm_network_settings_t;
+
+/* The mDNS responder setting (upstream mdns_mode). The Mini has no IPv6
+ * address, so "auto" answers on IPv4 only, as "ipv4_only" does, and upstream's
+ * "ipv6_only" is not supported. */
+typedef enum {
+    JETKVM_MDNS_MODE_AUTO = 0,
+    JETKVM_MDNS_MODE_DISABLED = 1,
+    JETKVM_MDNS_MODE_IPV4_ONLY = 2,
+} jetkvm_mdns_mode_t;
 
 /** The MAC address setting (getMacAddressSettings). */
 typedef struct {

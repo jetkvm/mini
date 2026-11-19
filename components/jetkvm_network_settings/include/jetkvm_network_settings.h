@@ -13,10 +13,13 @@ void jetkvm_network_settings_defaults(jetkvm_network_settings_t *settings, const
 bool jetkvm_network_settings_fill_hostname(jetkvm_network_settings_t *settings, const char *device_id);
 /* The old factory hostname "esp32p4" becomes the default; true when changed. */
 bool jetkvm_network_settings_migrate_hostname(jetkvm_network_settings_t *settings, const char *device_id);
-/* Persisted blobs written before the time-sync fields existed keep loading. */
+/* Persisted blobs written before the time-sync fields, or before mdns_mode,
+ * existed keep loading. */
 #define JETKVM_NETWORK_SETTINGS_LEGACY_SIZE offsetof(jetkvm_network_settings_t, time_sync_custom)
+#define JETKVM_NETWORK_SETTINGS_TIME_SYNC_SIZE offsetof(jetkvm_network_settings_t, mdns_mode)
 bool jetkvm_network_settings_from_blob(const void *blob, size_t size, jetkvm_network_settings_t *settings);
-/* True when only time-sync fields differ, so no interface reconfiguration is needed. */
+/* True when only time-sync fields or mdns_mode differ, so no interface
+ * reconfiguration is needed. */
 bool jetkvm_network_settings_connectivity_equal(const jetkvm_network_settings_t *a,
                                                 const jetkvm_network_settings_t *b);
 /*
@@ -29,6 +32,11 @@ bool jetkvm_network_settings_static_applies(const jetkvm_network_settings_t *set
                                             const char *static_ssid, const char *wifi_ssid);
 
 esp_err_t jetkvm_network_settings_init(esp_netif_t *netif);
+/* `listener` gets the settings in effect each time a save changes them: after
+ * the interface applied them (or rolled them back), and after a save of only
+ * time-sync fields or mdns_mode. It runs with the settings lock held, so it
+ * must not call back into this module. */
+void jetkvm_network_settings_set_listener(void (*listener)(const jetkvm_network_settings_t *settings));
 /* The Wi-Fi station is about to join `ssid`; re-applies IPv4 when the static
  * settings start or stop applying. */
 void jetkvm_network_settings_set_wifi_network(const char *ssid);

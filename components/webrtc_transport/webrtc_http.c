@@ -750,8 +750,14 @@ static esp_err_t stop_listener(httpd_handle_t *listener, bool secure)
     *listener = NULL;
     return ESP_OK;
 }
+static void (*s_https_listener)(uint16_t port);
+void webrtc_transport_set_https_listener(void (*listener)(uint16_t port))
+{
+    s_https_listener = listener;
+}
 #if CONFIG_WEBRTC_TRANSPORT_HTTPS
-static esp_err_t apply_tls(const jetkvm_tls_config_t *tls)
+static uint16_t s_secure_port;
+static esp_err_t start_secure_listener(const jetkvm_tls_config_t *tls)
 {
     if (s_secure_server) {
         esp_err_t err = stop_listener(&s_secure_server, true);
@@ -767,12 +773,20 @@ static esp_err_t apply_tls(const jetkvm_tls_config_t *tls)
     config.prvtkey_pem = (const uint8_t *)tls->private_key;
     config.prvtkey_len = strlen(tls->private_key) + 1;
     config.tls_handshake_timeout_ms = 5000;
+    s_secure_port = config.port_secure;
     esp_err_t err = httpd_ssl_start(&s_secure_server, &config);
     if (err == ESP_OK) err = register_routes(s_secure_server, true);
     if (err != ESP_OK && s_secure_server) {
         esp_err_t stopped = stop_listener(&s_secure_server, true);
         if (stopped != ESP_OK) return stopped;
     }
+    return err;
+}
+static esp_err_t apply_tls(const jetkvm_tls_config_t *tls)
+{
+    esp_err_t err = start_secure_listener(tls);
+    /* The mDNS service names the port that a browser can reach now. */
+    if (s_https_listener) s_https_listener(s_secure_server ? s_secure_port : 0);
     return err;
 }
 #endif

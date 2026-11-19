@@ -9,6 +9,9 @@
 esp_err_t jetkvm_access_init(void (*revoke_local)(void));
 bool jetkvm_access_password_enabled(void);
 bool jetkvm_access_is_setup(void);
+/* `listener` runs on the HTTP task after POST /device/setup completes, with
+ * no access lock held. */
+void jetkvm_access_set_setup_listener(void (*listener)(void));
 bool jetkvm_access_epoch_valid(uint32_t epoch);
 bool jetkvm_access_lock_epoch(uint32_t epoch);
 void jetkvm_access_unlock(void);

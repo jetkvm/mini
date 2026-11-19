@@ -27,6 +27,7 @@ Plug the Mini into a computer's HDMI and USB ports, and control that computer fr
 - **Virtual media**: mount a disk or CD-ROM image from the TF card or from a URL, and boot the computer from it.
 - **The JetKVM web UI**: the same UI as [JetKVM](https://github.com/jetkvm/kvm), served from the device.
 - **Remote access**: JetKVM Cloud and Tailscale, plus MQTT for home automation.
+- **Local discovery**: the Mini answers to `<hostname>.local` and advertises itself as `_jetkvm._tcp` (Bonjour/DNS-SD), with TXT records for its device ID, setup state and firmware version.
 - **OS Services**: with the OS Services companion installed on the computer, the Mini can show its desktop at higher resolutions and share a terminal, the clipboard and file drops.
 - **Signed updates**: firmware updates over the air, verified against a GPG signature.
 

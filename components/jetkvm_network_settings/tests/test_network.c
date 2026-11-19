@@ -253,13 +253,87 @@ static void test_time_sync_settings(void)
     assert(!memcmp(&a, &loaded, sizeof(a)));
     b.time_sync_disable_fallback = true; strcpy(b.hostname, "esp32p4");
     assert(jetkvm_network_settings_from_blob(&b, sizeof(b), &loaded) && !memcmp(&b, &loaded, sizeof(b)));
-    assert(!jetkvm_network_settings_from_blob(&b, sizeof(b) - 1, &loaded));
+    assert(!jetkvm_network_settings_from_blob(&b, JETKVM_NETWORK_SETTINGS_TIME_SYNC_SIZE - 1, &loaded));
     assert(!jetkvm_network_settings_from_blob(&b, JETKVM_NETWORK_SETTINGS_LEGACY_SIZE + 1, &loaded));
     ((unsigned char *)&b)[JETKVM_NETWORK_SETTINGS_LEGACY_SIZE] = 2;
     assert(!jetkvm_network_settings_from_blob(&b, sizeof(b), &loaded));
     b.time_sync_custom = true;
     memset(b.time_sync_ntp_servers[2], 'n', sizeof(b.time_sync_ntp_servers[2]));
     assert(!jetkvm_network_settings_from_blob(&b, sizeof(b), &loaded));
+}
+
+/* mdns_mode is a setting now: upstream's modes, less ipv6_only. */
+static void test_mdns_mode(void)
+{
+    jetkvm_control_context_t context = {
+        .get_network_settings = get, .set_network_settings = set,
+    };
+    save_error = NULL;
+    jetkvm_network_settings_defaults(&saved, "e8f60a01b2cf");
+    cJSON *reply = rpc(&context, "getNetworkSettings", NULL);
+    cJSON *settings = cJSON_Duplicate(cJSON_GetObjectItemCaseSensitive(reply, "result"), true);
+    cJSON_Delete(reply);
+    /* Upstream's default, and no longer a read-only field. */
+    assert(!strcmp(cJSON_GetObjectItemCaseSensitive(settings, "mdns_mode")->valuestring, "auto"));
+    const cJSON *field;
+    cJSON_ArrayForEach(field, cJSON_GetObjectItemCaseSensitive(settings, "read_only_fields"))
+        assert(strcmp(field->valuestring, "mdns_mode"));
+
+    const struct { const char *name; uint8_t mode; } modes[] = {
+        {"disabled", JETKVM_MDNS_MODE_DISABLED}, {"ipv4_only", JETKVM_MDNS_MODE_IPV4_ONLY},
+        {"auto", JETKVM_MDNS_MODE_AUTO},
+    };
+    for (size_t i = 0; i < sizeof(modes) / sizeof(modes[0]); ++i) {
+        replace(settings, "mdns_mode", modes[i].name);
+        assert(submit(&context, settings) && saved.mdns_mode == modes[i].mode);
+        reply = rpc(&context, "getNetworkSettings", NULL);
+        assert(!strcmp(cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(reply, "result"),
+                                                       "mdns_mode")->valuestring, modes[i].name));
+        cJSON_Delete(reply);
+    }
+
+    /* The Mini has no IPv6 address. */
+    replace(settings, "mdns_mode", "disabled");
+    assert(submit(&context, settings));
+    unsigned before = writes;
+    const char *data = NULL;
+    replace(settings, "mdns_mode", "ipv6_only");
+    assert(strstr(submit_error(&context, settings, &data), "not supported") && !strcmp(data, "mdns_mode"));
+    replace(settings, "mdns_mode", "always");
+    assert(!strcmp(submit_error(&context, settings, &data), "Invalid network settings"));
+    cJSON_DeleteItemFromObjectCaseSensitive(settings, "mdns_mode");
+    cJSON_AddNumberToObject(settings, "mdns_mode", 1);
+    assert(!submit(&context, settings));
+    assert(writes == before && saved.mdns_mode == JETKVM_MDNS_MODE_DISABLED);
+    cJSON_Delete(settings);
+
+    /* A change of mdns_mode alone needs no interface reconfiguration. */
+    jetkvm_network_settings_t a, b, loaded;
+    jetkvm_network_settings_defaults(&a, "e8f60a01b2cf");
+    b = a;
+    b.mdns_mode = JETKVM_MDNS_MODE_DISABLED;
+    assert(jetkvm_network_settings_connectivity_equal(&a, &b));
+
+    /* Blobs saved before mdns_mode load as auto; an unknown mode does not load. */
+    _Static_assert(sizeof(jetkvm_network_settings_t) == JETKVM_NETWORK_SETTINGS_TIME_SYNC_SIZE + 1,
+                   "mdns_mode is the last byte");
+    b.time_sync_custom = true;
+    strcpy(b.time_sync_ntp_servers[0], "10.0.0.1");
+    assert(jetkvm_network_settings_from_blob(&b, JETKVM_NETWORK_SETTINGS_TIME_SYNC_SIZE, &loaded));
+    assert(loaded.mdns_mode == JETKVM_MDNS_MODE_AUTO && loaded.time_sync_custom &&
+           !strcmp(loaded.time_sync_ntp_servers[0], "10.0.0.1"));
+    assert(jetkvm_network_settings_from_blob(&b, sizeof(b), &loaded) &&
+           loaded.mdns_mode == JETKVM_MDNS_MODE_DISABLED);
+    b.mdns_mode = JETKVM_MDNS_MODE_IPV4_ONLY + 1;
+    assert(!jetkvm_network_settings_from_blob(&b, sizeof(b), &loaded));
+
+    /* The UI shows the mDNS setting for a device that reports "mdns". */
+    reply = rpc(&context, "getDeviceCapabilities", NULL);
+    bool reported = false;
+    cJSON_ArrayForEach(field, cJSON_GetObjectItemCaseSensitive(reply, "result"))
+        reported |= !strcmp(field->valuestring, "mdns");
+    assert(reported);
+    cJSON_Delete(reply);
 }
 
 static void test_default_hostname(void)
@@ -314,7 +388,7 @@ int main(void)
     };
     cJSON *reply = rpc(&context, "getNetworkSettings", NULL);
     cJSON *settings = cJSON_Duplicate(cJSON_GetObjectItemCaseSensitive(reply, "result"), true);
-    assert(cJSON_GetArraySize(cJSON_GetObjectItemCaseSensitive(settings, "read_only_fields")) == 7);
+    assert(cJSON_GetArraySize(cJSON_GetObjectItemCaseSensitive(settings, "read_only_fields")) == 6);
     assert(submit(&context, settings)); assert(writes == 1);
     replace(settings, "hostname", "mini-lab");
     cJSON *ipv4 = cJSON_AddObjectToObject(settings, "ipv4_static");
@@ -401,5 +475,6 @@ int main(void)
     test_dhcp_inactive_fields_and_hostname();
     test_default_hostname();
     test_time_sync_settings();
-    puts("network validation, RPC round-trip, unsupported fields, time sync and lease tests passed");
+    test_mdns_mode();
+    puts("network validation, RPC round-trip, unsupported fields, time sync, mDNS mode and lease tests passed");
 }
