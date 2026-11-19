@@ -33,6 +33,7 @@ apply_idf_patch(patches/esp-idf-6.0.2-http-server-ws-close-lifetime.patch)
 apply_idf_patch(patches/esp-idf-6.0.2-http-server-lru-websocket.patch)
 apply_idf_patch(patches/esp-idf-6.0.2-http-server-lru-unanswered.patch)
 apply_idf_patch(patches/esp-idf-6.0.2-http-server-single-send-head.patch)
+apply_idf_patch(patches/esp-idf-6.0.2-http-server-header-deadline.patch)
 set(JETKVM_TF_SD_ACMD23 "0" CACHE STRING
     "Send SD ACMD23 pre-erase hints before native multi-block writes")
 if(NOT JETKVM_TF_SD_ACMD23 MATCHES "^[01]$")
