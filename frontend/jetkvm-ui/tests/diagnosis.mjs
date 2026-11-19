@@ -8,7 +8,7 @@ import {
   applyChange,
   diagnose,
   healthyInput,
-  liveSignals,
+  leadFinding,
 } from "../src/diagnosis/diagnosis.ts";
 
 const run = set => diagnose(applyChange(healthyInput(), set));
@@ -110,11 +110,43 @@ test("applying a finding's fix removes that finding", () => {
   }
 });
 
-test("signals behind a stop are not live", () => {
-  const live = liveSignals(applyChange(healthyInput(), { ice: "failed" }));
-  assert.ok(live.has("ice"));
-  assert.ok(!live.has("hdmi"));
-  assert.ok(!live.has("usb"));
-  // The check before the stop still decides the result.
-  assert.ok(live.has("h264"));
+test("the map marks what is broken and what could not be checked", () => {
+  // A network fault: nothing behind the network can be known.
+  assert.deepEqual(run({ ice: "failed" }).map, {
+    browser: "ok",
+    network: "problem",
+    mini: "unknown",
+    hdmi: "unknown",
+    usb: "unknown",
+    computer: "unknown",
+  });
+  // A sleeping computer: the cables are not at fault, so they are not red.
+  assert.deepEqual(run({ hdmi: "no_signal", usb: "suspended" }).map, {
+    browser: "ok",
+    network: "ok",
+    mini: "ok",
+    hdmi: "unknown",
+    usb: "unknown",
+    computer: "problem",
+  });
+  // Two faults behind a working connection both show.
+  const two = run({ hdmi: "unsupported_mode", usb: "attached" }).map;
+  assert.equal(two.hdmi, "problem");
+  assert.equal(two.usb, "problem");
+  assert.equal(two.computer, "ok");
+});
+
+test("a browser fault leaves the rest of the map unknown", () => {
+  const map = run({ h264: "missing" }).map;
+  assert.equal(map.browser, "problem");
+  for (const place of ["network", "mini", "hdmi", "usb", "computer"]) {
+    assert.equal(map[place], "unknown");
+  }
+});
+
+test("without a problem, the panel leads with a warning before a note", () => {
+  const diagnosis = run({ restart: "power", link: "wifi_weak" });
+  assert.equal(diagnosis.headline, null);
+  assert.equal(leadFinding(diagnosis).id, "wifi_weak");
+  assert.equal(leadFinding(run({})), null);
 });
