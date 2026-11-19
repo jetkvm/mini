@@ -20,6 +20,7 @@ typedef struct {
     char serial_number[JETKVM_USB_STRING_CAPACITY];
     char manufacturer[JETKVM_USB_STRING_CAPACITY];
     char product[JETKVM_USB_STRING_CAPACITY];
+    char configuration[JETKVM_USB_STRING_CAPACITY];
     uint8_t keyboard;
     uint8_t absolute_mouse;
     uint8_t relative_mouse;
@@ -30,7 +31,32 @@ typedef struct {
     uint32_t crc32;
 } test_record_t;
 
-_Static_assert(sizeof(test_record_t) == 128U, "test record ABI mismatch");
+_Static_assert(sizeof(test_record_t) == 160U, "test record ABI mismatch");
+
+/* The record that firmware wrote before the configuration string. */
+typedef struct {
+    uint32_t magic;
+    uint16_t record_version;
+    uint16_t record_size;
+    uint32_t generation;
+    uint32_t config_schema_version;
+    uint16_t vendor_id;
+    uint16_t product_id;
+    char serial_number[JETKVM_USB_STRING_CAPACITY];
+    char manufacturer[JETKVM_USB_STRING_CAPACITY];
+    char product[JETKVM_USB_STRING_CAPACITY];
+    uint8_t keyboard;
+    uint8_t absolute_mouse;
+    uint8_t relative_mouse;
+    uint8_t mass_storage;
+    uint8_t serial_console;
+    uint8_t audio;
+    uint8_t reserved[2];
+    uint32_t crc32;
+} test_record_v1_t;
+
+_Static_assert(sizeof(test_record_v1_t) == 128U,
+               "version 1 test record ABI mismatch");
 
 static uint32_t test_crc32(const void *data, size_t size)
 {
@@ -449,6 +475,170 @@ static void test_load_migrates_legacy_default_identity(void)
     assert(jetkvm_usb_config_equal(&loaded, &custom));
 }
 
+static test_record_v1_t make_v1_record(uint32_t generation)
+{
+    test_record_v1_t record;
+    memset(&record, 0, sizeof(record));
+    record.magic = TEST_RECORD_MAGIC;
+    record.record_version = 1U;
+    record.record_size = (uint16_t)sizeof(record);
+    record.generation = generation;
+    record.config_schema_version = 1U;
+    record.vendor_id = 0x046dU;
+    record.product_id = 0xc52bU;
+    memcpy(record.serial_number, "SN-OLD", sizeof("SN-OLD"));
+    memcpy(record.manufacturer, "Logitech", sizeof("Logitech"));
+    memcpy(record.product, "Receiver", sizeof("Receiver"));
+    record.keyboard = 1U;
+    record.absolute_mouse = 1U;
+    record.relative_mouse = 0U;
+    record.mass_storage = 0U;
+    record.serial_console = 0U;
+    record.audio = 1U;
+    record.crc32 = test_crc32(&record, offsetof(test_record_v1_t, crc32));
+    return record;
+}
+
+static void test_configuration_string_round_trips(void)
+{
+    mock_nvs_reset();
+    jetkvm_usb_config_t loaded;
+    jetkvm_usb_config_store_state_t state;
+    load_empty(&loaded, &state);
+
+    jetkvm_usb_config_t config = make_config(0x4601U, "Configured");
+    assert(jetkvm_usb_config_set_configuration_string(
+               &config, "RQR24.11_B0036") == ESP_OK);
+    assert(jetkvm_usb_config_save(&config, &state) == ESP_OK);
+    const test_record_t stored = committed_record(MOCK_USB_SLOT_A);
+    assert(stored.record_version == 2U);
+    assert(stored.config_schema_version == 2U);
+    assert(strcmp(stored.configuration, "RQR24.11_B0036") == 0);
+
+    assert(jetkvm_usb_config_load(&loaded, &state) == ESP_OK);
+    assert(strcmp(loaded.configuration, "RQR24.11_B0036") == 0);
+    assert(strcmp(loaded.product, "Configured") == 0);
+
+    /* An empty string is a valid setting (iConfiguration 0). */
+    assert(jetkvm_usb_config_set_configuration_string(&config, "") == ESP_OK);
+    assert(jetkvm_usb_config_save(&config, &state) == ESP_OK);
+    assert(jetkvm_usb_config_load(&loaded, &state) == ESP_OK);
+    assert(loaded.configuration[0] == '\0');
+    assert(state.active_slot == JETKVM_USB_CONFIG_SLOT_B);
+}
+
+static void test_version_1_record_migrates_with_default_configuration(void)
+{
+    mock_nvs_reset();
+    test_record_v1_t v1 = make_v1_record(5U);
+    mock_nvs_replace_committed(MOCK_USB_SLOT_A, &v1, sizeof(v1));
+    unsigned sets_before = mock_nvs_set_count();
+
+    jetkvm_usb_config_t loaded;
+    jetkvm_usb_config_store_state_t state;
+    assert(jetkvm_usb_config_load(&loaded, &state) == ESP_OK);
+    assert(state.active_slot == JETKVM_USB_CONFIG_SLOT_A);
+    assert(state.generation == 5U);
+    assert(!state.defaults_used);
+    assert(!state.degraded);
+    assert(loaded.schema_version == JETKVM_USB_CONFIG_SCHEMA_VERSION);
+    assert(loaded.vendor_id == 0x046dU);
+    assert(loaded.product_id == 0xc52bU);
+    assert(strcmp(loaded.serial_number, "SN-OLD") == 0);
+    assert(strcmp(loaded.manufacturer, "Logitech") == 0);
+    assert(strcmp(loaded.product, "Receiver") == 0);
+    assert(strcmp(loaded.configuration, "Config 1: HID") == 0);
+    assert(loaded.keyboard && loaded.absolute_mouse && loaded.audio);
+    assert(!loaded.relative_mouse && !loaded.mass_storage);
+    assert(jetkvm_usb_config_validate(&loaded));
+    /* Loading never writes; the version 1 record stays as it was. */
+    assert(mock_nvs_set_count() == sets_before);
+    assert(mock_nvs_committed_size(MOCK_USB_SLOT_A) == sizeof(v1));
+
+    /* The next save writes a version 2 record to the other slot, and that
+     * record wins over the version 1 record. */
+    assert(jetkvm_usb_config_set_configuration_string(&loaded, "Custom") ==
+           ESP_OK);
+    assert(jetkvm_usb_config_save(&loaded, &state) == ESP_OK);
+    assert(state.active_slot == JETKVM_USB_CONFIG_SLOT_B);
+    assert(state.generation == 6U);
+    const test_record_t written = committed_record(MOCK_USB_SLOT_B);
+    assert(written.record_version == 2U);
+    assert(strcmp(written.configuration, "Custom") == 0);
+
+    jetkvm_usb_config_t reloaded;
+    jetkvm_usb_config_store_state_t reloaded_state;
+    assert(jetkvm_usb_config_load(&reloaded, &reloaded_state) == ESP_OK);
+    assert(reloaded_state.active_slot == JETKVM_USB_CONFIG_SLOT_B);
+    assert(jetkvm_usb_config_equal(&reloaded, &loaded));
+    assert(!reloaded_state.degraded);
+}
+
+static void test_version_1_record_is_checked_before_migration(void)
+{
+    jetkvm_usb_config_t loaded;
+    jetkvm_usb_config_store_state_t state;
+
+    mock_nvs_reset();
+    test_record_v1_t v1 = make_v1_record(3U);
+    v1.product[0] ^= 0x01;
+    mock_nvs_replace_committed(MOCK_USB_SLOT_A, &v1, sizeof(v1));
+    assert(jetkvm_usb_config_load(&loaded, &state) == ESP_OK);
+    assert(state.defaults_used);
+    assert(state.slot_a_error == ESP_ERR_INVALID_CRC);
+
+    /* A 128-byte record must carry version 1; version 2 needs 160 bytes. */
+    v1 = make_v1_record(3U);
+    v1.record_version = 2U;
+    v1.config_schema_version = 2U;
+    v1.crc32 = test_crc32(&v1, offsetof(test_record_v1_t, crc32));
+    mock_nvs_replace_committed(MOCK_USB_SLOT_A, &v1, sizeof(v1));
+    assert(jetkvm_usb_config_load(&loaded, &state) == ESP_OK);
+    assert(state.defaults_used);
+    assert(state.slot_a_error == ESP_ERR_INVALID_VERSION);
+
+    /* A version 1 record with an invalid flag is rejected after the CRC. */
+    v1 = make_v1_record(3U);
+    v1.keyboard = 2U;
+    v1.crc32 = test_crc32(&v1, offsetof(test_record_v1_t, crc32));
+    mock_nvs_replace_committed(MOCK_USB_SLOT_A, &v1, sizeof(v1));
+    assert(jetkvm_usb_config_load(&loaded, &state) == ESP_OK);
+    assert(state.defaults_used);
+    assert(state.slot_a_error == ESP_ERR_INVALID_STATE);
+
+    /* A 160-byte record that says version 1 is rejected too. */
+    mock_nvs_reset();
+    load_empty(&loaded, &state);
+    jetkvm_usb_config_t config = make_config(0x4701U, "Current");
+    assert(jetkvm_usb_config_save(&config, &state) == ESP_OK);
+    test_record_t record = committed_record(MOCK_USB_SLOT_A);
+    record.record_version = 1U;
+    record.config_schema_version = 1U;
+    replace_record(MOCK_USB_SLOT_A, &record);
+    assert(jetkvm_usb_config_load(&loaded, &state) == ESP_OK);
+    assert(state.defaults_used);
+    assert(state.slot_a_error == ESP_ERR_INVALID_VERSION);
+}
+
+static void test_newer_version_1_record_wins_over_older_version_2(void)
+{
+    /* Firmware went back to a build without the configuration string and
+     * saved once more: its version 1 record is the newest setting. */
+    mock_nvs_reset();
+    jetkvm_usb_config_t loaded;
+    jetkvm_usb_config_store_state_t state;
+    load_empty(&loaded, &state);
+    jetkvm_usb_config_t config = make_config(0x4801U, "Older v2");
+    assert(jetkvm_usb_config_save(&config, &state) == ESP_OK);
+    test_record_v1_t v1 = make_v1_record(2U);
+    mock_nvs_replace_committed(MOCK_USB_SLOT_B, &v1, sizeof(v1));
+
+    assert(jetkvm_usb_config_load(&loaded, &state) == ESP_OK);
+    assert(state.active_slot == JETKVM_USB_CONFIG_SLOT_B);
+    assert(strcmp(loaded.product, "Receiver") == 0);
+    assert(strcmp(loaded.configuration, "Config 1: HID") == 0);
+}
+
 int main(void)
 {
     test_empty_nvs_uses_safe_defaults();
@@ -462,6 +652,10 @@ int main(void)
     test_generation_wrap_selects_wrapped_record();
     test_invalid_inputs_and_open_failure_are_safe();
     test_load_migrates_legacy_default_identity();
+    test_configuration_string_round_trips();
+    test_version_1_record_migrates_with_default_configuration();
+    test_version_1_record_is_checked_before_migration();
+    test_newer_version_1_record_wins_over_older_version_2();
     puts("jetkvm_usb_config NVS tests: PASS");
     return 0;
 }

@@ -16,6 +16,7 @@ static void test_defaults_match_safe_p4_contract(void)
     assert(strcmp(config.serial_number, "") == 0);
     assert(strcmp(config.manufacturer, "JetKVM") == 0);
     assert(strcmp(config.product, "USB Emulation Device") == 0);
+    assert(strcmp(config.configuration, "Config 1: HID") == 0);
     assert(config.keyboard);
     assert(config.absolute_mouse);
     assert(config.relative_mouse);
@@ -77,6 +78,47 @@ static void test_identity_validation_and_atomic_assignment(void)
     assert(config.manufacturer[0] == '\0');
     assert(config.product[0] == '\0');
     assert(jetkvm_usb_config_validate(&config));
+}
+
+static void test_configuration_string_validation(void)
+{
+    jetkvm_usb_config_t config;
+    jetkvm_usb_config_defaults(&config);
+    assert(jetkvm_usb_config_set_configuration_string(
+               &config, "RQR24.11_B0036") == ESP_OK);
+    assert(strcmp(config.configuration, "RQR24.11_B0036") == 0);
+    assert(jetkvm_usb_config_validate(&config));
+
+    jetkvm_usb_config_t before = config;
+    char too_long[JETKVM_USB_STRING_CAPACITY + 1U];
+    memset(too_long, 'Y', sizeof(too_long));
+    too_long[sizeof(too_long) - 1U] = '\0';
+    const char control[] = {'A', '\n', '\0'};
+    assert(jetkvm_usb_config_set_configuration_string(&config, too_long) ==
+           ESP_ERR_INVALID_ARG);
+    assert(jetkvm_usb_config_set_configuration_string(&config, control) ==
+           ESP_ERR_INVALID_ARG);
+    assert(jetkvm_usb_config_set_configuration_string(&config, NULL) ==
+           ESP_ERR_INVALID_ARG);
+    assert(memcmp(&config, &before, sizeof(config)) == 0);
+
+    char maximum[JETKVM_USB_STRING_CAPACITY];
+    memset(maximum, 'X', sizeof(maximum));
+    maximum[sizeof(maximum) - 1U] = '\0';
+    assert(jetkvm_usb_config_set_configuration_string(&config, maximum) ==
+           ESP_OK);
+    assert(strlen(config.configuration) == 31U);
+
+    /* The identity setter leaves the configuration string alone. */
+    assert(jetkvm_usb_config_set_identity(
+               &config, 1U, 1U, "", "JetKVM", "Product") == ESP_OK);
+    assert(strlen(config.configuration) == 31U);
+
+    jetkvm_usb_config_t other = config;
+    other.configuration[0] = 'Z';
+    assert(!jetkvm_usb_config_equal(&config, &other));
+    other.configuration[0] = '\x1f';
+    assert(!jetkvm_usb_config_validate(&other));
 }
 
 static void test_device_capability_validation_is_fail_closed(void)
@@ -216,6 +258,7 @@ int main(void)
 {
     test_defaults_match_safe_p4_contract();
     test_identity_validation_and_atomic_assignment();
+    test_configuration_string_validation();
     test_device_capability_validation_is_fail_closed();
     test_complete_config_validation();
     test_generation_serial_arithmetic();

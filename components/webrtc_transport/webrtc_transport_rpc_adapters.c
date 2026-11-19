@@ -202,6 +202,8 @@ bool rpc_get_usb_configuration(
            sizeof(configuration.manufacturer));
     memcpy(snapshot->product, configuration.product,
            sizeof(configuration.product));
+    memcpy(snapshot->configuration, configuration.configuration,
+           sizeof(configuration.configuration));
     snapshot->absolute_mouse = configuration.absolute_mouse;
     snapshot->relative_mouse = configuration.relative_mouse;
     snapshot->keyboard = configuration.keyboard;
@@ -504,6 +506,10 @@ rpc_set_usb_descriptor_config(
         &configuration, descriptor->vendor_id, descriptor->product_id,
         descriptor->serial_number, descriptor->manufacturer,
         descriptor->product);
+    if (error == ESP_OK && descriptor->has_configuration) {
+        error = jetkvm_usb_config_set_configuration_string(
+            &configuration, descriptor->configuration);
+    }
     if (error != ESP_OK) {
         return JETKVM_USB_CONFIGURATION_CHANGE_INVALID;
     }

@@ -198,6 +198,7 @@ typedef struct {
     char serial_number[JETKVM_USB_DESCRIPTOR_STRING_CAPACITY];
     char manufacturer[JETKVM_USB_DESCRIPTOR_STRING_CAPACITY];
     char product[JETKVM_USB_DESCRIPTOR_STRING_CAPACITY];
+    char configuration[JETKVM_USB_DESCRIPTOR_STRING_CAPACITY];
     bool absolute_mouse;
     bool relative_mouse;
     bool keyboard;
@@ -216,8 +217,11 @@ typedef bool (*jetkvm_get_usb_configuration_fn)(
     (JETKVM_USB_DESCRIPTOR_CONFIG_STRING_MAX_LENGTH + 1U)
 
 /**
- * Validated USB device-descriptor values supplied by setUsbConfig. All five
- * JSON fields are required; descriptor strings may be empty.
+ * Validated USB descriptor values supplied by setUsbConfig. The five device
+ * descriptor fields are required. The configuration descriptor string
+ * (`configuration`) is optional: a page from before that field does not send
+ * it, and has_configuration is then false so the stored string stays.
+ * Descriptor strings may be empty.
  */
 typedef struct {
     uint16_t vendor_id;
@@ -225,6 +229,8 @@ typedef struct {
     char serial_number[JETKVM_USB_DESCRIPTOR_CONFIG_STRING_CAPACITY];
     char manufacturer[JETKVM_USB_DESCRIPTOR_CONFIG_STRING_CAPACITY];
     char product[JETKVM_USB_DESCRIPTOR_CONFIG_STRING_CAPACITY];
+    bool has_configuration;
+    char configuration[JETKVM_USB_DESCRIPTOR_CONFIG_STRING_CAPACITY];
 } jetkvm_usb_descriptor_config_t;
 
 /**
