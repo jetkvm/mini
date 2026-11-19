@@ -708,6 +708,8 @@
     "mqtt_error_tls": "TLS-fejl — kontrollér dine certifikatindstillinger",
     "mqtt_ha_discovery_description": "Registrér sensorer, kontakter og kontroller i Home Assistant automatisk",
     "mqtt_ha_discovery_title": "Auto-discovery",
+    "mqtt_keyboard_macros_description": "Tillad MQTT-klienter at køre gemte tastaturmakroer. En makro skriver på værtscomputeren, så alle, der kan publicere til brokeren, kan skrive på den.",
+    "mqtt_keyboard_macros_title": "Tastaturmakroer",
     "mqtt_load_error": "Kunne ikke indlæse MQTT-indstillinger: {error}",
     "mqtt_password_description": "Som konfigureret på din MQTT-broker",
     "mqtt_password_label": "Adgangskode",

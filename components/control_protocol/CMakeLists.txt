@@ -11,6 +11,7 @@ idf_component_register(
          "rpc_tailscale.c"
          "rpc_mqtt.c"
          "rpc_macros.c"
+         "keyboard_macro_hid.c"
          "rpc_wol.c"
          "rpc_usb.c"
          "rpc_virtual_media.c"

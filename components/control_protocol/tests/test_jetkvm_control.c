@@ -549,6 +549,11 @@ typedef struct {
     jetkvm_jiggler_config_change_result_t config_change_result;
     unsigned get_macros_calls;
     unsigned set_macros_calls;
+    unsigned run_macro_calls;
+    jetkvm_keyboard_macro_run_result_t run_macro_result;
+    size_t run_step_count;
+    jetkvm_hidrpc_macro_step_t run_steps[
+        JETKVM_CONTROL_KEYBOARD_MACRO_MAX_HID_STEPS];
     unsigned get_jiggler_state_calls;
     unsigned set_jiggler_state_calls;
     unsigned get_jiggler_config_calls;
@@ -710,6 +715,27 @@ static bool set_keyboard_macros(
     }
     observed->macros = *list;
     return true;
+}
+
+/* Records the steps that runKeyboardMacro hands over; no HID runs. */
+static jetkvm_keyboard_macro_run_result_t run_keyboard_macro(
+    const jetkvm_hidrpc_macro_step_t *steps, size_t step_count, void *ctx)
+{
+    observed_hid_profiles_t *observed = ctx;
+    observed->run_macro_calls++;
+    assert(step_count <= JETKVM_CONTROL_KEYBOARD_MACRO_MAX_HID_STEPS);
+    observed->run_step_count = step_count;
+    memcpy(observed->run_steps, steps, step_count * sizeof(steps[0]));
+    return observed->run_macro_result;
+}
+
+static void expect_hid_step(const jetkvm_hidrpc_macro_step_t *step,
+                            uint8_t modifier, const uint8_t keys[6],
+                            uint16_t delay_ms)
+{
+    assert(step->modifier == modifier);
+    assert(memcmp(step->keys, keys, 6U) == 0);
+    assert(step->delay_ms == delay_ms);
 }
 
 static bool get_jiggler_state(bool *enabled, void *ctx)
@@ -1897,6 +1923,7 @@ int main(void)
             .tls_insecure = false,
             .enable_ha_discovery = true,
             .enable_actions = true,
+            .enable_keyboard_macros = true,
             .debounce_ms = 750,
         },
         .status = {
@@ -2046,6 +2073,7 @@ int main(void)
         .keyboard_macros = {
             .get = get_keyboard_macros,
             .set = set_keyboard_macros,
+            .run = run_keyboard_macro,
             .ctx = &observed_hid_profiles,
         },
         .jiggler = {
@@ -2075,7 +2103,7 @@ int main(void)
     expect_rpc_context(
         &context,
         "{\"jsonrpc\":\"2.0\",\"method\":\"getMqttSettings\",\"id\":490}",
-        "{\"jsonrpc\":\"2.0\",\"id\":490,\"result\":{\"enabled\":true,\"broker\":\"mqtt.example.test\",\"port\":8883,\"username\":\"operator\",\"password\":\"********\",\"base_topic\":\"lab/jetkvm\",\"use_tls\":true,\"tls_insecure\":false,\"enable_ha_discovery\":true,\"enable_actions\":true,\"debounce_ms\":750}}");
+        "{\"jsonrpc\":\"2.0\",\"id\":490,\"result\":{\"enabled\":true,\"broker\":\"mqtt.example.test\",\"port\":8883,\"username\":\"operator\",\"password\":\"********\",\"base_topic\":\"lab/jetkvm\",\"use_tls\":true,\"tls_insecure\":false,\"enable_ha_discovery\":true,\"enable_actions\":true,\"enable_keyboard_macros\":true,\"debounce_ms\":750}}");
     assert(observed_mqtt.get_settings_calls == 1U);
     const char *mqtt_settings_json =
         "{\"enabled\":false,\"broker\":\"192.168.50.1\",\"port\":1883,"
@@ -2100,6 +2128,8 @@ int main(void)
     assert(strcmp(observed_mqtt.settings.base_topic, "jetkvm") == 0);
     assert(observed_mqtt.settings.enable_ha_discovery);
     assert(observed_mqtt.settings.enable_actions);
+    /* Settings from a client before the switch turn it off, as in Go. */
+    assert(!observed_mqtt.settings.enable_keyboard_macros);
     assert(observed_mqtt.settings.debounce_ms == 0);
 
     expect_rpc_context(
@@ -2156,6 +2186,20 @@ int main(void)
         &context, mqtt_request,
         "{\"jsonrpc\":\"2.0\",\"id\":498,\"error\":{\"code\":-32602,\"message\":\"Invalid params\",\"data\":\"Invalid MQTT settings\"}}");
     observed_mqtt.set_result = JETKVM_MQTT_CONFIG_CHANGE_ACCEPTED;
+
+    const unsigned sets_before_macros = observed_mqtt.set_settings_calls;
+    expect_rpc_context(
+        &context,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"setMqttSettings\",\"params\":{\"settings\":{\"enabled\":false,\"broker\":\"192.168.50.1\",\"port\":1883,\"username\":\"\",\"password\":\"\",\"base_topic\":\"jetkvm\",\"use_tls\":false,\"tls_insecure\":false,\"enable_ha_discovery\":true,\"enable_actions\":false,\"enable_keyboard_macros\":true,\"debounce_ms\":0}},\"id\":4991}",
+        "{\"jsonrpc\":\"2.0\",\"id\":4991,\"result\":null}");
+    assert(observed_mqtt.set_settings_calls == sets_before_macros + 1U);
+    assert(!observed_mqtt.settings.enable_actions);
+    assert(observed_mqtt.settings.enable_keyboard_macros);
+    expect_rpc_context(
+        &context,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"setMqttSettings\",\"params\":{\"settings\":{\"enabled\":false,\"broker\":\"192.168.50.1\",\"port\":1883,\"username\":\"\",\"password\":\"\",\"base_topic\":\"jetkvm\",\"use_tls\":false,\"tls_insecure\":false,\"enable_ha_discovery\":true,\"enable_actions\":false,\"enable_keyboard_macros\":1,\"debounce_ms\":0}},\"id\":4992}",
+        "{\"jsonrpc\":\"2.0\",\"id\":4992,\"error\":{\"code\":-32602,\"message\":\"Invalid params\",\"data\":\"settings must contain the complete MQTT configuration\"}}");
+    assert(observed_mqtt.set_settings_calls == sets_before_macros + 1U);
 
     expect_rpc_context(
         &context,
@@ -3084,6 +3128,58 @@ int main(void)
         "{\"jsonrpc\":\"2.0\",\"method\":\"setKeyboardMacros\",\"params\":{\"params\":{\"macros\":[{\"id\":\"bad\",\"name\":\"Bad\",\"steps\":[{\"keys\":[\"NotAKey\"],\"modifiers\":[],\"delay\":100}]}]}},\"id\":604}",
         "{\"jsonrpc\":\"2.0\",\"id\":604,\"error\":{\"code\":-32602,\"message\":\"Invalid params\",\"data\":\"invalid keyboard macro step\"}}");
     assert(observed_hid_profiles.set_macros_calls == 1U);
+
+    /* runKeyboardMacro (Go rpcRunKeyboardMacro): an ID first, then a name
+     * without regard to case; the second macro's ID is the first one's
+     * name. */
+    expect_rpc_context(
+        &context,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"setKeyboardMacros\",\"params\":{\"params\":{\"macros\":["
+        "{\"id\":\"login\",\"name\":\"Log In\",\"sortOrder\":1,\"steps\":["
+        "{\"keys\":[\"KeyA\",\"KeyB\"],\"modifiers\":[\"ShiftLeft\",\"MetaRight\"],\"delay\":300},"
+        "{\"keys\":[],\"modifiers\":[],\"delay\":100},"
+        "{\"keys\":[\"Digit1\",\"Digit2\",\"Digit3\",\"Digit4\",\"Digit5\",\"Digit6\",\"Digit7\"],\"modifiers\":[],\"delay\":50}]},"
+        "{\"id\":\"Log In\",\"name\":\"Other\",\"sortOrder\":2,\"steps\":["
+        "{\"keys\":[\"Enter\"],\"modifiers\":[],\"delay\":100}]}]}},\"id\":610}",
+        "{\"jsonrpc\":\"2.0\",\"id\":610,\"result\":null}");
+    observed_hid_profiles.run_macro_result = JETKVM_KEYBOARD_MACRO_RUN_ACCEPTED;
+    expect_rpc_context(
+        &context,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"runKeyboardMacro\",\"params\":{\"macro\":\" log in \"},\"id\":611}",
+        "{\"jsonrpc\":\"2.0\",\"id\":611,\"result\":null}");
+    assert(observed_hid_profiles.run_macro_calls == 1U);
+    /* Each step with keys is a press held 20 ms and a release with the
+     * step's delay; the empty step is skipped and the seventh key dropped. */
+    assert(observed_hid_profiles.run_step_count == 4U);
+    const uint8_t no_keys[6] = {0};
+    const uint8_t a_b[6] = {0x04, 0x05};
+    const uint8_t digits[6] = {0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23};
+    expect_hid_step(&observed_hid_profiles.run_steps[0], 0x82, a_b, 20U);
+    expect_hid_step(&observed_hid_profiles.run_steps[1], 0x00, no_keys, 300U);
+    expect_hid_step(&observed_hid_profiles.run_steps[2], 0x00, digits, 20U);
+    expect_hid_step(&observed_hid_profiles.run_steps[3], 0x00, no_keys, 50U);
+    expect_rpc_context(
+        &context,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"runKeyboardMacro\",\"params\":{\"macro\":\"Log In\"},\"id\":612}",
+        "{\"jsonrpc\":\"2.0\",\"id\":612,\"result\":null}");
+    assert(observed_hid_profiles.run_macro_calls == 2U);
+    const uint8_t enter[6] = {0x28};
+    assert(observed_hid_profiles.run_step_count == 2U);
+    expect_hid_step(&observed_hid_profiles.run_steps[0], 0x00, enter, 20U);
+    expect_rpc_context(
+        &context,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"runKeyboardMacro\",\"params\":{\"macro\":\"nope\"},\"id\":613}",
+        "{\"jsonrpc\":\"2.0\",\"id\":613,\"error\":{\"code\":-32603,\"message\":\"Internal error\",\"data\":\"unknown keyboard macro: nope\"}}");
+    expect_rpc_context(
+        &context,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"runKeyboardMacro\",\"params\":{\"macro\":7},\"id\":614}",
+        "{\"jsonrpc\":\"2.0\",\"id\":614,\"error\":{\"code\":-32602,\"message\":\"Invalid params\",\"data\":\"macro must be a string\"}}");
+    observed_hid_profiles.run_macro_result = JETKVM_KEYBOARD_MACRO_RUN_UNAVAILABLE;
+    expect_rpc_context(
+        &context,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"runKeyboardMacro\",\"params\":{\"macro\":\"login\"},\"id\":615}",
+        "{\"jsonrpc\":\"2.0\",\"id\":615,\"error\":{\"code\":-32603,\"message\":\"Internal error\",\"data\":\"keyboard unavailable\"}}");
+    assert(observed_hid_profiles.run_macro_calls == 3U);
     expect_rpc_context(
         &context,
         "{\"jsonrpc\":\"2.0\",\"method\":\"getJigglerState\",\"id\":605}",

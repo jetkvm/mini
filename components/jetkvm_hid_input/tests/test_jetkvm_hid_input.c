@@ -497,6 +497,113 @@ static void test_local_mouse_without_live_generation(void)
         before.local_relative_mouse_reports + 2U, 100U));
 }
 
+static jetkvm_hidrpc_macro_step_t macro_step(uint8_t key, uint16_t delay_ms)
+{
+    return (jetkvm_hidrpc_macro_step_t){.keys = {key}, .delay_ms = delay_ms};
+}
+
+static bool report_log_has_key(uint8_t key)
+{
+    for (size_t i = 0U; i < fake_usb_report_count(); ++i) {
+        if (fake_usb_report_at(i).keys[0] == key) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* MQTT and runKeyboardMacro type without a browser session. */
+static void test_local_macro_without_live_generation(void)
+{
+    assert(!snapshot().accepting_input);
+    const jetkvm_hidrpc_macro_step_t steps[] = {
+        macro_step(0x0bU, 5U), macro_step(0U, 5U),
+    };
+    fake_usb_reset_log();
+    assert(jetkvm_hid_input_submit_local_macro(steps, 2U, false) ==
+           JETKVM_HID_INPUT_SUBMIT_ACCEPTED);
+    assert(wait_for_reports(2U, 100U));
+    assert(wait_for_macro_active(false, 100U));
+    assert(fake_usb_report_at(0U).keys[0] == 0x0bU);
+    assert(fake_usb_report_at(1U).keys[0] == 0U);
+}
+
+/* An MQTT macro (no replace) is dropped while a browser macro runs, and the
+ * browser macro goes on. */
+static void test_local_macro_does_not_interrupt_browser_macro(void)
+{
+    assert(jetkvm_hid_input_set_active_generation(4U) == ESP_OK);
+    /* Let the release of the generation change reach the log first. */
+    sleep_ms(20U);
+    uint8_t wire[2U * JETKVM_HIDRPC_MACRO_STEP_WIRE_SIZE];
+    encode_step(wire, 0U, 0x0cU, 60U);
+    encode_step(wire + JETKVM_HIDRPC_MACRO_STEP_WIRE_SIZE, 0U, 0x0dU, 5U);
+    fake_usb_reset_log();
+    assert(submit_macro(4U, false, wire, 2U) ==
+           JETKVM_HID_INPUT_SUBMIT_ACCEPTED);
+    /* The browser macro waits in the mailbox or has started. */
+    const jetkvm_hidrpc_macro_step_t steps[] = {macro_step(0x0eU, 5U)};
+    assert(jetkvm_hid_input_submit_local_macro(steps, 1U, false) ==
+           JETKVM_HID_INPUT_SUBMIT_BUSY);
+    assert(wait_for_reports(1U, 100U));
+    assert(jetkvm_hid_input_submit_local_macro(steps, 1U, false) ==
+           JETKVM_HID_INPUT_SUBMIT_BUSY);
+    assert(wait_for_reports(2U, 200U));
+    assert(wait_for_macro_active(false, 100U));
+    assert(fake_usb_report_at(0U).keys[0] == 0x0cU);
+    assert(fake_usb_report_at(1U).keys[0] == 0x0dU);
+    assert(!report_log_has_key(0x0eU));
+}
+
+/* A browser macro replaces a device-owned macro, and runKeyboardMacro
+ * (replace) replaces a browser macro. */
+static void test_local_macro_replacement(void)
+{
+    const jetkvm_hidrpc_macro_step_t slow[] = {
+        macro_step(0x0fU, 500U), macro_step(0x10U, 5U),
+    };
+    fake_usb_reset_log();
+    assert(jetkvm_hid_input_submit_local_macro(slow, 2U, false) ==
+           JETKVM_HID_INPUT_SUBMIT_ACCEPTED);
+    assert(wait_for_reports(1U, 100U));
+    uint8_t wire[JETKVM_HIDRPC_MACRO_STEP_WIRE_SIZE];
+    encode_step(wire, 0U, 0x11U, 500U);
+    assert(submit_macro(4U, false, wire, 1U) ==
+           JETKVM_HID_INPUT_SUBMIT_ACCEPTED);
+    assert(wait_for_reports(3U, 100U));
+    assert(fake_usb_report_at(1U).keys[0] == 0U);
+    assert(fake_usb_report_at(2U).keys[0] == 0x11U);
+
+    const jetkvm_hidrpc_macro_step_t quick[] = {
+        macro_step(0x12U, 5U), macro_step(0U, 5U),
+    };
+    assert(jetkvm_hid_input_submit_local_macro(quick, 2U, true) ==
+           JETKVM_HID_INPUT_SUBMIT_ACCEPTED);
+    assert(wait_for_reports(6U, 100U));
+    assert(wait_for_macro_active(false, 100U));
+    assert(fake_usb_report_at(3U).keys[0] == 0U);
+    assert(fake_usb_report_at(4U).keys[0] == 0x12U);
+    assert(fake_usb_report_at(5U).keys[0] == 0U);
+    assert(!report_log_has_key(0x10U));
+}
+
+/* A peer that connects passes the release barrier; the device-owned macro
+ * stops there like a browser macro. */
+static void test_generation_change_cancels_local_macro(void)
+{
+    const jetkvm_hidrpc_macro_step_t slow[] = {
+        macro_step(0x13U, 500U), macro_step(0x14U, 5U),
+    };
+    fake_usb_reset_log();
+    assert(jetkvm_hid_input_submit_local_macro(slow, 2U, false) ==
+           JETKVM_HID_INPUT_SUBMIT_ACCEPTED);
+    assert(wait_for_reports(1U, 100U));
+    assert(jetkvm_hid_input_set_active_generation(5U) == ESP_OK);
+    assert(wait_for_macro_active(false, 100U));
+    sleep_ms(550U);
+    assert(!report_log_has_key(0x14U));
+}
+
 static jetkvm_usb_hid_state_t usb_state(bool initialized, bool connected,
                                          bool mounted, bool suspended,
                                          bool wake_enabled)
@@ -782,6 +889,10 @@ int main(void)
     test_usb_state_and_wake_adapter();
     test_usb_pause_preserves_latest_generation();
     test_local_mouse_without_live_generation();
+    test_local_macro_without_live_generation();
+    test_local_macro_does_not_interrupt_browser_macro();
+    test_local_macro_replacement();
+    test_generation_change_cancels_local_macro();
 
     assert(jetkvm_hid_input_deinit() == ESP_OK);
     puts("JetKVM HID macro bridge: OK");
