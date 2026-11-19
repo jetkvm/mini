@@ -53,3 +53,12 @@ bool jetkvm_download_progress_due(uint64_t previous_bytes, int64_t previous_us,
     }
     return previous_bytes * 100U / total != bytes * 100U / total;
 }
+
+jetkvm_download_end_t jetkvm_download_end(bool complete, bool cancelled)
+{
+    if (complete) {
+        return JETKVM_DOWNLOAD_END_DONE;
+    }
+    return cancelled ? JETKVM_DOWNLOAD_END_CANCELLED :
+                       JETKVM_DOWNLOAD_END_FAILED;
+}

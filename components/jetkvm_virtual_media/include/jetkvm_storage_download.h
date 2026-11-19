@@ -23,8 +23,9 @@ extern "C" {
  * use: it is written to <filename>.incomplete and renamed to <filename> only
  * after the last byte, so a partial file never carries the final name. A
  * failed download keeps the .incomplete prefix; the next download of the
- * same object continues from it with a Range request. A complete file of the
- * same size is reused without a transfer; one of another size is replaced.
+ * same object continues from it with a Range request. A cancelled download
+ * deletes the .incomplete file. A complete file of the same size is reused
+ * without a transfer; one of another size is replaced.
  */
 
 #define JETKVM_STORAGE_DOWNLOAD_ERROR_CAPACITY 128U
@@ -34,6 +35,7 @@ typedef enum {
     JETKVM_STORAGE_DOWNLOAD_DOWNLOADING,
     JETKVM_STORAGE_DOWNLOAD_DONE,
     JETKVM_STORAGE_DOWNLOAD_ERROR,
+    JETKVM_STORAGE_DOWNLOAD_CANCELLED,
 } jetkvm_storage_download_phase_t;
 
 typedef struct {
@@ -80,6 +82,15 @@ void jetkvm_storage_download_set_hooks(
  */
 esp_err_t jetkvm_storage_download_start(const char *url, const char *filename,
                                         char *error, size_t error_capacity);
+
+/**
+ * Ask the running download to stop. The task stops before its next read
+ * from the server (a stalled server: up to the 15 s read timeout), deletes
+ * the .incomplete file and ends in JETKVM_STORAGE_DOWNLOAD_CANCELLED. A
+ * download that has already written its last byte ends as done. False when
+ * no download runs.
+ */
+bool jetkvm_storage_download_cancel(void);
 
 /** Copy the state of the current or most recent download. */
 void jetkvm_storage_download_get_state(jetkvm_storage_download_state_t *state);

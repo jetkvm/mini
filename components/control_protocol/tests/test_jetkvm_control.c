@@ -13,7 +13,7 @@
 
 static void expect_rpc(const char *request, const char *expected)
 {
-    char output[256];
+    char output[512];
     size_t output_size = 0;
     assert(jetkvm_control_handle_rpc(
         (const uint8_t *)request, strlen(request), output, sizeof(output),
@@ -1683,11 +1683,32 @@ static bool fake_download_state(jetkvm_control_storage_download_state_t *state,
     return true;
 }
 
+static unsigned download_cancels;
+
+static void fake_download_cancel(void *ctx)
+{
+    (void)ctx;
+    download_cancels++;
+}
+
+static bool capabilities_include(const char *name)
+{
+    const char *request = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getDeviceCapabilities\"}";
+    char output[1024];
+    size_t output_size = 0;
+    assert(jetkvm_control_handle_rpc(
+        (const uint8_t *)request, strlen(request), output, sizeof(output),
+        &output_size) == JETKVM_CONTROL_RESPONSE_READY);
+    char quoted[64];
+    snprintf(quoted, sizeof(quoted), "\"%s\"", name);
+    return strstr(output, quoted) != NULL;
+}
+
 static void test_storage_download_rpc(void)
 {
     /* Without a provider the state is idle and a download cannot start. */
     expect_rpc("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getStorageDownloadState\"}",
-        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"state\":\"idle\",\"filename\":\"\",\"bytes\":0,\"total\":0,\"reused\":false,\"videoPaused\":false,\"error\":\"\"}}");
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"state\":\"idle\",\"filename\":\"\",\"bytes\":0,\"total\":0,\"reused\":false,\"videoPaused\":false,\"error\":\"\",\"status\":\"idle\",\"received\":0,\"size\":0}}");
     expect_rpc("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"downloadToStorage\",\"params\":{\"url\":\"https://h/os.iso\",\"filename\":\"os.iso\"}}",
         "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32603,\"message\":\"Internal error\",\"data\":\"virtual media storage unavailable\"}}");
 
@@ -1722,7 +1743,7 @@ static void test_storage_download_rpc(void)
     assert(download_starts == 2);
 
     expect_rpc("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getStorageDownloadState\"}",
-        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"state\":\"downloading\",\"filename\":\"os.iso\",\"bytes\":4194304,\"total\":92807168,\"reused\":false,\"videoPaused\":true,\"error\":\"\"}}");
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"state\":\"downloading\",\"filename\":\"os.iso\",\"bytes\":4194304,\"total\":92807168,\"reused\":false,\"videoPaused\":true,\"error\":\"\",\"status\":\"downloading\",\"received\":4194304,\"size\":92807168}}");
 
     /* The peer task's context refuses a start while the media worker is
      * busy, and still reports the download's state. */
@@ -1737,7 +1758,7 @@ static void test_storage_download_rpc(void)
         "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32603,\"message\":\"Internal error\",\"data\":\"another virtual media operation is active\"}}");
     expect_rpc_context(&peer,
         "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getStorageDownloadState\"}",
-        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"state\":\"downloading\",\"filename\":\"os.iso\",\"bytes\":4194304,\"total\":92807168,\"reused\":false,\"videoPaused\":true,\"error\":\"\"}}");
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"state\":\"downloading\",\"filename\":\"os.iso\",\"bytes\":4194304,\"total\":92807168,\"reused\":false,\"videoPaused\":true,\"error\":\"\",\"status\":\"downloading\",\"received\":4194304,\"size\":92807168}}");
 
     jetkvm_control_storage_download_state_t state = {
         .phase = JETKVM_CONTROL_STORAGE_DOWNLOAD_ERROR,
@@ -1750,9 +1771,58 @@ static void test_storage_download_rpc(void)
     size_t length = 0;
     assert(jetkvm_control_render_storage_download_event(&state, event, sizeof(event), &length));
     assert(strcmp(event,
-        "{\"jsonrpc\":\"2.0\",\"method\":\"storageDownloadState\",\"params\":{\"state\":\"error\",\"filename\":\"os.iso\",\"bytes\":512,\"total\":1024,\"reused\":false,\"videoPaused\":false,\"error\":\"The download server answered HTTP 404.\"}}") == 0);
+        "{\"jsonrpc\":\"2.0\",\"method\":\"storageDownloadState\",\"params\":{\"state\":\"error\",\"filename\":\"os.iso\",\"bytes\":512,\"total\":1024,\"reused\":false,\"videoPaused\":false,\"error\":\"The download server answered HTTP 404.\",\"status\":\"failed\",\"received\":512,\"size\":1024}}") == 0);
     assert(length == strlen(event));
     assert(!jetkvm_control_render_storage_download_event(&state, event, 16, &length) && length == 0);
+
+    /* A cancelled download: the Mini's state and upstream's status agree. */
+    state = (jetkvm_control_storage_download_state_t){
+        .phase = JETKVM_CONTROL_STORAGE_DOWNLOAD_CANCELLED,
+        .filename = "os.iso",
+        .bytes = 512,
+        .total = 1024,
+    };
+    assert(jetkvm_control_render_storage_download_event(&state, event, sizeof(event), &length));
+    assert(strcmp(event,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"storageDownloadState\",\"params\":{\"state\":\"cancelled\",\"filename\":\"os.iso\",\"bytes\":512,\"total\":1024,\"reused\":false,\"videoPaused\":false,\"error\":\"\",\"status\":\"cancelled\",\"received\":512,\"size\":1024}}") == 0);
+    state.phase = JETKVM_CONTROL_STORAGE_DOWNLOAD_DONE;
+    assert(jetkvm_control_render_storage_download_event(&state, event, sizeof(event), &length));
+    assert(strstr(event, "\"state\":\"done\"") && strstr(event, "\"status\":\"done\""));
+
+    /* Upstream's start answers the state after the start. */
+    const unsigned starts = download_starts;
+    expect_rpc("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"startStorageDownload\",\"params\":{\"url\":\"https://h/os.iso\",\"filename\":\"os.iso\"}}",
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32603,\"message\":\"Internal error\",\"data\":\"No TF card is mounted. Insert a TF card, then try again.\"}}");
+    assert(download_starts == starts + 1U);
+    download.ctx = NULL;
+    jetkvm_control_set_default_storage_download_context(&download);
+    expect_rpc("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"startStorageDownload\",\"params\":{\"url\":\"https://h/os.iso\",\"filename\":\"os.iso\"}}",
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"state\":\"downloading\",\"filename\":\"os.iso\",\"bytes\":4194304,\"total\":92807168,\"reused\":false,\"videoPaused\":true,\"error\":\"\",\"status\":\"downloading\",\"received\":4194304,\"size\":92807168}}");
+    assert(download_starts == starts + 2U);
+    expect_rpc("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"startStorageDownload\",\"params\":{\"url\":\"https://h/os.iso\"}}",
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32602,\"message\":\"Invalid params\",\"data\":\"invalid virtual media parameters\"}}");
+    assert(download_starts == starts + 2U);
+
+    /* Without a cancel callback the device cannot cancel, and does not
+     * report storage_download. */
+    expect_rpc("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"cancelStorageDownload\"}",
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32603,\"message\":\"Internal error\",\"data\":\"virtual media storage unavailable\"}}");
+    assert(!capabilities_include("storage_download"));
+    download.cancel = fake_download_cancel;
+    jetkvm_control_set_default_storage_download_context(&download);
+    assert(capabilities_include("storage_download"));
+    expect_rpc("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"cancelStorageDownload\"}",
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":null}");
+    assert(download_cancels == 1);
+    expect_rpc("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"cancelStorageDownload\",\"params\":{\"filename\":\"os.iso\"}}",
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32602,\"message\":\"Invalid params\",\"data\":\"method does not accept parameters\"}}");
+    assert(download_cancels == 1);
+    /* The peer task's context replaces only start: a cancel there reaches
+     * the download. */
+    expect_rpc_context(&peer,
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"cancelStorageDownload\"}",
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":null}");
+    assert(download_cancels == 2);
     jetkvm_control_set_default_storage_download_context(NULL);
 }
 

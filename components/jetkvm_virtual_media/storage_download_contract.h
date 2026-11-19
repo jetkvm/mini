@@ -31,3 +31,19 @@ jetkvm_download_response_t jetkvm_download_check_response(
 bool jetkvm_download_progress_due(uint64_t previous_bytes, int64_t previous_us,
                                   uint64_t bytes, int64_t now_us,
                                   uint64_t total, int64_t interval_us);
+
+typedef enum {
+    /* The file is on the card under its name. */
+    JETKVM_DOWNLOAD_END_DONE = 0,
+    /* The partial file stays for the next download to continue. */
+    JETKVM_DOWNLOAD_END_FAILED,
+    /* The partial file is deleted. */
+    JETKVM_DOWNLOAD_END_CANCELLED,
+} jetkvm_download_end_t;
+
+/**
+ * How a download ends. `complete`: the whole file is on the card under its
+ * name; a cancel after that changes nothing. A cancel before it ends the
+ * download as cancelled, also when the cancel made the transfer fail.
+ */
+jetkvm_download_end_t jetkvm_download_end(bool complete, bool cancelled);

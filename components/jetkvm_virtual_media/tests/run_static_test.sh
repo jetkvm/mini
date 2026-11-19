@@ -17,10 +17,11 @@ binary="$(mktemp)"
 dma_binary="$(mktemp)"
 identity_binary="$(mktemp)"
 download_binary="$(mktemp)"
+download_task_binary="$(mktemp)"
 format_binary="$(mktemp)"
 detect_binary="$(mktemp)"
 builtin_binary="$(mktemp)"
-trap 'rm -f "$binary" "$dma_binary" "$identity_binary" "$download_binary" "$format_binary" "$detect_binary" "$builtin_binary"' EXIT
+trap 'rm -f "$binary" "$dma_binary" "$identity_binary" "$download_binary" "$download_task_binary" "$format_binary" "$detect_binary" "$builtin_binary"' EXIT
 cc -std=c11 -Wall -Wextra -Werror -D_GNU_SOURCE \
   -I"${component_dir}" \
   "${component_dir}/http_range_contract.c" \
@@ -49,6 +50,18 @@ cc -std=c11 -Wall -Wextra -Werror -D_GNU_SOURCE \
   "${component_dir}/tests/test_storage_download_contract.c" \
   -o "$download_binary"
 "$download_binary"
+
+# The download task against a fake server and TF card: cancel and failure.
+cc -std=c11 -Wall -Wextra -Werror -D_GNU_SOURCE -fsanitize=address,undefined \
+  -I"${component_dir}/tests/download/compat" \
+  -I"${component_dir}/include" \
+  -I"${component_dir}" \
+  "${component_dir}/http_range_contract.c" \
+  "${component_dir}/storage_download_contract.c" \
+  "${component_dir}/storage_download.c" \
+  "${component_dir}/tests/download/test_storage_download_task.c" \
+  -o "$download_task_binary"
+"$download_task_binary"
 
 cc -std=c11 -Wall -Wextra -Werror \
   -I"${component_dir}/include" \

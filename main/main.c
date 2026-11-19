@@ -528,6 +528,9 @@ static void storage_download_copy_state(
                    "download filename capacity");
     _Static_assert(sizeof(output->error) == sizeof(state.error),
                    "download error capacity");
+    _Static_assert((int)JETKVM_CONTROL_STORAGE_DOWNLOAD_CANCELLED ==
+                       (int)JETKVM_STORAGE_DOWNLOAD_CANCELLED,
+                   "download phases");
     *output = (jetkvm_control_storage_download_state_t){
         .phase = (jetkvm_control_storage_download_phase_t)state.phase,
         .bytes = state.bytes,
@@ -603,6 +606,12 @@ static bool storage_download_get_state(
     (void)ctx;
     storage_download_copy_state(state);
     return true;
+}
+
+static void storage_download_cancel(void *ctx)
+{
+    (void)ctx;
+    (void)jetkvm_storage_download_cancel();
 }
 
 /* The live cloud WebSocket, not the registration getCloudState reports. */
@@ -1287,6 +1296,7 @@ void app_main(void)
     const jetkvm_storage_download_context_t storage_download_context = {
         .start = storage_download_start,
         .get_state = storage_download_get_state,
+        .cancel = storage_download_cancel,
     };
     jetkvm_control_set_default_storage_download_context(
         &storage_download_context);

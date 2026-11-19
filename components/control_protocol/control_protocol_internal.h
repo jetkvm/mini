@@ -340,6 +340,12 @@ extern jetkvm_storage_download_context_t s_default_storage_download;
 bool rpc_download_to_storage(const jetkvm_control_context_t *context,
                              const cJSON *params,
                              rpc_dispatch_result_t *dispatch);
+bool rpc_start_storage_download(const jetkvm_control_context_t *context,
+                                const cJSON *params,
+                                rpc_dispatch_result_t *dispatch);
+bool rpc_cancel_storage_download(const jetkvm_control_context_t *context,
+                                 const cJSON *params,
+                                 rpc_dispatch_result_t *dispatch);
 bool rpc_get_storage_download_state(const jetkvm_control_context_t *context,
                                     const cJSON *params,
                                     rpc_dispatch_result_t *dispatch);

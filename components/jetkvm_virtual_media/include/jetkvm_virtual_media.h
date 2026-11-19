@@ -363,6 +363,12 @@ esp_err_t jetkvm_virtual_media_finish_upload_owned(
     const char *upload_id, jetkvm_virtual_media_upload_token_t token);
 esp_err_t jetkvm_virtual_media_abort_upload_owned(
     const char *upload_id, jetkvm_virtual_media_upload_token_t token);
+/* Abort, then delete the <filename>.incomplete file and its identity files.
+ * A mounted image does not stop the delete. ESP_ERR_INVALID_STATE when the
+ * session ended but the partial file stays (the mounted image is that file,
+ * or a new session took the name). */
+esp_err_t jetkvm_virtual_media_discard_upload_owned(
+    const char *upload_id, jetkvm_virtual_media_upload_token_t token);
 
 /* Aborts an unclaimed upload; it cannot bypass an HTTP/WebRTC writer lease.
  * Only a claimed writer writes or finishes, so an unclaimed session has no
