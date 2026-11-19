@@ -20,11 +20,14 @@ import { getLocalVersion } from "@/utils/jsonrpc";
 interface OverlayContentProps {
   readonly children: React.ReactNode;
 }
-function OverlayContent({ children }: OverlayContentProps) {
+// The card every overlay sits in. Auto margins center the content while it
+// fits and let the card scroll from the top when it does not; centering with
+// justify-center would cut off the top of tall content in a short video area.
+export function OverlayContent({ children }: OverlayContentProps) {
   return (
     <GridCard cardClassName="h-full pointer-events-auto outline-hidden!">
-      <div className="flex h-full w-full flex-col items-center justify-center rounded-md border border-slate-800/30 dark:border-slate-300/20">
-        {children}
+      <div className="flex h-full w-full overflow-auto rounded-md border border-slate-800/30 dark:border-slate-300/20">
+        <div className="m-auto max-w-full p-4">{children}</div>
       </div>
     </GridCard>
   );

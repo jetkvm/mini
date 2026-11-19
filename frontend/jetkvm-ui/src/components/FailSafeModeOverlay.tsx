@@ -3,8 +3,8 @@ import { ExclamationTriangleIcon } from "@heroicons/react/24/solid";
 import { motion, AnimatePresence } from "framer-motion";
 
 import { Button, LinkButton } from "@components/Button";
-import { GridCard } from "@components/Card";
 import { GitHubIcon } from "@components/Icons";
+import { OverlayContent } from "@components/VideoOverlay";
 import { useDeviceUiNavigation } from "@hooks/useAppNavigation";
 import { useVersion } from "@hooks/useVersion";
 import { useDeviceStore } from "@hooks/stores";
@@ -14,20 +14,6 @@ import { sleep } from "../utils";
 
 interface FailSafeModeOverlayProps {
   reason: string;
-}
-
-interface OverlayContentProps {
-  readonly children: React.ReactNode;
-}
-
-function OverlayContent({ children }: OverlayContentProps) {
-  return (
-    <GridCard cardClassName="h-full pointer-events-auto outline-hidden!">
-      <div className="flex h-full w-full flex-col items-center justify-center rounded-md border border-slate-800/30 dark:border-slate-300/20">
-        {children}
-      </div>
-    </GridCard>
-  );
 }
 
 export function FailSafeModeOverlay({ reason }: FailSafeModeOverlayProps) {

@@ -63,12 +63,16 @@ function isEditableTarget(target: EventTarget | null) {
 }
 
 export default function WebRTCVideo({
-  hasConnectionIssues,
+  connectionOverlay,
   hideStatusBar,
 }: {
-  hasConnectionIssues: boolean;
+  // The screen for a connection that is not up (connecting, failed,
+  // rebooting, ...). It is drawn over the video area only, so it never covers
+  // the action bar above or the status bar below.
+  connectionOverlay?: React.ReactNode;
   hideStatusBar?: boolean;
 }) {
+  const hasConnectionIssues = !!connectionOverlay;
   // Video and stream related refs and states
   const videoElm = useRef<HTMLVideoElement>(null);
   const audioElm = useRef<HTMLAudioElement>(null);
@@ -859,6 +863,16 @@ export default function WebRTCVideo({
                       />
                       {audioEnabled && <audio ref={audioElm} autoPlay playsInline hidden />}
                       <OcrOverlay />
+                      {hasConnectionIssues && (
+                        <div
+                          style={{ animationDuration: "500ms" }}
+                          className="pointer-events-none absolute inset-0 flex animate-slideUpFade items-center justify-center"
+                        >
+                          <div className="relative h-full max-h-[720px] w-full max-w-7xl rounded-md">
+                            {connectionOverlay}
+                          </div>
+                        </div>
+                      )}
                       {peerConnection?.connectionState == "connected" && !hasConnectionIssues && (
                         <div
                           style={{ animationDuration: "500ms" }}

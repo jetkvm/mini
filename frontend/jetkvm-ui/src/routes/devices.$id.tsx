@@ -842,24 +842,28 @@ export default function KvmIdRoute() {
           )}
 
           <div className="relative flex h-full w-full overflow-hidden">
-            {isFailsafeMode && failsafeReason === "native" ? null : (
+            {isFailsafeMode && failsafeReason === "native" ? (
+              // No video component in this mode, so nothing for the overlay to cover.
+              <div
+                style={{ animationDuration: "500ms" }}
+                className="pointer-events-none absolute inset-0 flex animate-slideUpFade items-center justify-center p-4"
+              >
+                <div className="relative h-full max-h-[720px] w-full max-w-7xl rounded-md">
+                  <FailSafeModeOverlay reason={failsafeReason} />
+                </div>
+              </div>
+            ) : (
               <WebRTCVideo
-                hasConnectionIssues={!!ConnectionStatusElement}
+                connectionOverlay={
+                  isFailsafeMode && failsafeReason ? (
+                    <FailSafeModeOverlay reason={failsafeReason} />
+                  ) : (
+                    ConnectionStatusElement
+                  )
+                }
                 hideStatusBar={hideStatusBar}
               />
             )}
-            <div
-              style={{ animationDuration: "500ms" }}
-              className="pointer-events-none absolute inset-0 flex animate-slideUpFade items-center justify-center p-4"
-            >
-              <div className="relative h-full max-h-[720px] w-full max-w-7xl rounded-md">
-                {isFailsafeMode && failsafeReason ? (
-                  <FailSafeModeOverlay reason={failsafeReason} />
-                ) : (
-                  !!ConnectionStatusElement && ConnectionStatusElement
-                )}
-              </div>
-            </div>
             <SidebarContainer sidebarView={sidebarView} />
           </div>
         </div>
