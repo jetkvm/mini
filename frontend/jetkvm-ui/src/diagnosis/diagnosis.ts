@@ -212,6 +212,8 @@ export interface Finding {
   action?: string;
   // The evidence, for the details view.
   detail: string;
+  // One or two words for this finding's place on the map.
+  mapLabel?: string;
   // The signal changes that the fix makes. The gallery applies them to
   // simulate the action.
   resolves?: InputChange;
@@ -305,6 +307,7 @@ function reachFindings(i: DiagnosisInput): Finding[] {
     return [
       {
         id: "rebooting",
+        mapLabel: "Restarting",
         check: "reach",
         level: "wait",
         where: "mini",
@@ -397,6 +400,7 @@ function reachFindings(i: DiagnosisInput): Finding[] {
     return [
       {
         id: "session_taken",
+        mapLabel: "In use",
         check: "reach",
         level: "problem",
         where: "mini",
@@ -412,6 +416,7 @@ function reachFindings(i: DiagnosisInput): Finding[] {
     return [
       {
         id: "no_answer",
+        mapLabel: "Stuck",
         check: "reach",
         level: "problem",
         where: "mini",
@@ -554,6 +559,7 @@ function pictureFindings(i: DiagnosisInput): Finding[] {
     return [
       {
         id: "video_paused",
+        mapLabel: "Busy",
         check: "picture",
         level: "wait",
         where: "mini",
@@ -571,6 +577,7 @@ function pictureFindings(i: DiagnosisInput): Finding[] {
       return [
         {
           id: "computer_off",
+          mapLabel: "Off",
           check: "picture",
           level: "problem",
           where: "computer",
@@ -606,6 +613,7 @@ function pictureFindings(i: DiagnosisInput): Finding[] {
       return [
         {
           id: "computer_asleep",
+          mapLabel: "Asleep",
           check: "picture",
           level: "problem",
           where: "computer",
@@ -676,6 +684,7 @@ function pictureFindings(i: DiagnosisInput): Finding[] {
     return [
       {
         id: "mini_sends_no_video",
+        mapLabel: "No video",
         check: "picture",
         level: "problem",
         where: "mini",

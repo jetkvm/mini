@@ -74,8 +74,12 @@ function TodayView({ input, screen }: { input: DiagnosisInput; screen: TodayScre
         <div className="h-full w-full">
           <OverlayContent>
             <div className="max-w-sm space-y-2 text-left">
-              <h2 className="text-xl font-bold text-black">{m.other_session_detected()}</h2>
-              <p className="text-sm text-slate-700">{m.other_session_take_over()}</p>
+              <h2 className="text-xl font-bold text-black dark:text-white">
+                {m.other_session_detected()}
+              </h2>
+              <p className="text-sm text-slate-700 dark:text-slate-300">
+                {m.other_session_take_over()}
+              </p>
             </div>
           </OverlayContent>
         </div>
@@ -128,7 +132,7 @@ function Screen({ size, children }: { size: Size; children: React.ReactNode }) {
   return (
     <div
       style={{ width: size.width, height: size.height }}
-      className="max-w-full rounded-md border border-slate-300 bg-blue-50/40 p-2"
+      className="max-w-full rounded-md border border-slate-300 bg-blue-50/40 p-2 dark:border-slate-700 dark:bg-slate-800/40"
     >
       <div className="relative h-full w-full">{children}</div>
     </div>
@@ -162,30 +166,35 @@ function CaseCard({ scenario, size, both }: { scenario: Scenario; size: Size; bo
   return (
     <div id={scenario.id} className="space-y-2">
       <div>
-        <h3 className="text-sm font-bold text-slate-900">{scenario.name}</h3>
-        <p className="text-xs text-slate-500">{signalsText(start) || "All signals healthy"}</p>
+        <h3 className="text-sm font-bold text-slate-900 dark:text-white">{scenario.name}</h3>
+        <p className="text-xs text-slate-500 dark:text-slate-400">
+          {signalsText(start) || "All signals healthy"}
+        </p>
       </div>
       <div className="flex flex-wrap items-start gap-4">
         {both && (
           <div className="max-w-full space-y-1">
-            <div className="text-[11px] font-semibold tracking-wide text-slate-500 uppercase">
+            <div className="text-[11px] font-semibold tracking-wide text-slate-500 uppercase dark:text-slate-400">
               Today
             </div>
             <Screen size={size}>
               <TodayView input={start} screen={today.id} />
             </Screen>
-            <p className="text-xs text-slate-500" style={{ maxWidth: size.width }}>
+            <p
+              className="text-xs text-slate-500 dark:text-slate-400"
+              style={{ maxWidth: size.width }}
+            >
               {today.note}
             </p>
           </div>
         )}
         <div className="max-w-full space-y-1">
-          <div className="flex items-center gap-x-2 text-[11px] font-semibold tracking-wide text-slate-500 uppercase">
+          <div className="flex items-center gap-x-2 text-[11px] font-semibold tracking-wide text-slate-500 uppercase dark:text-slate-400">
             New
             {input !== start && (
               <button
                 type="button"
-                className="cursor-pointer text-blue-700 normal-case hover:underline"
+                className="cursor-pointer text-blue-700 normal-case hover:underline dark:text-blue-400"
                 onClick={() => setInput(start)}
               >
                 Back to the start
@@ -196,7 +205,10 @@ function CaseCard({ scenario, size, both }: { scenario: Scenario; size: Size; bo
             <DiagnosisPanel diagnosis={diagnosis} busy={busy} onAction={onAction} />
           </Screen>
           {refs && (
-            <p className="text-xs text-slate-500" style={{ maxWidth: size.width }}>
+            <p
+              className="text-xs text-slate-500 dark:text-slate-400"
+              style={{ maxWidth: size.width }}
+            >
               Reported in {refs}.
             </p>
           )}
@@ -225,8 +237,8 @@ function Choice<T extends { name: string }>({
           className={cx(
             "cursor-pointer border px-2.5 py-1 text-xs first:rounded-l-sm last:rounded-r-sm",
             option === value
-              ? "border-slate-800 bg-slate-800 text-white"
-              : "border-slate-300 bg-white text-slate-700 hover:border-slate-500",
+              ? "border-slate-800 bg-slate-800 text-white dark:border-slate-200 dark:bg-slate-200 dark:text-slate-900"
+              : "border-slate-300 bg-white text-slate-700 hover:border-slate-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300",
           )}
         >
           {option.name}
@@ -243,13 +255,17 @@ export default function DiagnosisGalleryRoute() {
   const [view, setView] = useState(VIEWS[0]);
 
   return (
-    <div className="h-screen overflow-y-auto scroll-smooth bg-slate-50 text-slate-900">
+    <div className="h-screen overflow-y-auto scroll-smooth bg-slate-50 text-slate-900 dark:bg-slate-900 dark:text-white">
       <title>Connection cases</title>
-      <div className="sticky top-0 z-20 flex flex-wrap items-center gap-x-6 gap-y-2 border-b border-slate-200 bg-white px-6 py-3">
+      <div className="sticky top-0 z-20 flex flex-wrap items-center gap-x-6 gap-y-2 border-b border-slate-200 bg-white px-6 py-3 dark:border-slate-700 dark:bg-slate-800">
         <h1 className="text-base font-bold">Connection cases</h1>
         <nav className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
           {SYMPTOMS.map(symptom => (
-            <a key={symptom.id} href={`#${symptom.id}`} className="text-blue-700 hover:underline">
+            <a
+              key={symptom.id}
+              href={`#${symptom.id}`}
+              className="text-blue-700 hover:underline dark:text-blue-400"
+            >
               {symptom.title}
             </a>
           ))}
@@ -263,7 +279,9 @@ export default function DiagnosisGalleryRoute() {
       <div className="space-y-12 p-6">
         {SYMPTOMS.map(symptom => (
           <section key={symptom.id} id={symptom.id} className="scroll-mt-16 space-y-6">
-            <h2 className="border-b border-slate-200 pb-1 text-lg font-bold">{symptom.title}</h2>
+            <h2 className="border-b border-slate-200 pb-1 text-lg font-bold dark:border-slate-700">
+              {symptom.title}
+            </h2>
             <div className={cx("grid gap-x-8 gap-y-10", view === VIEWS[1] && "xl:grid-cols-2")}>
               {SCENARIOS.filter(scenario => scenario.symptom === symptom.id).map(scenario => (
                 <CaseCard
