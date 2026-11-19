@@ -144,6 +144,9 @@ typedef struct {
     uint32_t generation;
     uint32_t epoch;
     uint32_t action_sequence;
+    /* A device-owned macro (MQTT, runKeyboardMacro) has no generation. It
+     * lives in its epoch, so every release barrier still cancels it. */
+    bool local;
     bool is_paste;
     uint32_t step_count;
     jetkvm_hidrpc_macro_step_t steps[JETKVM_HIDRPC_MACRO_MAX_STEPS];
@@ -179,6 +182,9 @@ typedef struct {
     uint32_t macro_action_sequence;
     uint32_t macro_cancel_sequence;
     bool macro_active;
+    /* Set while the worker holds a macro it took from the mailbox and has
+     * not yet started, so a submit that must not replace a macro sees it. */
+    bool macro_starting;
     bool macro_is_paste;
     uint32_t macro_step_index;
     uint32_t macro_step_count;
@@ -406,6 +412,23 @@ static bool generation_is_active(uint32_t generation, uint32_t epoch)
              epoch == s_ctx.active_epoch;
     portEXIT_CRITICAL(&s_state_lock);
     return active;
+}
+
+static bool local_epoch_is_active(uint32_t epoch)
+{
+    bool active;
+    portENTER_CRITICAL(&s_state_lock);
+    active = s_ctx.initialized && !s_ctx.stopping && s_ctx.usb_available &&
+             !s_ctx.worker_paused && epoch == s_ctx.active_epoch;
+    portEXIT_CRITICAL(&s_state_lock);
+    return active;
+}
+
+static bool macro_is_live(const macro_command_t *macro)
+{
+    return macro->local ? local_epoch_is_active(macro->epoch) :
+                          generation_is_active(macro->generation,
+                                               macro->epoch);
 }
 
 static bool is_modifier_usage(uint8_t usage)
@@ -775,8 +798,7 @@ static bool process_macro_due(macro_runtime_t *runtime,
     if (!macro_is_due(runtime, now_us)) {
         return false;
     }
-    if (!generation_is_active(runtime->command.generation,
-                              runtime->command.epoch) ||
+    if (!macro_is_live(&runtime->command) ||
         macro_cancel_sequence() > runtime->command.action_sequence) {
         return cancel_active_macro(runtime, false, releases, keepalive);
     }
@@ -789,13 +811,15 @@ static bool process_macro_due(macro_runtime_t *runtime,
         &runtime->command.steps[runtime->next_step];
     input_command_t command = {
         .type = COMMAND_KEYBOARD,
+        .local = runtime->command.local,
         .generation = runtime->command.generation,
         .epoch = runtime->command.epoch,
         .data.keyboard.modifier = step->modifier,
     };
     memcpy(command.data.keyboard.keys, step->keys,
            sizeof(command.data.keyboard.keys));
-    esp_err_t error = submit_usb_command_with_retry(&command, true);
+    esp_err_t error = submit_usb_command_with_retry(
+        &command, !runtime->command.local);
     record_usb_result(error);
     note_keyboard_write_result(COMMAND_KEYBOARD, error);
     count_processed(COMMAND_KEYBOARD);
@@ -925,8 +949,7 @@ static bool accept_incoming_macro(macro_runtime_t *runtime,
                                   jetkvm_hid_keepalive_policy_state_t *keepalive)
 {
     if (s_incoming_macro.action_sequence <= macro_cancel_sequence() ||
-        !generation_is_active(s_incoming_macro.generation,
-                              s_incoming_macro.epoch)) {
+        !macro_is_live(&s_incoming_macro)) {
         count_unstarted_macro_cancelled(false, false);
         return false;
     }
@@ -1014,8 +1037,7 @@ static void bridge_worker(void *ctx)
         int64_t now_us = esp_timer_get_time();
         if (macro.active &&
             (macro_cancel_sequence() > macro.command.action_sequence ||
-             !generation_is_active(macro.command.generation,
-                                   macro.command.epoch))) {
+             !macro_is_live(&macro.command))) {
             release_pending = cancel_active_macro(
                 &macro, false, releases, &keepalive);
             release_retry_at_us = release_pending ?
@@ -1117,10 +1139,18 @@ static void bridge_worker(void *ctx)
             xSemaphoreTake(s_ctx.macro_mutex, portMAX_DELAY);
             BaseType_t received = xQueueReceive(
                 s_ctx.macro_queue, &s_incoming_macro, 0);
+            if (received == pdTRUE) {
+                portENTER_CRITICAL(&s_state_lock);
+                s_ctx.macro_starting = true;
+                portEXIT_CRITICAL(&s_state_lock);
+            }
             xSemaphoreGive(s_ctx.macro_mutex);
             if (received == pdTRUE) {
                 release_pending = accept_incoming_macro(
                     &macro, releases, &keepalive);
+                portENTER_CRITICAL(&s_state_lock);
+                s_ctx.macro_starting = false;
+                portEXIT_CRITICAL(&s_state_lock);
                 release_retry_at_us = release_pending ?
                     esp_timer_get_time() +
                         (int64_t)RELEASE_RETRY_INTERVAL_MS * 1000 :
@@ -1357,6 +1387,7 @@ esp_err_t jetkvm_hid_input_init(void)
     s_ctx.macro_action_sequence = 0U;
     s_ctx.macro_cancel_sequence = 0U;
     s_ctx.macro_active = false;
+    s_ctx.macro_starting = false;
     s_ctx.macro_is_paste = false;
     s_ctx.macro_step_index = 0U;
     s_ctx.macro_step_count = 0U;
@@ -1986,6 +2017,82 @@ esp_err_t jetkvm_hid_input_submit_local_relative_mouse(int8_t dx, int8_t dy)
     portEXIT_CRITICAL(&s_state_lock);
     notify_worker();
     return ESP_OK;
+}
+
+jetkvm_hid_input_submit_result_t jetkvm_hid_input_submit_local_macro(
+    const jetkvm_hidrpc_macro_step_t *steps, uint32_t step_count,
+    bool replace)
+{
+    if (steps == NULL || step_count == 0U ||
+        step_count > JETKVM_HIDRPC_MACRO_MAX_STEPS) {
+        portENTER_CRITICAL(&s_state_lock);
+        s_ctx.stats.submitted++;
+        s_ctx.stats.macro_rejected++;
+        portEXIT_CRITICAL(&s_state_lock);
+        return JETKVM_HID_INPUT_SUBMIT_INVALID_ARGUMENT;
+    }
+    macro_command_t macro;
+    memset(&macro, 0, sizeof(macro));
+    macro.local = true;
+    /* As copy_macro_event: the browser shows a running macro as a paste. */
+    macro.is_paste = true;
+    macro.step_count = step_count;
+    memcpy(macro.steps, steps, (size_t)step_count * sizeof(steps[0]));
+
+    portENTER_CRITICAL(&s_state_lock);
+    s_ctx.stats.submitted++;
+    bool ready = s_ctx.initialized && !s_ctx.stopping &&
+                 s_ctx.usb_available && !s_ctx.worker_paused &&
+                 s_ctx.macro_mutex != NULL;
+    QueueHandle_t queue = s_ctx.macro_queue;
+    portEXIT_CRITICAL(&s_state_lock);
+    if (!ready) {
+        portENTER_CRITICAL(&s_state_lock);
+        s_ctx.stats.macro_rejected++;
+        portEXIT_CRITICAL(&s_state_lock);
+        return JETKVM_HID_INPUT_SUBMIT_NOT_READY;
+    }
+
+    /* The worker takes a macro from the mailbox and marks it as starting
+     * under this mutex, so the busy check below cannot miss a macro. */
+    if (xSemaphoreTake(s_ctx.macro_mutex, 0) != pdTRUE) {
+        portENTER_CRITICAL(&s_state_lock);
+        s_ctx.stats.macro_rejected++;
+        portEXIT_CRITICAL(&s_state_lock);
+        return JETKVM_HID_INPUT_SUBMIT_BACKPRESSURE;
+    }
+    bool replaced_pending = uxQueueMessagesWaiting(queue) != 0U;
+    portENTER_CRITICAL(&s_state_lock);
+    bool busy = replaced_pending || s_ctx.macro_active ||
+                s_ctx.macro_starting;
+    if (!replace && busy) {
+        s_ctx.stats.macro_rejected++;
+        portEXIT_CRITICAL(&s_state_lock);
+        xSemaphoreGive(s_ctx.macro_mutex);
+        return JETKVM_HID_INPUT_SUBMIT_BUSY;
+    }
+    macro.epoch = s_ctx.active_epoch;
+    macro.action_sequence = next_macro_action_sequence_locked();
+    portEXIT_CRITICAL(&s_state_lock);
+    BaseType_t queued = xQueueOverwrite(queue, &macro);
+    xSemaphoreGive(s_ctx.macro_mutex);
+    if (queued != pdPASS) {
+        portENTER_CRITICAL(&s_state_lock);
+        s_ctx.stats.macro_rejected++;
+        portEXIT_CRITICAL(&s_state_lock);
+        return JETKVM_HID_INPUT_SUBMIT_QUEUE_FULL;
+    }
+
+    portENTER_CRITICAL(&s_state_lock);
+    s_ctx.stats.enqueued++;
+    s_ctx.stats.macro_accepted++;
+    if (replaced_pending) {
+        s_ctx.stats.macro_cancelled++;
+        s_ctx.stats.macro_replaced++;
+    }
+    portEXIT_CRITICAL(&s_state_lock);
+    notify_worker();
+    return JETKVM_HID_INPUT_SUBMIT_ACCEPTED;
 }
 
 int64_t jetkvm_hid_input_last_user_input_us(void)

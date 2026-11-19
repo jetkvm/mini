@@ -708,6 +708,8 @@
     "mqtt_error_tls": "Erro TLS — verifique as definições de certificado",
     "mqtt_ha_discovery_description": "Registar sensores, interruptores e controlos no Home Assistant automaticamente",
     "mqtt_ha_discovery_title": "Auto-Discovery",
+    "mqtt_keyboard_macros_description": "Permitir que clientes MQTT executem macros de teclado guardadas. Uma macro escreve no computador anfitrião, por isso qualquer pessoa que possa publicar no broker pode escrever nele.",
+    "mqtt_keyboard_macros_title": "Macros de teclado",
     "mqtt_load_error": "Falha ao carregar definições MQTT: {error}",
     "mqtt_password_description": "Conforme configurado no seu broker MQTT",
     "mqtt_password_label": "Palavra-passe",

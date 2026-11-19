@@ -708,6 +708,8 @@
     "mqtt_error_tls": "TLS 错误 — 请检查证书设置",
     "mqtt_ha_discovery_description": "自动在 Home Assistant 中注册传感器、开关和控制器",
     "mqtt_ha_discovery_title": "自动发现",
+    "mqtt_keyboard_macros_description": "允许 MQTT 客户端运行已保存的键盘宏。宏会在主机上输入，因此任何能向代理发布消息的人都可以在主机上输入。",
+    "mqtt_keyboard_macros_title": "键盘宏",
     "mqtt_load_error": "加载 MQTT 设置失败：{error}",
     "mqtt_password_description": "MQTT Broker 上配置的密码",
     "mqtt_password_label": "密码",

@@ -39,7 +39,14 @@ static bool parse_mqtt_settings(const cJSON *params,
     }
     const cJSON *object =
         cJSON_GetObjectItemCaseSensitive(params, "settings");
-    if (!mqtt_object_has_members(object, 11U)) {
+    /* Go decodes a settings object without enable_keyboard_macros with the
+     * field false; a client from before the field sends 11 members. */
+    const cJSON *enable_keyboard_macros =
+        cJSON_GetObjectItemCaseSensitive(object, "enable_keyboard_macros");
+    if (!mqtt_object_has_members(
+            object, enable_keyboard_macros != NULL ? 12U : 11U) ||
+        (enable_keyboard_macros != NULL &&
+         !cJSON_IsBool(enable_keyboard_macros))) {
         return false;
     }
     const cJSON *enabled = cJSON_GetObjectItemCaseSensitive(object, "enabled");
@@ -87,6 +94,7 @@ static bool parse_mqtt_settings(const cJSON *params,
     settings->tls_insecure = cJSON_IsTrue(tls_insecure);
     settings->enable_ha_discovery = cJSON_IsTrue(enable_ha_discovery);
     settings->enable_actions = cJSON_IsTrue(enable_actions);
+    settings->enable_keyboard_macros = cJSON_IsTrue(enable_keyboard_macros);
     settings->debounce_ms = (int32_t)debounce_value;
     return true;
 }
@@ -110,6 +118,8 @@ static cJSON *mqtt_settings_json(
                               settings->enable_ha_discovery) ||
         !cJSON_AddBoolToObject(result, "enable_actions",
                               settings->enable_actions) ||
+        !cJSON_AddBoolToObject(result, "enable_keyboard_macros",
+                              settings->enable_keyboard_macros) ||
         !cJSON_AddNumberToObject(result, "debounce_ms",
                                 settings->debounce_ms)) {
         cJSON_Delete(result);

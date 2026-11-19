@@ -708,6 +708,8 @@
     "mqtt_error_tls": "Ошибка TLS — проверьте настройки сертификата",
     "mqtt_ha_discovery_description": "Автоматически регистрировать сенсоры, переключатели и элементы управления в Home Assistant",
     "mqtt_ha_discovery_title": "Автообнаружение",
+    "mqtt_keyboard_macros_description": "Разрешить MQTT-клиентам запускать сохранённые макросы клавиатуры. Макрос вводит текст на хост-компьютере, поэтому любой, кто может публиковать в брокер, может вводить текст на нём.",
+    "mqtt_keyboard_macros_title": "Макросы клавиатуры",
     "mqtt_load_error": "Не удалось загрузить настройки MQTT: {error}",
     "mqtt_password_description": "Как настроено на вашем MQTT-брокере",
     "mqtt_password_label": "Пароль",
