@@ -25,7 +25,8 @@ class PresetTests(unittest.TestCase):
             self.assertEqual(data[126], 1)
             self.assertEqual(sum(data[:128]) % 256, 0)
             self.assertEqual(sum(data[128:]) % 256, 0)
-            self.assertEqual(data[35:38], bytes(3))
+            # Established timings: 640x480p60 and 800x600p60 alone.
+            self.assertEqual(data[35:38], bytes([0x21, 0, 0]))
             self.assertEqual(data[38:54], b'\x01\x01' * 8)
             self.assertFalse(data[24] & 1)  # no inferred GTF modes
             ext = data[128:]
@@ -56,7 +57,8 @@ class PresetTests(unittest.TestCase):
                 self.assertFalse(d[17] & 128)  # no interlaced modes
                 modes.append((w, h))
             self.assertEqual(modes[0], (1920,1080))
-            self.assertEqual(set(modes[1:]), {(1024,768), (1280,800), (1280,1024)})
+            self.assertEqual(set(modes[1:]), {(1024,768), (1280,800), (1280,1024),
+                                              (1440,900), (1680,1050)})
 
 if __name__ == '__main__':
     unittest.main()

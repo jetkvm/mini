@@ -8,9 +8,14 @@ date, size and name) for hosts that expect a known monitor; its modes are the
 Mini's, because the monitor's own 1920x1080p60 cannot be captured.
 
 Preferred timing: 1080p30. CEA timings: 1080p30 (VIC 34), 720p30 (VIC 62) and
-720p60 (VIC 4). Low-resolution timings: `cvt 1024 768 30`, `cvt 1280 800 30` and
-`cvt 1280 1024 30`. CVT clock quantization makes these 29.83..29.90 Hz.
-No standard/established timings or inferred GTF modes add unsupported rates.
+720p60 (VIC 4). Other timings: `cvt 1024 768 30`, `cvt 1280 800 30`,
+`cvt 1280 1024 30`, `cvt 1440 900 30` and `cvt 1680 1050 30`. CVT clock
+quantization makes these 29.83..29.95 Hz.
+Established timings: 640x480p60 and 800x600p60 alone. At 30 Hz their pixel
+clocks would be below the 25 MHz that HDMI can carry, and a source that is
+not offered them scales its 640x480 or 800x600 picture (firmware set-up,
+boot loader) to the preferred timing instead. No standard timings or
+inferred GTF modes add other rates.
 Audio uses USB, so neither preset advertises HDMI audio or speakers.
 """
 from pathlib import Path
@@ -25,6 +30,8 @@ MODES = {
     '1024x768p30': (3000, 1024, 1056, 1152, 1280, 768, 771, 775, 784, 0x1c),
     '1280x800p30': (3900, 1280, 1312, 1440, 1600, 800, 803, 809, 817, 0x1c),
     '1280x1024p30': (5000, 1280, 1312, 1440, 1600, 1024, 1027, 1034, 1045, 0x1c),
+    '1440x900p30': (4925, 1440, 1480, 1616, 1792, 900, 903, 909, 919, 0x1c),
+    '1680x1050p30': (6775, 1680, 1728, 1896, 2112, 1050, 1053, 1059, 1071, 0x1c),
 }
 
 def dtd(name):
@@ -50,7 +57,7 @@ IDENTITIES = {
 def preset(identity='default'):
     ids, size, name, serial = IDENTITIES[identity]
     base = bytearray.fromhex('00ffffffffffff00' + ids + '010380' + size + '780a5ec0a4594a9825205054')
-    base += bytes(3)  # no established modes (all established rates exceed 30 Hz)
+    base += bytes([0x21, 0, 0])  # established: 640x480p60 and 800x600p60
     base += b'\x01\x01' * 8  # standard timings cannot encode refresh below 60 Hz
     base += dtd('1080p30')
     base += descriptor(0xfc, name)
@@ -64,7 +71,8 @@ def preset(identity='default'):
     blocks = bytes([0x43, *svds,
                     0x67, 0x03, 0x0c, 0, 0x10, 0, 0, 0x21])
     extension = bytearray([2, 3, 4+len(blocks), 0x30]) + blocks  # no Basic Audio
-    for mode in ('1024x768p30', '1280x800p30', '1280x1024p30'):
+    for mode in ('1024x768p30', '1280x800p30', '1280x1024p30', '1440x900p30',
+                 '1680x1050p30'):
         extension += dtd(mode)
     extension += bytes(128-len(extension))
     extension[127] = -sum(extension) & 255
