@@ -510,6 +510,11 @@ bool jetkvm_os_services_add_video_state(cJSON *object, void *ctx)
              cJSON_AddBoolToObject(clipboard, "write",
                                    (view->clipboard_flags &
                                     OSVC_CLIPBOARD_FLAG_WRITE) != 0U) &&
+             /* A write also sets the primary selection, so the paste
+              * shortcut for Linux is Shift+Insert. */
+             cJSON_AddBoolToObject(clipboard, "primary",
+                                   (view->clipboard_flags &
+                                    OSVC_CLIPBOARD_FLAG_PRIMARY) != 0U) &&
              cJSON_AddStringToObject(clipboard, "os",
                                      osvc_target_os_name(view->os));
     }
