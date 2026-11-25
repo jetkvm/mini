@@ -83,8 +83,10 @@ test.describe("Remote Host Agent: mouse", () => {
     );
     expect(bothV.length, "Vertical wheel in combined event").toBeGreaterThan(0);
     expect(bothV[0].value, "Negative wheelY scrolls down").toBe(-1);
-    const bothEvents = await agent!.getMouseEvents();
-    const bothH = bothEvents.filter(ev => ev.type === "mouse_move_rel" && ev.code === REL_HWHEEL);
+    const bothH = await agent!.waitForMouseEvent(
+      ev => ev.type === "mouse_move_rel" && ev.code === REL_HWHEEL,
+      3000,
+    );
     expect(bothH.length, "Horizontal wheel in combined event").toBeGreaterThan(0);
     expect(bothH[0].value, "Positive wheelX scrolls right").toBe(1);
   });
