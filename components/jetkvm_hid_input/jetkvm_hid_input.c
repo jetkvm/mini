@@ -687,14 +687,34 @@ static esp_err_t submit_usb_command(const input_command_t *command)
     return ESP_ERR_INVALID_ARG;
 }
 
+typedef enum {
+    /* Cleanup reports and device-owned mouse reports. */
+    RETRY_ALWAYS,
+    RETRY_WHILE_GENERATION_ACTIVE,
+    /* Steps of a device-owned macro: they have no generation. */
+    RETRY_WHILE_LOCAL_EPOCH_ACTIVE,
+} retry_liveness_t;
+
+static bool retry_is_live(const input_command_t *command,
+                          retry_liveness_t liveness)
+{
+    switch (liveness) {
+    case RETRY_WHILE_GENERATION_ACTIVE:
+        return generation_is_active(command->generation, command->epoch);
+    case RETRY_WHILE_LOCAL_EPOCH_ACTIVE:
+        return local_epoch_is_active(command->epoch);
+    case RETRY_ALWAYS:
+        break;
+    }
+    return true;
+}
+
 static esp_err_t submit_usb_command_with_retry(
-    const input_command_t *command, bool require_active_generation)
+    const input_command_t *command, retry_liveness_t liveness)
 {
     esp_err_t error = submit_usb_command(command);
     bool retryable_type = command->type != COMMAND_WHEEL;
-    bool may_retry = !require_active_generation ||
-                     generation_is_active(command->generation,
-                                          command->epoch);
+    bool may_retry = retry_is_live(command, liveness);
     /* Upstream writes keyboard reports with a 100 ms deadline (hidWriteTimeout)
      * so a burst that outruns the host's interrupt polling is queued, not
      * dropped, and only a host that stops polling for the whole deadline
@@ -709,8 +729,7 @@ static esp_err_t submit_usb_command_with_retry(
         s_ctx.stats.usb_report_retries++;
         portEXIT_CRITICAL(&s_state_lock);
         vTaskDelay(1);
-        if (require_active_generation &&
-            !generation_is_active(command->generation, command->epoch)) {
+        if (!retry_is_live(command, liveness)) {
             break;
         }
         error = submit_usb_command(command);
@@ -757,7 +776,7 @@ static bool cancel_active_macro(macro_runtime_t *runtime, bool replaced,
         .generation = runtime->command.generation,
         .epoch = runtime->command.epoch,
     };
-    esp_err_t error = submit_usb_command_with_retry(&clear, false);
+    esp_err_t error = submit_usb_command_with_retry(&clear, RETRY_ALWAYS);
     note_keyboard_write_result(COMMAND_KEYBOARD, error);
     if (error == ESP_OK) {
         note_keyboard_changed();
@@ -819,7 +838,8 @@ static bool process_macro_due(macro_runtime_t *runtime,
     memcpy(command.data.keyboard.keys, step->keys,
            sizeof(command.data.keyboard.keys));
     esp_err_t error = submit_usb_command_with_retry(
-        &command, !runtime->command.local);
+        &command, runtime->command.local ? RETRY_WHILE_LOCAL_EPOCH_ACTIVE :
+                                           RETRY_WHILE_GENERATION_ACTIVE);
     record_usb_result(error);
     note_keyboard_write_result(COMMAND_KEYBOARD, error);
     count_processed(COMMAND_KEYBOARD);
@@ -875,7 +895,9 @@ static void process_command(const input_command_t *command,
         return;
     }
 
-    esp_err_t error = submit_usb_command_with_retry(command, !command->local);
+    esp_err_t error = submit_usb_command_with_retry(
+        command, command->local ? RETRY_ALWAYS :
+                                  RETRY_WHILE_GENERATION_ACTIVE);
 
     if (error == ESP_OK && (command->type == COMMAND_KEYBOARD ||
                             command->type == COMMAND_KEYPRESS)) {
