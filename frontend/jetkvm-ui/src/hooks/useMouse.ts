@@ -140,12 +140,7 @@ export default function useMouse() {
 
       if (wheelY === 0 && wheelX === 0) return;
 
-      if (rpcHidReady) {
-        reportWheelEvent(wheelY, wheelX);
-      } else {
-        // kept for backward compatibility
-        send("wheelReport", { wheelY, wheelX });
-      }
+      reportWheelEvent(wheelY, wheelX);
 
       // Apply blocking delay based of throttling settings
       if (scrollThrottling && !blockWheelEvent) {
@@ -153,7 +148,7 @@ export default function useMouse() {
         setTimeout(() => setBlockWheelEvent(false), scrollThrottling);
       }
     },
-    [send, reportWheelEvent, rpcHidReady, blockWheelEvent, scrollThrottling, invertScroll],
+    [reportWheelEvent, blockWheelEvent, scrollThrottling, invertScroll],
   );
 
   const resetMousePosition = useCallback(() => {

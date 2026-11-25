@@ -3336,13 +3336,6 @@ int main(void)
     assert(observed_hid.rel_mouse.dx == INT8_MIN);
     assert(observed_hid.rel_mouse.dy == INT8_MAX);
     assert(observed_hid.rel_mouse.buttons == 31U);
-    expect_rpc_context(
-        &context,
-        "{\"jsonrpc\":\"2.0\",\"method\":\"wheelReport\",\"params\":{\"wheelY\":-127,\"wheelX\":127},\"id\":76}",
-        "{\"jsonrpc\":\"2.0\",\"id\":76,\"result\":null}");
-    assert(observed_hid.type == JETKVM_HIDRPC_EVENT_WHEEL_REPORT);
-    assert(observed_hid.wheel.wheel_y == -127);
-    assert(observed_hid.wheel.wheel_x == 127);
 
     expect_rpc_context(
         &context,
@@ -3368,14 +3361,6 @@ int main(void)
         &context,
         "{\"jsonrpc\":\"2.0\",\"method\":\"relMouseReport\",\"params\":{\"dx\":128,\"dy\":0,\"buttons\":0},\"id\":85}",
         "{\"jsonrpc\":\"2.0\",\"id\":85,\"error\":{\"code\":-32602,\"message\":\"Invalid params\",\"data\":\"dx/dy must be int8 and buttons must be uint8\"}}");
-    expect_rpc_context(
-        &context,
-        "{\"jsonrpc\":\"2.0\",\"method\":\"wheelReport\",\"params\":{\"wheelY\":-129,\"wheelX\":0},\"id\":86}",
-        "{\"jsonrpc\":\"2.0\",\"id\":86,\"error\":{\"code\":-32602,\"message\":\"Invalid params\",\"data\":\"wheelY/wheelX must be int8\"}}");
-    expect_rpc_context(
-        &context,
-        "{\"jsonrpc\":\"2.0\",\"method\":\"wheelReport\",\"params\":{\"wheelY\":1.5,\"wheelX\":0},\"id\":87}",
-        "{\"jsonrpc\":\"2.0\",\"id\":87,\"error\":{\"code\":-32602,\"message\":\"Invalid params\",\"data\":\"wheelY/wheelX must be int8\"}}");
     expect_rpc_context(
         &context,
         "{\"jsonrpc\":\"2.0\",\"method\":\"setStreamQualityFactor\",\"params\":{\"factor\":0.1},\"id\":8}",

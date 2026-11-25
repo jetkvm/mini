@@ -316,7 +316,6 @@ static const rpc_method_t s_rpc_methods[] = {
     { "keypressReport", rpc_keypress_report },
     { "absMouseReport", rpc_abs_mouse_report },
     { "relMouseReport", rpc_rel_mouse_report },
-    { "wheelReport", rpc_wheel_report },
     { "getStreamQualityFactor", rpc_get_stream_quality },
     { "setStreamQualityFactor", rpc_set_stream_quality },
     { "setCloudUrl", rpc_set_cloud_url },
