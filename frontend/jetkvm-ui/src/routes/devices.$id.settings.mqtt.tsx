@@ -158,9 +158,16 @@ export default function SettingsMqttRoute() {
   const handleSave = useCallback(() => {
     if (!validate()) return;
 
+    // A request that was not sent gets no reply, so give the form back here.
+    const unlockIfNotSent = (sent: boolean) => {
+      if (sent) return;
+      setSavePhase("idle");
+      notifications.error(m.mqtt_saved_error({ error: m.unknown_error() }));
+    };
+
     if (!settings.enabled) {
       setSavePhase("saving");
-      send("setMqttSettings", { settings }, resp => {
+      void send("setMqttSettings", { settings }, resp => {
         setSavePhase("idle");
         if ("error" in resp) {
           notifications.error(
@@ -170,13 +177,13 @@ export default function SettingsMqttRoute() {
         }
         notifications.success(m.mqtt_saved_disconnect());
         setConnectionState("disconnected");
-      });
+      }).then(unlockIfNotSent);
       return;
     }
 
     // Test connection first, then save
     setSavePhase("testing");
-    send("testMqttConnection", { settings }, testResp => {
+    void send("testMqttConnection", { settings }, testResp => {
       if ("error" in testResp) {
         setSavePhase("idle");
         notifications.error(friendlyMqttError(testResp.error.message || m.unknown_error()));
@@ -192,7 +199,7 @@ export default function SettingsMqttRoute() {
       // Test passed — save and reconnect
       setSavePhase("saving");
       setConnectionState("connecting");
-      send("setMqttSettings", { settings }, saveResp => {
+      void send("setMqttSettings", { settings }, saveResp => {
         setSavePhase("idle");
         if ("error" in saveResp) {
           notifications.error(
@@ -202,8 +209,11 @@ export default function SettingsMqttRoute() {
           return;
         }
         notifications.success(m.mqtt_saved_success());
+      }).then(sent => {
+        if (!sent) setConnectionState("disconnected");
+        unlockIfNotSent(sent);
       });
-    });
+    }).then(unlockIfNotSent);
   }, [send, settings, validate]);
 
   const handleTestConnection = useCallback(() => {

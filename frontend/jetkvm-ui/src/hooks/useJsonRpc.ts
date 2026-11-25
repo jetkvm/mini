@@ -82,9 +82,14 @@ export function useJsonRpc(
   const { rpcDataChannel } = useRTCStore();
   const { isFailsafeMode, reason } = useFailsafeModeStore();
 
+  // Resolves false when the request was not sent; its callback never runs.
   const send = useCallback(
-    async (method: string, params: unknown, callback?: (resp: JsonRpcResponse) => void) => {
-      if (rpcDataChannel?.readyState !== "open") return;
+    async (
+      method: string,
+      params: unknown,
+      callback?: (resp: JsonRpcResponse) => void,
+    ): Promise<boolean> => {
+      if (rpcDataChannel?.readyState !== "open") return false;
 
       // Check if method is blocked in failsafe mode
       if (isFailsafeMode && reason) {
@@ -105,7 +110,7 @@ export function useJsonRpc(
             };
             callback(errorResponse);
           }
-          return;
+          return true;
         }
       }
 
@@ -121,7 +126,9 @@ export function useJsonRpc(
       } catch (error) {
         callbackStore.delete(payload.id);
         console.error(`Failed to send RPC method "${method}"`, error);
+        return false;
       }
+      return true;
     },
     [rpcDataChannel, isFailsafeMode, reason],
   );
