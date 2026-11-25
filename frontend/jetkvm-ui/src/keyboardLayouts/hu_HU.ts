@@ -168,6 +168,8 @@ const keyDisplayMap = {
   "(IntlBackslash)": "Í",
   KeyY: "Z",
   KeyZ: "Y",
+  "(KeyY)": "Z",
+  "(KeyZ)": "Y",
   "(Digit1)": "'",
   "(Digit2)": '"',
   "(Digit3)": "+",
