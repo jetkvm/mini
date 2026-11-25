@@ -87,8 +87,10 @@ esp_err_t jetkvm_storage_download_start(const char *url, const char *filename,
  * Ask the running download to stop. The task stops before its next read
  * from the server (a stalled server: up to the 15 s read timeout), deletes
  * the .incomplete file and ends in JETKVM_STORAGE_DOWNLOAD_CANCELLED. A
- * download that has already written its last byte ends as done. False when
- * no download runs.
+ * cancel before the task holds the card also deletes an .incomplete file
+ * that a failed download of the same name left. A download that has already
+ * written its last byte ends as done. False when no download runs, or when
+ * the running one has already failed or finished and only cleans up.
  */
 bool jetkvm_storage_download_cancel(void);
 

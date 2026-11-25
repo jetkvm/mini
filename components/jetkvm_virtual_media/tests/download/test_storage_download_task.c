@@ -47,6 +47,10 @@ static struct {
     esp_err_t discard_result;
     /* A writer lease is held. */
     bool claimed;
+    /* An earlier download left os.iso.incomplete. */
+    bool partial;
+    unsigned deletes;
+    esp_err_t delete_result;
 } card;
 
 static TaskFunction_t s_task;
@@ -58,6 +62,7 @@ static void reset(void)
     server.status = 200;
     memset(&card, 0, sizeof(card));
     card.discard_result = ESP_OK;
+    card.delete_result = ESP_OK;
 }
 
 /* Start a download and run its task to the end. */
@@ -125,6 +130,29 @@ static void test_cancel_while_connecting(void)
     assert(card.starts == 0U && server.reads == 0U);
 }
 
+static void test_cancel_while_connecting_deletes_older_partial(void)
+{
+    /* The cancel comes before the task holds the card, so no session can
+     * delete the file that a failed download left. */
+    reset();
+    server.cancel_at_open = true;
+    card.partial = true;
+    jetkvm_storage_download_state_t state = run_download();
+    assert(state.phase == JETKVM_STORAGE_DOWNLOAD_CANCELLED);
+    assert(state.error[0] == '\0');
+    assert(!card.partial && card.starts == 0U);
+
+    /* A mounted image refuses the delete: the state names the file. */
+    reset();
+    server.cancel_at_open = true;
+    card.partial = true;
+    card.delete_result = ESP_ERR_INVALID_STATE;
+    state = run_download();
+    assert(state.phase == JETKVM_STORAGE_DOWNLOAD_CANCELLED);
+    assert(strstr(state.error, "Could not delete the partial os.iso") == state.error);
+    assert(card.partial && card.deletes == 1U);
+}
+
 static void test_failure_keeps_partial_file(void)
 {
     reset();
@@ -154,6 +182,7 @@ int main(void)
     test_cancel_during_transfer();
     test_cancel_after_last_byte();
     test_cancel_while_connecting();
+    test_cancel_while_connecting_deletes_older_partial();
     test_failure_keeps_partial_file();
     test_cancel_that_cannot_delete();
     puts("storage download task: PASS");
@@ -338,14 +367,23 @@ bool jetkvm_virtual_media_card_in_slot(void)
 
 esp_err_t jetkvm_virtual_media_file_size(const char *filename, uint64_t *size)
 {
-    (void)filename; (void)size;
+    if (card.partial && strcmp(filename, "os.iso.incomplete") == 0) {
+        *size = 64U * 1024U;
+        return ESP_OK;
+    }
     return ESP_ERR_NOT_FOUND;
 }
 
 esp_err_t jetkvm_virtual_media_delete_file(const char *filename)
 {
-    (void)filename;
-    return ESP_ERR_NOT_FOUND;
+    if (!card.partial || strcmp(filename, "os.iso.incomplete") != 0) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    card.deletes++;
+    if (card.delete_result == ESP_OK) {
+        card.partial = false;
+    }
+    return card.delete_result;
 }
 
 esp_err_t jetkvm_virtual_media_start_upload(
@@ -411,6 +449,9 @@ esp_err_t jetkvm_virtual_media_abort_upload_owned(
 {
     (void)upload_id;
     assert(token == 7U && card.claimed);
+    /* The download has failed: a cancel now would not delete this file, so
+     * it is refused. */
+    assert(!jetkvm_storage_download_cancel());
     card.aborts++;
     card.claimed = false;
     return ESP_OK;

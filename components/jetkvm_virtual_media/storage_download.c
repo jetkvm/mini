@@ -54,6 +54,8 @@ static bool s_running;
 /* Set by jetkvm_storage_download_cancel while s_running; the task reads it
  * before each read from the server. */
 static bool s_cancel;
+/* The task has chosen how the download ends; a cancel comes too late. */
+static bool s_ending;
 
 void jetkvm_storage_download_set_hooks(
     const jetkvm_storage_download_hooks_t *hooks)
@@ -436,8 +438,14 @@ static void download_task(void *argument)
     }
 
 done:;
-    const jetkvm_download_end_t end =
-        jetkvm_download_end(complete, cancel_requested());
+    /* One read of the flag decides the end, and the same critical section
+     * closes jetkvm_storage_download_cancel: it accepts no cancel that the
+     * cleanup below would not act on. */
+    portENTER_CRITICAL(&s_lock);
+    const bool cancelled = s_cancel;
+    s_ending = true;
+    portEXIT_CRITICAL(&s_lock);
+    const jetkvm_download_end_t end = jetkvm_download_end(complete, cancelled);
     char kept[JETKVM_STORAGE_DOWNLOAD_ERROR_CAPACITY] = "";
     if (token != JETKVM_VIRTUAL_MEDIA_UPLOAD_TOKEN_INVALID &&
         end == JETKVM_DOWNLOAD_END_CANCELLED) {
@@ -451,6 +459,24 @@ done:;
     } else if (token != JETKVM_VIRTUAL_MEDIA_UPLOAD_TOKEN_INVALID) {
         /* Keeps the .incomplete prefix for the next attempt to resume. */
         (void)jetkvm_virtual_media_abort_upload_owned(upload.upload_id, token);
+    } else if (end == JETKVM_DOWNLOAD_END_CANCELLED) {
+        /* Cancelled before the claim. A failed download of this name can
+         * have left its partial file; a cancel deletes that one too. The
+         * delete is refused while an image is mounted or another upload
+         * holds the card. */
+        char incomplete[JETKVM_VIRTUAL_MEDIA_FILENAME_CAPACITY +
+                        sizeof(DOWNLOAD_INCOMPLETE_SUFFIX)];
+        snprintf(incomplete, sizeof(incomplete), "%s%s", request->filename,
+                 DOWNLOAD_INCOMPLETE_SUFFIX);
+        esp_err_t deleted =
+            jetkvm_virtual_media_file_size(incomplete, &existing) == ESP_OK ?
+                jetkvm_virtual_media_delete_file(incomplete) :
+                ESP_ERR_NOT_FOUND;
+        if (deleted != ESP_OK && deleted != ESP_ERR_NOT_FOUND) {
+            snprintf(kept, sizeof(kept),
+                     "Could not delete the partial %.64s on the TF card (%s).",
+                     request->filename, esp_err_to_name(deleted));
+        }
     }
     if (end == JETKVM_DOWNLOAD_END_FAILED && s_task_error[0] == '\0') {
         set_error("The download stopped.");
@@ -493,6 +519,7 @@ done:;
            sizeof(s_state.error));
     s_running = false;
     s_cancel = false;
+    s_ending = false;
     portEXIT_CRITICAL(&s_lock);
     notify();
     jetkvm_memory_policy_control_free(request->url);
@@ -603,13 +630,13 @@ esp_err_t jetkvm_storage_download_start(const char *url, const char *filename,
 bool jetkvm_storage_download_cancel(void)
 {
     portENTER_CRITICAL(&s_lock);
-    const bool running = s_running;
-    if (running) {
+    const bool accepted = s_running && !s_ending;
+    if (accepted) {
         s_cancel = true;
     }
     portEXIT_CRITICAL(&s_lock);
-    if (running) {
+    if (accepted) {
         ESP_LOGI(TAG, "cancel requested");
     }
-    return running;
+    return accepted;
 }
