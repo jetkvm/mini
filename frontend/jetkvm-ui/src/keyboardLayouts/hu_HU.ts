@@ -168,6 +168,18 @@ const keyDisplayMap = {
   "(IntlBackslash)": "Í",
   KeyY: "Z",
   KeyZ: "Y",
+  "(Digit1)": "'",
+  "(Digit2)": '"',
+  "(Digit3)": "+",
+  "(Digit4)": "!",
+  "(Digit6)": "/",
+  "(Digit7)": "=",
+  "(Digit8)": "(",
+  "(Digit9)": ")",
+  "(Comma)": "?",
+  "(Period)": ":",
+  Slash: "-",
+  "(Slash)": "_",
 } as Record<string, string>;
 
 export const hu_HU: KeyboardLayout = {
