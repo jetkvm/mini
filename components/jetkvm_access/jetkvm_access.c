@@ -438,13 +438,18 @@ void jetkvm_access_note_activity(void)
 {
     atomic_store(&s_last_activity, xTaskGetTickCount());
 }
-/* A login with a password and a timeout that saw no activity for the timeout.
- * Lock-free, so a caller can poll it; expire_idle_locked() decides. */
+/* A password and a timeout, and no activity for the timeout. Lock-free, so a
+ * caller can poll it; expire_idle_locked() decides, and needs a token. The
+ * token's own lifetime does not count: a session that input kept past it
+ * still expires when it goes idle. */
 static bool login_idle(void)
 {
     uint32_t timeout = idle_timeout_ticks();
-    return timeout && atomic_load(&s_enabled) && token_fresh() &&
-        xTaskGetTickCount() - atomic_load(&s_last_activity) >= timeout;
+    /* The activity first: a store between the two reads then only makes the
+     * difference smaller, where the other order would wrap it. */
+    uint32_t last = atomic_load(&s_last_activity);
+    uint32_t now = xTaskGetTickCount();
+    return timeout && atomic_load(&s_enabled) && now - last >= timeout;
 }
 static bool expire_idle_locked(void)
 {

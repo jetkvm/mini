@@ -366,6 +366,17 @@ static void idle_timeout(void) {
     revoked = revocations;
     assert(device_get(cookie) == 401 && strstr(response, "session_expired"));
     assert(jetkvm_access_epoch_expired(epoch) && revocations == revoked + 1);
+    /* Input keeps a session past the cookie's 7 days; the timeout still ends
+     * it when it goes idle. */
+    assert(request("/auth/login-local", HTTP_POST, "{\"password\":\"12345678\"}", NULL, NULL) == 200);
+    strcpy(cookie, response_cookie);
+    epoch = atomic_load(&s_epoch);
+    tick += 7 * 24 * 60 * MINUTE_TICKS;
+    jetkvm_access_note_activity();
+    assert(!jetkvm_access_expire_idle() && jetkvm_access_epoch_valid(epoch));
+    tick += 5 * MINUTE_TICKS;
+    assert(jetkvm_access_expire_idle() && jetkvm_access_epoch_expired(epoch));
+    assert(device_get(cookie) == 401 && strstr(response, "session_expired"));
     /* The timeout is stored; the token is not, so a restart ends the login. */
     restart_with_revocation_counter();
     assert(jetkvm_access_get_idle_minutes() == 5);
