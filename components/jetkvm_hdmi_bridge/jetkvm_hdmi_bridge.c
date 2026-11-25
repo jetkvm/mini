@@ -610,6 +610,47 @@ esp_err_t tc_set_rgb888_output(jetkvm_hdmi_bridge_t *ctx)
     return tc_update_bits(ctx, CONFCTL, ~MASK_YCBCRFMT, 0);
 }
 
+/* The video FIFO between the HDMI receiver and the CSI transmitter holds 512
+ * words of 32 bits, two YCbCr 4:2:2 pixels each. The transmitter starts a
+ * line when the FIFO holds FIFOCTL words and then reads at the CSI rate.
+ *
+ * - Read faster than the pixels arrive, it must not catch up before the end
+ *   of the line: the level has to cover the share of the line that arrives
+ *   too late, line * (1 - input rate / CSI rate).
+ * - A line shorter than the level never fills the FIFO that far, and the
+ *   transmitter sends no usable line at all: 640 pixels are 320 words.
+ *
+ * TC358743_FIFO_LEVEL meets both for the modes it was chosen for and is kept
+ * wherever it has TC358743_FIFO_MARGIN words to spare on both sides; other
+ * modes get the middle of their range. */
+uint32_t tc358743_fifo_level(uint32_t width, uint64_t pixel_clock_hz, uint64_t csi_bps)
+{
+    const uint32_t line_words = width / 2U;
+    const uint64_t input_bps = pixel_clock_hz * 16U;
+    uint32_t needed = 0;
+    if (csi_bps > input_bps) {
+        needed = (uint32_t)(((uint64_t)line_words * (csi_bps - input_bps) + csi_bps - 1U) /
+                            csi_bps);
+    }
+    uint32_t level = TC358743_FIFO_LEVEL;
+    if (needed + TC358743_FIFO_MARGIN > level || level + TC358743_FIFO_MARGIN > line_words) {
+        level = (needed + line_words) / 2U;
+    }
+    return level > TC358743_FIFO_LEVEL_MAX ? TC358743_FIFO_LEVEL_MAX : level;
+}
+
+esp_err_t tc_set_fifo_level(jetkvm_hdmi_bridge_t *ctx, const tc358743_timings_t *timings,
+                            uint32_t lane_bps)
+{
+    const uint64_t pixel_clock_hz =
+        (uint64_t)timings->frame_width * timings->frame_height * timings->fps;
+    const uint32_t level = tc358743_fifo_level(timings->width, pixel_clock_hz,
+                                               (uint64_t)lane_bps * TC358743_LANES);
+    ESP_LOGI(ctx->log_tag, "FIFO level %" PRIu32 " for %ux%u at %" PRIu32 " kHz", level,
+             timings->width, timings->height, (uint32_t)(pixel_clock_hz / 1000U));
+    return tc_write_reg(ctx, FIFOCTL, 2, level);
+}
+
 esp_err_t tc_enable_stream(jetkvm_hdmi_bridge_t *ctx, bool enable)
 {
     const tc358743_capture_candidate_t *candidate = ctx->active_candidate;
@@ -846,6 +887,16 @@ esp_err_t tc_initial_setup(jetkvm_hdmi_bridge_t *ctx, uint32_t refclk_hz,
     ESP_RETURN_ON_ERROR(tc_enable_interrupts(ctx, !!(sys_status & MASK_S_DDC5V)), ctx->log_tag, "enable interrupts failed");
     ctx->refclk_hz = refclk_hz;
     return tc_enable_stream(ctx, false);
+}
+
+esp_err_t tc_setup_lost(jetkvm_hdmi_bridge_t *ctx, bool *lost)
+{
+    uint32_t fifoctl = 0;
+    esp_err_t ret = tc_read_reg(ctx, FIFOCTL, 2, &fifoctl);
+    if (ret == ESP_OK) {
+        *lost = fifoctl != TC358743_FIFO_LEVEL;
+    }
+    return ret;
 }
 
 esp_err_t tc_get_sys_status(jetkvm_hdmi_bridge_t *ctx, uint8_t *sys_status)

@@ -27,7 +27,11 @@
           "{\"width\":1280,\"height\":720,\"fps\":60}," \
           "{\"width\":1024,\"height\":768,\"fps\":30}," \
           "{\"width\":1280,\"height\":800,\"fps\":30}," \
-          "{\"width\":1280,\"height\":1024,\"fps\":30}" \
+          "{\"width\":1280,\"height\":1024,\"fps\":30}," \
+          "{\"width\":1440,\"height\":900,\"fps\":30}," \
+          "{\"width\":1680,\"height\":1050,\"fps\":30}," \
+          "{\"width\":640,\"height\":480,\"fps\":60}," \
+          "{\"width\":800,\"height\":600,\"fps\":60}" \
         "]," \
         "\"qualityControl\":true," \
         "\"edidControl\":%s," \

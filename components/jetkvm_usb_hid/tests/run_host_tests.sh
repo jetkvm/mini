@@ -20,4 +20,6 @@ cc -std=c11 -Wall -Wextra -Werror -pedantic \
     -o "$build_dir/test_cdrom_toc"
 
 "$build_dir/test_cdrom_toc"
+
+python3 "$component_dir/tests/test_relative_wheel_buttons.py"
 echo "jetkvm_usb_hid host tests: OK"

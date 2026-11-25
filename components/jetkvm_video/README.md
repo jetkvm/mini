@@ -20,7 +20,8 @@ The CPU never touches pixels. On P4 revision 3, the CSI 8-bit swap and a reverse
 
 ## HDMI recovery
 
-The capture task runs two recovery policies, each with tests in `tests/`.
+The capture task runs three recovery policies, each with tests in `tests/`.
 
 - HPD (hot-plug detect) retry, `hdmi_hpd_retry.h`: some sources, such as a Mac behind a DP-to-HDMI converter, stay dark after a hot plug. After each HPD rise of the Mini, if the cable has +5 V but no signal, the task pulses HPD after 10 s, 30 s, then every 60 s, five times at most. The first signal disarms it, so a host that later sleeps is not woken.
-- Bridge reset, `hdmi_health.h`: the TC358743 can get stuck with a wrong width or a few frames a second until it is reset. While video is expected, two bad 10 s windows in a row trigger a full bridge reset as at boot, at most three in a row. A failed reset restarts the Mini.
+- Bridge reset, `hdmi_health.h`: the TC358743 can get stuck with a wrong width or a few frames a second until it is reset. While video is expected, two bad 10 s windows in a row trigger a full bridge reset as at boot, at most three in a row.
+- Bridge fault, `hdmi_bridge_fault.h`: a TC358743 that fails a register access, stays silent, or answers with its reset values is a fault of the bridge or its supply. The task does not restart the Mini for it: network, USB and the screen stay up. It tears capture down, resets the bridge and sets it up as at boot. A setup that fails is tried again after 1 s, 2 s, 5 s, 10 s, then every 30 s, without end. The waits start over when the bridge has worked for two minutes. The same applies to a bridge that does not answer at boot.

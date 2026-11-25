@@ -2770,8 +2770,13 @@ esp_err_t jetkvm_usb_hid_wheel_report(int8_t wheel_y, int8_t wheel_x)
         return jetkvm_usb_hid_absolute_wheel_report(wheel_y, wheel_x);
     }
     if (active_function_enabled(HID_FUNCTION_RELATIVE_MOUSE)) {
+        /* Keep held buttons down: a wheel report with buttons 0 releases
+         * them on the host. */
+        portENTER_CRITICAL(&s_state_lock);
+        const uint8_t buttons = s_ctx.relative_buttons;
+        portEXIT_CRITICAL(&s_state_lock);
         return jetkvm_usb_hid_relative_mouse_report(
-            0, 0, 0, wheel_y, wheel_x);
+            0, 0, buttons, wheel_y, wheel_x);
     }
     return ESP_OK;
 }
