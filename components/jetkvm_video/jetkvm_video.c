@@ -3322,6 +3322,18 @@ static bool guest_display_serve(app_ctx_t *ctx)
     return true;
 }
 
+/* After a setup of the bridge from a reset, which wrote the preset: puts
+ * the guest EDID back while the guest display holds the receiver, so the
+ * bridge holds what s_guest_display_owner says. A restore in progress
+ * writes the preset itself on a later pass. */
+static esp_err_t guest_display_after_bridge_setup(app_ctx_t *ctx)
+{
+    if (s_guest_display_owner.bridge != GUEST_DISPLAY_BRIDGE_GUEST) {
+        return ESP_OK;
+    }
+    return tc_program_edid_bytes(&ctx->bridge, s_guest_display_owner.edid);
+}
+
 /* True when the physical capture loop must not run this pass: the guest
  * display holds the receiver or service video holds capture buffers. */
 static bool guest_display_service(app_ctx_t *ctx)
@@ -5069,7 +5081,12 @@ static void hdmi_capture_task(void *arg)
     }
 
     while (1) {
-        if (ctx.bridge_fault.faulted) {
+        /* An OTA install holds the capture suspended: a bridge fault waits
+         * for its end, because the setup tears capture down and pulses HPD,
+         * and the check does not look for one. */
+        const bool bridge_recovery_held = __atomic_load_n(
+            &s_capture_suspended, __ATOMIC_ACQUIRE);
+        if (ctx.bridge_fault.faulted && !bridge_recovery_held) {
             if (ctx.cam) {
                 ESP_ERROR_CHECK(csi_destroy(&ctx));
             }
@@ -5079,7 +5096,10 @@ static void hdmi_capture_task(void *arg)
                 vTaskDelay(pdMS_TO_TICKS(50));
                 continue;
             }
-            const esp_err_t reset_ret = hdmi_bridge_reset(&ctx);
+            esp_err_t reset_ret = hdmi_bridge_reset(&ctx);
+            if (reset_ret == ESP_OK) {
+                reset_ret = guest_display_after_bridge_setup(&ctx);
+            }
             const int64_t reset_done_us = esp_timer_get_time();
             hdmi_bridge_fault_setup_done(&ctx.bridge_fault, reset_done_us,
                                          reset_ret == ESP_OK);
@@ -5107,9 +5127,11 @@ static void hdmi_capture_task(void *arg)
             ctx.bridge_silent_checks = 0;
             continue;
         }
-        hdmi_bridge_setup_check(&ctx, &next_bridge_setup_check_us);
-        if (ctx.bridge_fault.faulted) {
-            continue;
+        if (!bridge_recovery_held) {
+            hdmi_bridge_setup_check(&ctx, &next_bridge_setup_check_us);
+            if (ctx.bridge_fault.faulted) {
+                continue;
+            }
         }
         /* Poll before policy branches that skip capture during idle or sleep. */
         video_update_hdmi_connection(&ctx.bridge,
