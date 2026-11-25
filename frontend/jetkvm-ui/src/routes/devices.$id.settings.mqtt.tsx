@@ -9,6 +9,7 @@ import { NestedSettingsGroup } from "@components/NestedSettingsGroup";
 import { SelectMenuBasic } from "@components/SelectMenuBasic";
 import InputField from "@components/InputField";
 import { Checkbox } from "@components/Checkbox";
+import Fieldset from "@components/Fieldset";
 import { Button } from "@components/Button";
 import LoadingSpinner from "@components/LoadingSpinner";
 import notifications from "@/notifications";
@@ -291,7 +292,9 @@ export default function SettingsMqttRoute() {
         action={settings.enabled ? <ConnectionStatusBadge state={connectionState} /> : undefined}
       />
 
-      <div className="space-y-4">
+      {/* A save sends the settings as they were at the click, so no field
+          changes until the device has answered. */}
+      <Fieldset disabled={savePhase !== "idle"} className="space-y-4">
         <SettingsItem title={m.mqtt_enable_title()} description={m.mqtt_enable_description()}>
           <Checkbox
             checked={settings.enabled}
@@ -514,7 +517,7 @@ export default function SettingsMqttRoute() {
             </div>
           </>
         )}
-      </div>
+      </Fieldset>
     </div>
   );
 }
