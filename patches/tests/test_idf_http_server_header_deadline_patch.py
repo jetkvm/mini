@@ -127,11 +127,14 @@ struct httpd_data {
     int hdr_deadline_fd;
 };
 typedef struct { int dummy; } http_parser;
-enum { PARSING_URL, PARSING_COMPLETE };
+enum { PARSING_URL, PARSING_BODY, PARSING_COMPLETE };
 typedef struct { int status; size_t raw_datalen; httpd_err_code_t error; } parser_data_t;
 
-/* The request is complete once this many bytes are in. */
+/* The headers are complete once this many bytes are in. */
 static int request_len, received;
+/* The request has a body: as cb_headers_complete() and cb_on_body() do, the
+ * parse is complete only when the first byte of the body is in. */
+static bool has_body;
 static parser_data_t *current;
 static bool retry_408;                  /* an error handler that asks to retry */
 static int uri_calls;
@@ -142,7 +145,8 @@ static int parse_block(http_parser *parser, size_t offset, size_t length) {
     (void)parser;
     received += (int)length;
     (void)offset;
-    if (received >= request_len) current->status = PARSING_COMPLETE;
+    if (received >= request_len)
+        current->status = has_body && received == request_len ? PARSING_BODY : PARSING_COMPLETE;
     return 0;
 }
 static esp_err_t httpd_req_handle_err(httpd_req_t *r, httpd_err_code_t error) {
@@ -275,6 +279,15 @@ int main(void) {
         double next[] = {LIMIT_MS / 1000.0 * 0.6, LIMIT_MS / 1000.0 * 0.9};
         request(2, next, 2, 600);
         assert(uri_calls == 1);
+        /* An upload whose headers are complete in time: the first byte of
+         * its body comes after the limit, but before recv_wait_timeout. */
+        uri_calls = 0; has_body = true;
+        double upload[] = {0, LIMIT_MS / 1000.0 * 0.8, LIMIT_MS / 1000.0 * 0.8 + RECV_WAIT_S - 0.5};
+        assert(upload[2] > LIMIT_MS / 1000.0);
+        request(2, upload, 3, 600);
+        assert(uri_calls == 1);
+        assert(rcvtimeo_ms == RECV_WAIT_S * 1000);
+        has_body = false;
     }
     printf("wrong %d\n", wrong);
     return wrong;

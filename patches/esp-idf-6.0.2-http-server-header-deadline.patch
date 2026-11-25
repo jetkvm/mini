@@ -120,7 +120,7 @@
              /* If not HTTPD_SOCK_ERR_TIMEOUT, returned error must
               * be HTTPD_SOCK_ERR_FAIL which means we need to return
               * failure and thereby close the underlying socket */
-@@ -681,6 +718,7 @@
+@@ -681,14 +718,21 @@
  
          /* Parse data block from buffer */
          if ((offset = parse_block(&parser, offset, blk_len)) < 0) {
@@ -128,7 +128,13 @@
              /* HTTP error occurred.
               * Send error code as response status and
               * invoke error handler */
-@@ -689,6 +727,7 @@
+             return httpd_req_handle_err(r, parser_data.error);
+         }
++        if (parser_data.status == PARSING_BODY) {
++            /* The headers are complete, the first byte of the body is not
++             * in yet: the wait for it is a body read */
++            hdr_deadline_stop(hd);
++        }
      } while (parser_data.status != PARSING_COMPLETE);
  
      ESP_LOGD(TAG, LOG_FMT("parsing complete"));
