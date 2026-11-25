@@ -1592,6 +1592,8 @@ function DownloadFileView({ onBack }: { onBack: () => void }) {
   const [starting, setStarting] = useState(false);
   const [speed, setSpeed] = useState<number | null>(null);
   const lastSample = useRef<{ received: number; time: number } | null>(null);
+  // A storageDownloadState event has arrived since the start request went out.
+  const eventSinceStart = useRef(false);
 
   const applyState = useCallback((next: StorageDownloadState) => {
     const now = Date.now();
@@ -1612,6 +1614,7 @@ function DownloadFileView({ onBack }: { onBack: () => void }) {
   const onEvent = useCallback(
     (payload: JsonRpcRequest) => {
       if (payload.method === "storageDownloadState") {
+        eventSinceStart.current = true;
         applyState(payload.params as StorageDownloadState);
       }
     },
@@ -1634,6 +1637,7 @@ function DownloadFileView({ onBack }: { onBack: () => void }) {
   function handleStart() {
     setStartError(null);
     setStarting(true);
+    eventSinceStart.current = false;
     send(
       "startStorageDownload",
       { url: url.trim(), filename: fileName },
@@ -1643,13 +1647,19 @@ function DownloadFileView({ onBack }: { onBack: () => void }) {
           setStartError(resp.error.data || resp.error.message);
           return;
         }
-        applyState(resp.result as StorageDownloadState);
+        // The device reads the state for this response before it sends the
+        // response. A download that ends in between sends its last event
+        // first, and no event follows to correct the older state.
+        if (!eventSinceStart.current) applyState(resp.result as StorageDownloadState);
       },
     );
   }
 
   const status = download?.status ?? "idle";
-  const error = startError ?? (status === "failed" ? download?.error : null);
+  // A cancelled download carries an error only when its partial file stays
+  // on the card.
+  const error =
+    startError ?? (status === "failed" || status === "cancelled" ? download?.error : null);
   const percent =
     download && download.size > 0 ? Math.min((download.received / download.size) * 100, 100) : null;
 
