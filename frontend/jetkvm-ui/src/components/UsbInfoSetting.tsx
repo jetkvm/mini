@@ -296,7 +296,7 @@ function USBConfigDialog({
           required
           label={m.usb_config_configuration_label()}
           placeholder={m.usb_config_configuration_placeholder()}
-          defaultValue={usbConfigState?.configuration}
+          value={usbConfigState.configuration}
           onChange={e => handleUsbConfiguration(e.target.value)}
         />
       </div>
