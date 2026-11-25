@@ -19,8 +19,6 @@ cc -std=c11 -Wall -Wextra -Werror -pedantic \
     "$component_dir/tests/test_cdrom_toc.c" \
     -o "$build_dir/test_cdrom_toc"
 
-python3 "$component_dir/tests/test_relative_wheel_buttons.py"
-
 "$build_dir/test_cdrom_toc"
 
 python3 "$component_dir/tests/test_relative_wheel_buttons.py"
