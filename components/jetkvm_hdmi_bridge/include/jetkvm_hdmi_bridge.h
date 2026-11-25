@@ -152,6 +152,12 @@ esp_err_t tc_program_edid_bytes(jetkvm_hdmi_bridge_t *ctx,
  * the receiver's PHY on it, MASK_S_SYNC the video sync. On an I2C error,
  * sys_status is left unchanged. Capture-owner task only. */
 esp_err_t tc_get_sys_status(jetkvm_hdmi_bridge_t *ctx, uint8_t *sys_status);
+/* Whether the bridge has been through a reset since tc_initial_setup(): it
+ * then answers with its reset values, with HPD low and no EDID, and needs
+ * the setup again. Read from FIFOCTL, which only the setup writes and which
+ * sleep keeps. On an I2C error, lost is left unchanged. Capture-owner task
+ * only. */
+esp_err_t tc_setup_lost(jetkvm_hdmi_bridge_t *ctx, bool *lost);
 esp_err_t tc_get_detected_timings(jetkvm_hdmi_bridge_t *ctx,
                                   tc358743_timings_t *timings);
 
