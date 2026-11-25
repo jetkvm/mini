@@ -1594,10 +1594,13 @@ function DownloadFileView({ onBack }: { onBack: () => void }) {
   const lastSample = useRef<{ received: number; time: number } | null>(null);
   // A storageDownloadState event has arrived since the start request went out.
   const eventSinceStart = useRef(false);
+  // The view shows a download in progress.
+  const activeDownload = useRef(false);
 
   const applyState = useCallback((next: StorageDownloadState) => {
     const now = Date.now();
     const last = lastSample.current;
+    activeDownload.current = next.status === "downloading";
     if (next.status !== "downloading") {
       lastSample.current = null;
       setSpeed(null);
@@ -1621,20 +1624,37 @@ function DownloadFileView({ onBack }: { onBack: () => void }) {
     [applyState],
   );
   const { send } = useJsonRpc(onEvent);
+  const { rpcDataChannel } = useRTCStore();
 
+  // The query runs again on a new channel. An end that came while the old
+  // channel was closed replaces the progress; on open, an earlier end is
+  // not shown.
   useEffect(() => {
     send("getStorageDownloadState", {}, (resp: JsonRpcResponse) => {
       if ("error" in resp) return;
       const state = resp.result as StorageDownloadState;
-      if (state.status === "downloading") applyState(state);
+      if (state.status === "downloading" || activeDownload.current) applyState(state);
     });
   }, [send, applyState]);
+
+  // A start request on a channel that closes gets no response.
+  useEffect(() => {
+    if (!rpcDataChannel) return;
+    const stop = () => setStarting(false);
+    rpcDataChannel.addEventListener("close", stop);
+    return () => {
+      rpcDataChannel.removeEventListener("close", stop);
+      stop();
+    };
+  }, [rpcDataChannel]);
 
   const parsedUrl = useMemo(() => parseHttpUrl(url), [url]);
   const fileName = editedFileName ?? fileNameFromUrl(parsedUrl);
   const fileNameValid = /^[^/\\]+\.(iso|img)$/i.test(fileName);
 
   function handleStart() {
+    // send() drops a request on a channel that is not open.
+    if (rpcDataChannel?.readyState !== "open") return;
     setStartError(null);
     setStarting(true);
     eventSinceStart.current = false;
