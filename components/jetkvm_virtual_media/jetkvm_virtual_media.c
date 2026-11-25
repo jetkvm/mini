@@ -4035,13 +4035,13 @@ esp_err_t jetkvm_virtual_media_discard_upload_owned(
     /* A mounted image does not stop the delete, as it stops
      * jetkvm_virtual_media_delete_file: the path is the one this session
      * holds open, and a mount refuses .incomplete names. The image could
-     * still be the same file under a FatFs alias of that name; then the
-     * partial file stays. */
-    const bool image_is_upload =
-        s_ctx.image_open &&
-        s_ctx.source == JETKVM_VIRTUAL_MEDIA_SOURCE_STORAGE &&
-        s_ctx.image.obj.fs == s_ctx.upload.obj.fs &&
-        s_ctx.image.obj.sclust == s_ctx.upload.obj.sclust;
+     * still be the same file under a FatFs alias of that name (its 8.3
+     * short name on a FAT volume); then the partial file stays. The abort
+     * below takes the lock itself, so what could change while the lock is
+     * free is read again after it. */
+    FATFS *const upload_fs = s_ctx.upload.obj.fs;
+    const DWORD upload_sclust = s_ctx.upload.obj.sclust;
+    const uint32_t card_generation = s_ctx.card_generation;
     char incomplete_path[sizeof(s_ctx.upload_incomplete_path)];
     char identity_path[sizeof(s_ctx.upload_identity_path)];
     char temporary_path[sizeof(s_ctx.upload_identity_path) +
@@ -4058,18 +4058,29 @@ esp_err_t jetkvm_virtual_media_discard_upload_owned(
     if (error != ESP_OK) {
         return error;
     }
-    if (image_is_upload) {
-        return ESP_ERR_INVALID_STATE;
-    }
     ESP_RETURN_ON_ERROR(lock_context(), TAG, "failed to lock");
-    if (!s_ctx.filesystem_mounted) {
+    /* The saved paths are files of the card that held the session. */
+    if (!s_ctx.filesystem_mounted ||
+        s_ctx.card_generation != card_generation) {
         unlock_context();
         return ESP_ERR_INVALID_STATE;
     }
-    /* Another session can have started on the same name since the abort. */
-    error = s_ctx.upload_open &&
-                    strcmp(s_ctx.upload_incomplete_path, incomplete_path) == 0 ?
-                ESP_ERR_INVALID_STATE : service_upload_metadata_locked();
+    /* The abort ended the lease, so a mount can have opened the partial file
+     * since. FF_FS_LOCK is zero: f_unlink would free the clusters of an open
+     * file. */
+    if (s_ctx.image_open &&
+        s_ctx.source == JETKVM_VIRTUAL_MEDIA_SOURCE_STORAGE &&
+        s_ctx.image.obj.fs == upload_fs &&
+        s_ctx.image.obj.sclust == upload_sclust) {
+        unlock_context();
+        return ESP_ERR_INVALID_STATE;
+    }
+    /* Another session can have started since the abort, also on the same
+     * file under another spelling: FatFs matches names without case. No
+     * comparison of the paths excludes that, so any open session keeps the
+     * partial file. */
+    error = s_ctx.upload_open ? ESP_ERR_INVALID_STATE :
+                                service_upload_metadata_locked();
     if (error == ESP_OK) {
         error = unlink_upload_artifact_locked(incomplete_path, NULL);
     }
