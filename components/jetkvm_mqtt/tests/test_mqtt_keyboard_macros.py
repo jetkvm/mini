@@ -35,6 +35,10 @@ MODEL_BODY = r'''
 #define xSemaphoreTake(lock, ticks) ((void)(lock), (void)(ticks))
 #define xSemaphoreGive(lock) ((void)(lock))
 typedef void *SemaphoreHandle_t;
+typedef uint32_t TickType_t;
+#define pdMS_TO_TICKS(ms) ((TickType_t)(ms))
+static TickType_t ticks;
+static TickType_t xTaskGetTickCount(void) { return ticks; }
 #define ESP_LOGI(tag, ...) ((void)(tag))
 #define ESP_LOGW(tag, ...) (printf("log\t" __VA_ARGS__), printf("\n"))
 #define ESP_LOGE(tag, ...) (printf("log\t" __VA_ARGS__), printf("\n"))
@@ -63,6 +67,8 @@ static struct {
                       [JETKVM_CONTROL_KEYBOARD_MACRO_ID_CAPACITY];
     size_t macro_button_count;
     uint32_t macro_revision;
+    bool macro_retry;
+    TickType_t macro_retry_at;
 } s_mqtt;
 static bool runtime_ready(void) { return true; }
 static SemaphoreHandle_t macro_discovery_lock(void) { return NULL; }
@@ -172,7 +178,7 @@ static void delete_macro(const char *id)
 
 /* One command per line, fields separated by tabs:
  *   macro <id> <name> <key id> | delete <id> | switch on|off
- *   | running on|off | broker up|down | discovery | stale
+ *   | running on|off | broker up|down | discovery | stale | wait <ms>
  *   | command <payload> [retained] | rejected | retained */
 int main(void)
 {
@@ -203,6 +209,8 @@ int main(void)
             broker_reachable = strcmp(fields[1], "up") == 0;
         } else if (strcmp(fields[0], "discovery") == 0) {
             publish_macro_discovery(&s_mqtt.config, "dev");
+        } else if (strcmp(fields[0], "wait") == 0) {
+            ticks += (TickType_t)atoi(fields[1]);
         } else if (strcmp(fields[0], "stale") == 0) {
             printf("stale\t%d\n", macro_discovery_stale() ? 1 : 0);
         } else if (strcmp(fields[0], "command") == 0) {
@@ -247,8 +255,9 @@ class MqttKeyboardMacroTests(unittest.TestCase):
         source = (REPO / "components/jetkvm_mqtt/jetkvm_mqtt.c").read_text()
         defines = re.findall(
             r"^#define (?:MQTT_TOPIC_CAPACITY|MACRO_OBJECT_ID_CAPACITY|"
-            r"MQTT_MACRO_BUTTON_CAPACITY) [^\n]*", source, re.MULTILINE)
-        assert len(defines) == 3, defines
+            r"MQTT_MACRO_BUTTON_CAPACITY|MQTT_MACRO_RETRY_INTERVAL_MS) [^\n]*",
+            source, re.MULTILINE)
+        assert len(defines) == 4, defines
         parts = [MODEL, *defines, MODEL_BODY, *(function(source, name) for name in (
             "copy_text", "copy_trimmed_payload", "topic_from_snapshot",
             "ha_device_info", "add_optional_string", "new_discovery_payload",
@@ -379,11 +388,27 @@ class MqttKeyboardMacroTests(unittest.TestCase):
             ("switch", "on"), ("discovery",),
             ("broker", "down"), ("delete", "macro-1"), ("stale",),
             ("discovery",), ("broker", "up"), ("stale",),
-            ("discovery",), ("retained",), ("stale",))
+            ("wait", 5000), ("stale",),
+            ("discovery",), ("retained",), ("stale",),
+            ("wait", 5000), ("stale",))
+        # The removal that did not reach the broker makes the discovery
+        # stale again when the retry is due, and only until it succeeds.
         self.assertEqual(
             [line for line in output if line[0] == "stale"],
-            [["stale", "1"], ["stale", "0"], ["stale", "0"]])
+            [["stale", "1"], ["stale", "0"], ["stale", "1"], ["stale", "0"],
+             ["stale", "0"]])
         self.assertEqual(set(self.buttons(output)), {"macro_with_space_slash"})
+
+    def test_button_that_did_not_reach_the_broker_is_published_again(self):
+        output = self.run_script(
+            ("switch", "on"), ("broker", "down"),
+            ("macro", "macro-1", "One", key_id("KeyA")), ("discovery",),
+            ("broker", "up"), ("wait", 5000), ("stale",),
+            ("discovery",), ("retained",), ("wait", 5000), ("stale",))
+        self.assertEqual(
+            [line for line in output if line[0] == "stale"],
+            [["stale", "1"], ["stale", "0"]])
+        self.assertEqual(set(self.buttons(output)), {"macro_macro-1"})
 
 
 if __name__ == "__main__":

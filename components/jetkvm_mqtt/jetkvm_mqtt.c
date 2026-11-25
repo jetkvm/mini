@@ -66,6 +66,8 @@
 /* The buttons of the stored macros, and as many of deleted macros whose
  * removal did not reach the broker yet. */
 #define MQTT_MACRO_BUTTON_CAPACITY (2U * JETKVM_CONTROL_KEYBOARD_MACRO_MAX_COUNT)
+/* A macro discovery pass with a failed publish runs again after this time. */
+#define MQTT_MACRO_RETRY_INTERVAL_MS 5000U
 
 static const char *TAG = "jetkvm_mqtt";
 
@@ -95,6 +97,10 @@ typedef struct {
     size_t macro_button_count;
     /* The HID profiles revision at the last macro discovery pass. */
     uint32_t macro_revision;
+    /* The last pass did not publish or clear each button; the next pass is
+     * due at macro_retry_at. */
+    bool macro_retry;
+    TickType_t macro_retry_at;
 } mqtt_runtime_t;
 
 static mqtt_runtime_t s_mqtt;
@@ -997,7 +1003,8 @@ static SemaphoreHandle_t macro_discovery_lock(void)
 /* Go publishMacroDiscovery: one button per stored macro while keyboard
  * macros over MQTT are on, and no buttons while they are off. The buttons
  * of macros that no longer exist are cleared here too; an ID whose removal
- * fails stays for the next pass (Go pendingMacroRemovals). */
+ * fails stays for the next pass (Go pendingMacroRemovals). A pass with a
+ * failed publish or removal runs again after MQTT_MACRO_RETRY_INTERVAL_MS. */
 static void publish_macro_discovery(const jetkvm_mqtt_config_t *config,
                                     const char *device_id)
 {
@@ -1015,13 +1022,16 @@ static void publish_macro_discovery(const jetkvm_mqtt_config_t *config,
     const bool enabled = config->enable_keyboard_macros;
     SemaphoreHandle_t lock = macro_discovery_lock();
     xSemaphoreTake(lock, portMAX_DELAY);
+    bool complete = true;
     size_t kept = 0U;
     for (size_t i = 0U; i < s_mqtt.macro_button_count; ++i) {
         const bool remove =
             !enabled || !macro_list_has(macros, s_mqtt.macro_buttons[i]);
-        if (remove && remove_macro_button(s_mqtt.macro_buttons[i],
-                                          device_id)) {
-            continue;
+        if (remove) {
+            if (remove_macro_button(s_mqtt.macro_buttons[i], device_id)) {
+                continue;
+            }
+            complete = false;
         }
         if (kept != i) {
             memcpy(s_mqtt.macro_buttons[kept], s_mqtt.macro_buttons[i],
@@ -1035,6 +1045,7 @@ static void publish_macro_discovery(const jetkvm_mqtt_config_t *config,
         if (!enabled) {
             if (!remove_macro_button(macro->id, device_id)) {
                 keep_macro_button(macro->id);
+                complete = false;
             }
             continue;
         }
@@ -1049,22 +1060,29 @@ static void publish_macro_discovery(const jetkvm_mqtt_config_t *config,
         if (button != NULL &&
             cJSON_AddStringToObject(button, "payload_press", macro->id) &&
             cJSON_AddStringToObject(button, "icon", "mdi:keyboard-outline")) {
-            (void)publish_discovery_root("button", object_id, button,
-                                         device_id);
+            if (!publish_discovery_root("button", object_id, button,
+                                        device_id)) {
+                complete = false;
+            }
         } else {
             cJSON_Delete(button);
+            complete = false;
         }
         /* Kept also when the publish fails: the broker can hold an older
          * config of this button. */
         keep_macro_button(macro->id);
     }
     s_mqtt.macro_revision = profiles.revision;
+    s_mqtt.macro_retry = !complete;
+    s_mqtt.macro_retry_at =
+        xTaskGetTickCount() + pdMS_TO_TICKS(MQTT_MACRO_RETRY_INTERVAL_MS);
     xSemaphoreGive(lock);
     jetkvm_memory_policy_control_free(macros);
 }
 
 /* The HID profiles revision changes with each saved macro list; Go
- * setKeyboardMacros republishes the discovery then. */
+ * setKeyboardMacros republishes the discovery then. A pass that did not
+ * complete is stale again when its retry is due. */
 static bool macro_discovery_stale(void)
 {
     jetkvm_hid_profiles_status_t profiles = {0};
@@ -1073,7 +1091,9 @@ static bool macro_discovery_stale(void)
     }
     SemaphoreHandle_t lock = macro_discovery_lock();
     xSemaphoreTake(lock, portMAX_DELAY);
-    bool stale = profiles.revision != s_mqtt.macro_revision;
+    bool stale = profiles.revision != s_mqtt.macro_revision ||
+                 (s_mqtt.macro_retry &&
+                  (int32_t)(xTaskGetTickCount() - s_mqtt.macro_retry_at) >= 0);
     xSemaphoreGive(lock);
     return stale;
 }
