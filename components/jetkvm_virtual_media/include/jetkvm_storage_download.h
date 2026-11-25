@@ -78,7 +78,9 @@ void jetkvm_storage_download_set_hooks(
  * `error`, when a download already runs (ESP_ERR_INVALID_STATE), an upload
  * holds the storage (ESP_ERR_INVALID_STATE), there is no mounted TF card
  * (ESP_ERR_NOT_FOUND) or the URL or filename is invalid
- * (ESP_ERR_INVALID_ARG). Everything later is reported through the state.
+ * (ESP_ERR_INVALID_ARG). A filename is invalid also when the name of its
+ * .incomplete file would not be a valid filename. Everything later is
+ * reported through the state.
  */
 esp_err_t jetkvm_storage_download_start(const char *url, const char *filename,
                                         char *error, size_t error_capacity);

@@ -468,10 +468,12 @@ done:;
                         sizeof(DOWNLOAD_INCOMPLETE_SUFFIX)];
         snprintf(incomplete, sizeof(incomplete), "%s%s", request->filename,
                  DOWNLOAD_INCOMPLETE_SUFFIX);
-        esp_err_t deleted =
-            jetkvm_virtual_media_file_size(incomplete, &existing) == ESP_OK ?
-                jetkvm_virtual_media_delete_file(incomplete) :
-                ESP_ERR_NOT_FOUND;
+        esp_err_t deleted = jetkvm_virtual_media_file_size(incomplete, &existing);
+        if (deleted == ESP_OK) {
+            deleted = jetkvm_virtual_media_delete_file(incomplete);
+        }
+        /* A failed lookup, as without a mounted card, has not shown that
+         * no partial file stays. */
         if (deleted != ESP_OK && deleted != ESP_ERR_NOT_FOUND) {
             snprintf(kept, sizeof(kept),
                      "Could not delete the partial %.64s on the TF card (%s).",
@@ -544,6 +546,14 @@ static bool plain_filename(const char *filename)
            strpbrk(filename, "/\\") == NULL;
 }
 
+/* The partial file's name is a file name too: the download looks it up,
+ * resumes it and deletes it by that name. */
+static bool partial_filename_fits(const char *filename)
+{
+    return strlen(filename) + strlen(DOWNLOAD_INCOMPLETE_SUFFIX) <
+           JETKVM_VIRTUAL_MEDIA_FILENAME_CAPACITY;
+}
+
 esp_err_t jetkvm_storage_download_start(const char *url, const char *filename,
                                         char *error, size_t error_capacity)
 {
@@ -556,6 +566,10 @@ esp_err_t jetkvm_storage_download_start(const char *url, const char *filename,
     if (!plain_filename(filename)) {
         return refuse(error, error_capacity, ESP_ERR_INVALID_ARG,
                       "Enter a file name without a folder.");
+    }
+    if (!partial_filename_fits(filename)) {
+        return refuse(error, error_capacity, ESP_ERR_INVALID_ARG,
+                      "Enter a shorter file name.");
     }
     jetkvm_virtual_media_state_t *media =
         jetkvm_memory_policy_control_alloc(sizeof(*media));

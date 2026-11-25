@@ -51,6 +51,8 @@ static struct {
     bool partial;
     unsigned deletes;
     esp_err_t delete_result;
+    /* The lookup of os.iso.incomplete fails with this, when not ESP_OK. */
+    esp_err_t lookup_result;
 } card;
 
 static TaskFunction_t s_task;
@@ -63,6 +65,7 @@ static void reset(void)
     memset(&card, 0, sizeof(card));
     card.discard_result = ESP_OK;
     card.delete_result = ESP_OK;
+    card.lookup_result = ESP_OK;
 }
 
 /* Start a download and run its task to the end. */
@@ -151,6 +154,46 @@ static void test_cancel_while_connecting_deletes_older_partial(void)
     assert(state.phase == JETKVM_STORAGE_DOWNLOAD_CANCELLED);
     assert(strstr(state.error, "Could not delete the partial os.iso") == state.error);
     assert(card.partial && card.deletes == 1U);
+
+    /* Without a mounted card the lookup fails: the partial file can stay,
+     * and the state names it. */
+    reset();
+    server.cancel_at_open = true;
+    card.partial = true;
+    card.lookup_result = ESP_ERR_INVALID_STATE;
+    state = run_download();
+    assert(state.phase == JETKVM_STORAGE_DOWNLOAD_CANCELLED);
+    assert(strstr(state.error, "Could not delete the partial os.iso") == state.error);
+    assert(card.partial && card.deletes == 0U);
+}
+
+static void test_name_of_partial_file_must_fit(void)
+{
+    /* filename + ".incomplete" must be a valid name of at most 255 bytes,
+     * or a cancel could not find or delete the partial file. */
+    char name[JETKVM_VIRTUAL_MEDIA_FILENAME_CAPACITY];
+    char error[128] = "";
+    reset();
+    memset(name, 'a', 245U);
+    memcpy(name + 241U, ".iso", 5U);
+    assert(strlen(name) == 245U);
+    assert(jetkvm_storage_download_start("https://example.test/a.iso", name, error,
+                                         sizeof(error)) == ESP_ERR_INVALID_ARG);
+    assert(strcmp(error, "Enter a shorter file name.") == 0);
+    assert(s_task == NULL);
+
+    memcpy(name + 240U, ".iso", 5U);
+    assert(strlen(name) == 244U);
+    assert(jetkvm_storage_download_start("https://example.test/a.iso", name, error,
+                                         sizeof(error)) == ESP_OK);
+    TaskFunction_t task = s_task;
+    s_task = NULL;
+    server.cancel_at_open = true;
+    task(s_task_argument);
+    jetkvm_storage_download_state_t state;
+    jetkvm_storage_download_get_state(&state);
+    assert(state.phase == JETKVM_STORAGE_DOWNLOAD_CANCELLED);
+    assert(state.error[0] == '\0');
 }
 
 static void test_failure_keeps_partial_file(void)
@@ -183,6 +226,7 @@ int main(void)
     test_cancel_after_last_byte();
     test_cancel_while_connecting();
     test_cancel_while_connecting_deletes_older_partial();
+    test_name_of_partial_file_must_fit();
     test_failure_keeps_partial_file();
     test_cancel_that_cannot_delete();
     puts("storage download task: PASS");
@@ -368,6 +412,9 @@ bool jetkvm_virtual_media_card_in_slot(void)
 esp_err_t jetkvm_virtual_media_file_size(const char *filename, uint64_t *size)
 {
     if (card.partial && strcmp(filename, "os.iso.incomplete") == 0) {
+        if (card.lookup_result != ESP_OK) {
+            return card.lookup_result;
+        }
         *size = 64U * 1024U;
         return ESP_OK;
     }
