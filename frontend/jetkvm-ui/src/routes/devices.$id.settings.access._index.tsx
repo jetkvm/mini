@@ -75,11 +75,12 @@ export default function SettingsAccessIndexRoute() {
   const [tlsKey, setTlsKey] = useState<string>("");
   const extraHostnames = useCapability("extra_hostnames");
   const [hostnames, setHostnames] = useState<string>("");
-  const [sessionTimeout, setSessionTimeout] = useState<string>("0");
+  // Unknown until the device answers; a failed read must not show "Off".
+  const [sessionTimeout, setSessionTimeout] = useState<string | null>(null);
 
   useEffect(() => {
     send("getLocalAuthSessionTimeout", {}, (resp: JsonRpcResponse) => {
-      if ("error" in resp) return;
+      if ("error" in resp) return console.error(resp.error);
       setSessionTimeout(String(resp.result as number));
     });
   }, [send]);
@@ -375,9 +376,14 @@ export default function SettingsAccessIndexRoute() {
               >
                 <SelectMenuBasic
                   size="SM"
-                  value={sessionTimeout}
+                  value={sessionTimeout ?? ""}
+                  disabled={sessionTimeout === null}
                   onChange={e => handleSessionTimeoutChange(e.target.value)}
-                  options={sessionTimeoutOptions(sessionTimeout)}
+                  options={
+                    sessionTimeout === null
+                      ? [{ value: "", label: "" }]
+                      : sessionTimeoutOptions(sessionTimeout)
+                  }
                 />
               </SettingsItem>
             )}
