@@ -73,6 +73,7 @@ export default function WebRTCVideo({
   const videoElm = useRef<HTMLVideoElement>(null);
   const audioElm = useRef<HTMLAudioElement>(null);
   const fullscreenContainerRef = useRef<HTMLDivElement>(null);
+  const overlaysRef = useRef<HTMLDivElement>(null);
   const { mediaStream, mediaStreamTrackVersion, peerConnectionState } = useRTCStore();
   const [isPlaying, setIsPlaying] = useState(false);
   const [audioAutoplayBlocked, setAudioAutoplayBlocked] = useState(false);
@@ -739,9 +740,30 @@ export default function WebRTCVideo({
       });
 
       if (isRelativeMouseMode) {
-        videoElmRefValue.addEventListener(
+        containerRef.current?.addEventListener(
           "click",
-          () => {
+          (e: MouseEvent) => {
+            const target = e.target as Element;
+            if (target !== videoElmRefValue) {
+              const overlays = overlaysRef.current;
+              if (!hdmiError || !overlays?.contains(target)) return;
+
+              // A control activated from the keyboard sends a click at 0,0,
+              // which the box test below does not match.
+              if (target.closest("a, button")) return;
+
+              const isOnControl = Array.from(overlays.querySelectorAll("a, button")).some(el => {
+                const r = el.getBoundingClientRect();
+                return (
+                  e.clientX >= r.left &&
+                  e.clientX <= r.right &&
+                  e.clientY >= r.top &&
+                  e.clientY <= r.bottom
+                );
+              });
+              if (isOnControl) return;
+            }
+
             if (isPointerLockPossible && !isPointerLockActive && !document.pointerLockElement) {
               requestPointerLock();
             }
@@ -771,6 +793,7 @@ export default function WebRTCVideo({
       };
     },
     [
+      hdmiError,
       isPointerLockActive,
       isPointerLockPossible,
       requestPointerLock,
@@ -894,7 +917,7 @@ export default function WebRTCVideo({
                           style={{ animationDuration: "500ms" }}
                           className="pointer-events-none absolute inset-0 flex animate-slideUpFade items-center justify-center"
                         >
-                          <div className="relative h-full w-full rounded-md">
+                          <div ref={overlaysRef} className="relative h-full w-full rounded-md">
                             <LoadingConnectionOverlay
                               show={showSourceSwitchOverlay}
                               text={
