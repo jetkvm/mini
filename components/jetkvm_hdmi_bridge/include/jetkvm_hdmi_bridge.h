@@ -126,6 +126,11 @@ esp_err_t tc_set_csi(jetkvm_hdmi_bridge_t *ctx,
 esp_err_t tc_set_yuv422_output(jetkvm_hdmi_bridge_t *ctx);
 esp_err_t tc_set_colorbar_output(jetkvm_hdmi_bridge_t *ctx);
 esp_err_t tc_set_rgb888_output(jetkvm_hdmi_bridge_t *ctx);
+/* FIFOCTL for a YCbCr 4:2:2 line of that width, pixel clock and total CSI
+ * rate; tc_set_fifo_level() writes it for the detected timings. */
+uint32_t tc358743_fifo_level(uint32_t width, uint64_t pixel_clock_hz, uint64_t csi_bps);
+esp_err_t tc_set_fifo_level(jetkvm_hdmi_bridge_t *ctx, const tc358743_timings_t *timings,
+                            uint32_t lane_bps);
 esp_err_t tc_enable_stream(jetkvm_hdmi_bridge_t *ctx, bool enable);
 esp_err_t tc_set_hpd_output(jetkvm_hdmi_bridge_t *ctx, bool advertised);
 /* Shortest time HPD stays low before it is raised again. Some sources ignore

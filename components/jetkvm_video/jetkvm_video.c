@@ -4456,6 +4456,10 @@ static esp_err_t tc_start_streaming(app_ctx_t *ctx, const tc358743_timings_t *ti
     ESP_RETURN_ON_ERROR(tc_set_pll(&ctx->bridge, ctx->bridge.refclk_hz, candidate->lane_bps), TAG, "set_pll failed");
     ESP_LOGI(TAG, "st:csi");
     ESP_RETURN_ON_ERROR(tc_set_csi(&ctx->bridge, candidate->timing_preset), TAG, "set_csi failed");
+    if (!candidate->use_colorbar && !candidate->output_rgb888) {
+        ESP_RETURN_ON_ERROR(tc_set_fifo_level(&ctx->bridge, timings, candidate->lane_bps), TAG,
+                            "set_fifo_level failed");
+    }
     ESP_RETURN_ON_ERROR(tc_write_reg(&ctx->bridge, VOUT_SET3, 1, candidate->use_extcnt ? MASK_VOUT_EXTCNT : 0), TAG, "vout_set3 failed");
     if (candidate->use_colorbar) {
         ESP_RETURN_ON_ERROR(tc_set_colorbar_output(&ctx->bridge), TAG, "set_colorbar_output failed");
