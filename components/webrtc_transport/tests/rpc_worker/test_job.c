@@ -139,6 +139,7 @@ jetkvm_guest_file_context_t jetkvm_control_default_guest_file_context(void)
 bool jetkvm_access_lock_epoch(uint32_t epoch) { return epoch == 1; }
 void jetkvm_access_unlock(void) {}
 void jetkvm_access_note_activity(void) {}
+bool jetkvm_control_rpc_counts_as_activity(const char *method) { (void)method; return false; }
 void rpc_worker_notify_done(void) {}
 static const rpc_worker_origin_t origin = {
     .session_id = 7, .generation = 9, .stream_id = 11, .access_epoch = 1,

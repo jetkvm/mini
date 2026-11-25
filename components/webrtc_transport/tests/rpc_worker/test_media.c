@@ -500,9 +500,10 @@ static void test_expired_access_epoch(void)
     /* Nor does a cloud session's call keep the local login. */
     assert(activity_notes == notes);
     access_epoch = 5;
-    assert(defer(mount, &origin));
+    /* A local call counts when it joins the queue, and when it runs. */
+    assert(defer(mount, &origin) && activity_notes == notes + 1);
     run_worker("jk_media_rpc");
-    assert(rpc_worker_take_reply(&reply) && activity_notes == notes + 1);
+    assert(rpc_worker_take_reply(&reply) && activity_notes == notes + 2);
     assert(access_depth == 0);
     puts("a revoked access epoch stops a deferred request: OK");
 }
