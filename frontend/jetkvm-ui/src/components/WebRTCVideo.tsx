@@ -718,6 +718,10 @@ export default function WebRTCVideo({
               const overlays = overlaysRef.current;
               if (!hdmiError || !overlays?.contains(target)) return;
 
+              // A control activated from the keyboard sends a click at 0,0,
+              // which the box test below does not match.
+              if (target.closest("a, button")) return;
+
               const isOnControl = Array.from(overlays.querySelectorAll("a, button")).some(el => {
                 const r = el.getBoundingClientRect();
                 return (
