@@ -4,8 +4,6 @@ import { useJsonRpc } from "./useJsonRpc";
 import { useHidRpc } from "./useHidRpc";
 import { useMouseStore, useSettingsStore } from "./stores";
 
-const calcDelta = (pos: number) => (Math.abs(pos) < 10 ? pos * 2 : pos);
-
 export interface AbsMouseMoveHandlerProps {
   videoClientWidth: number;
   videoClientHeight: number;
@@ -31,15 +29,13 @@ export default function useMouse() {
   const sendRelMouseMovement = useCallback(
     (x: number, y: number, buttons: number) => {
       if (mouseMode !== "relative") return;
-      const dx = calcDelta(x);
-      const dy = calcDelta(y);
       // Keep L/R/M/X1/X2; drop pen-eraser and any future high bits.
       const b = buttons & 0x1f;
       if (rpcHidReady) {
-        reportRelMouseEvent(dx, dy, b);
+        reportRelMouseEvent(x, y, b);
       } else {
         // kept for backward compatibility
-        send("relMouseReport", { dx, dy, buttons: b });
+        send("relMouseReport", { dx: x, dy: y, buttons: b });
       }
       setMouseMove({ x, y, buttons: b });
     },
