@@ -207,8 +207,6 @@ bool rpc_abs_mouse_report(const jetkvm_control_context_t *context,
 bool rpc_rel_mouse_report(const jetkvm_control_context_t *context,
                           const cJSON *params,
                           rpc_dispatch_result_t *dispatch);
-bool rpc_wheel_report(const jetkvm_control_context_t *context,
-                      const cJSON *params, rpc_dispatch_result_t *dispatch);
 
 /* rpc_wol.c */
 bool rpc_get_timezones(const jetkvm_control_context_t *context,

@@ -23,7 +23,7 @@ export default function useMouse() {
 
   // RPC hooks
   const { send } = useJsonRpc();
-  const { reportAbsMouseEvent, reportRelMouseEvent, rpcHidReady } = useHidRpc();
+  const { reportAbsMouseEvent, reportRelMouseEvent, reportWheelEvent, rpcHidReady } = useHidRpc();
   // Mouse-related
 
   const sendRelMouseMovement = useCallback(
@@ -136,7 +136,7 @@ export default function useMouse() {
 
       if (wheelY === 0 && wheelX === 0) return;
 
-      send("wheelReport", { wheelY, wheelX });
+      reportWheelEvent(wheelY, wheelX);
 
       // Apply blocking delay based of throttling settings
       if (scrollThrottling && !blockWheelEvent) {
@@ -144,7 +144,7 @@ export default function useMouse() {
         setTimeout(() => setBlockWheelEvent(false), scrollThrottling);
       }
     },
-    [send, blockWheelEvent, scrollThrottling, invertScroll],
+    [reportWheelEvent, blockWheelEvent, scrollThrottling, invertScroll],
   );
 
   const resetMousePosition = useCallback(() => {

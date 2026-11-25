@@ -1,4 +1,4 @@
-// Keyboard and pointer over the page's `hidrpc` channel.
+// Keyboard, pointer and wheel over the page's `hidrpc` channel.
 import { until } from './mini.mjs';
 
 // Runs in the page. Mirrors src/hooks/useKeyboard.ts: keypress 0x05, keepalive
@@ -48,6 +48,8 @@ function installKeyboard() {
     // 0x03, x and y as big-endian u32, buttons.
     pointer: (x, y, buttons) => channel.send(new Uint8Array(
       [0x03, x >>> 24, (x >>> 16) & 0xff, (x >>> 8) & 0xff, x & 0xff, y >>> 24, (y >>> 16) & 0xff, (y >>> 8) & 0xff, y & 0xff, buttons])),
+    // 0x04, wheelY and wheelX as signed bytes.
+    wheel: (wheelY, wheelX) => channel.send(new Uint8Array([0x04, wheelY & 0xff, wheelX & 0xff])),
   };
   window.__integrationKeys.sequence = async steps => {
     for (const [key, press, ms] of steps) {
@@ -59,9 +61,9 @@ function installKeyboard() {
 }
 
 /**
- * { press, sequence, pause, down, releaseAll, pointer } for `mini` or a
- * mini.session(). sequence([[key, press, ms], ...]) is timed in the page.
- * pointer coordinates are 0..32767.
+ * { press, sequence, pause, down, releaseAll, pointer, wheel } for `mini` or
+ * a mini.session(). sequence([[key, press, ms], ...]) is timed in the page.
+ * pointer coordinates are 0..32767; wheel steps are -127..127.
  */
 export async function keyboard(mini) {
   await until(() => mini.page.evaluate(installKeyboard), Boolean, 30);
@@ -70,6 +72,7 @@ export async function keyboard(mini) {
     sequence: steps => mini.page.evaluate(list => window.__integrationKeys.sequence(list), steps),
     pause: ms => mini.page.evaluate(duration => window.__integrationKeys.pause(duration), ms),
     pointer: (x, y, buttons) => mini.page.evaluate(([px, py, b]) => window.__integrationKeys.pointer(px, py, b), [x, y, buttons]),
+    wheel: (wheelY, wheelX) => mini.page.evaluate(([y, x]) => window.__integrationKeys.wheel(y, x), [wheelY, wheelX]),
     down: () => mini.page.evaluate(() => window.__integrationKeys.down()),
     releaseAll: () => mini.page.evaluate(() => {
       for (const key of window.__integrationKeys.held()) window.__integrationKeys.press(key, false);

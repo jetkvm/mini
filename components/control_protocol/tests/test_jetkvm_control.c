@@ -844,6 +844,16 @@ static void test_hidrpc(void)
     assert(observed.rel_mouse.dy == INT8_MAX);
     assert(observed.rel_mouse.buttons == 0x03);
 
+    const uint8_t wheel[] = { 0x04, 0x80, 0x7f };
+    expect_hidrpc_event(wheel, sizeof(wheel), &observed);
+    assert(observed.type == JETKVM_HIDRPC_EVENT_WHEEL_REPORT);
+    assert(observed.wheel.wheel_y == INT8_MIN);
+    assert(observed.wheel.wheel_x == INT8_MAX);
+    const uint8_t wheel_down[] = { 0x04, 0xff, 0x01 };
+    expect_hidrpc_event(wheel_down, sizeof(wheel_down), &observed);
+    assert(observed.wheel.wheel_y == -1);
+    assert(observed.wheel.wheel_x == 1);
+
     const uint8_t macro[] = {
         0x07, 0x01, 0x00, 0x00, 0x00, 0x02,
         0x02, 0x04, 0x05, 0x00, 0x00, 0x00, 0x00, 0x01, 0x2c,
@@ -921,6 +931,11 @@ static void test_hidrpc(void)
     expect_malformed_hidrpc(rel_mouse, sizeof(rel_mouse) - 1U);
     const uint8_t rel_mouse_long[] = { 0x06, 0, 0, 0, 0 };
     expect_malformed_hidrpc(rel_mouse_long, sizeof(rel_mouse_long));
+    expect_malformed_hidrpc(wheel, sizeof(wheel) - 1U);
+    const uint8_t wheel_type_only[] = { 0x04 };
+    const uint8_t wheel_long[] = { 0x04, 0, 0, 0 };
+    expect_malformed_hidrpc(wheel_type_only, sizeof(wheel_type_only));
+    expect_malformed_hidrpc(wheel_long, sizeof(wheel_long));
     const uint8_t macro_short[] = { 0x07, 0, 0, 0, 0 };
     const uint8_t macro_bad_bool[] = { 0x07, 2, 0, 0, 0, 0 };
     const uint8_t macro_missing_step[] = { 0x07, 0, 0, 0, 0, 1 };
@@ -3321,13 +3336,6 @@ int main(void)
     assert(observed_hid.rel_mouse.dx == INT8_MIN);
     assert(observed_hid.rel_mouse.dy == INT8_MAX);
     assert(observed_hid.rel_mouse.buttons == 31U);
-    expect_rpc_context(
-        &context,
-        "{\"jsonrpc\":\"2.0\",\"method\":\"wheelReport\",\"params\":{\"wheelY\":-127,\"wheelX\":127},\"id\":76}",
-        "{\"jsonrpc\":\"2.0\",\"id\":76,\"result\":null}");
-    assert(observed_hid.type == JETKVM_HIDRPC_EVENT_WHEEL_REPORT);
-    assert(observed_hid.wheel.wheel_y == -127);
-    assert(observed_hid.wheel.wheel_x == 127);
 
     expect_rpc_context(
         &context,
@@ -3353,14 +3361,6 @@ int main(void)
         &context,
         "{\"jsonrpc\":\"2.0\",\"method\":\"relMouseReport\",\"params\":{\"dx\":128,\"dy\":0,\"buttons\":0},\"id\":85}",
         "{\"jsonrpc\":\"2.0\",\"id\":85,\"error\":{\"code\":-32602,\"message\":\"Invalid params\",\"data\":\"dx/dy must be int8 and buttons must be uint8\"}}");
-    expect_rpc_context(
-        &context,
-        "{\"jsonrpc\":\"2.0\",\"method\":\"wheelReport\",\"params\":{\"wheelY\":-129,\"wheelX\":0},\"id\":86}",
-        "{\"jsonrpc\":\"2.0\",\"id\":86,\"error\":{\"code\":-32602,\"message\":\"Invalid params\",\"data\":\"wheelY/wheelX must be int8\"}}");
-    expect_rpc_context(
-        &context,
-        "{\"jsonrpc\":\"2.0\",\"method\":\"wheelReport\",\"params\":{\"wheelY\":1.5,\"wheelX\":0},\"id\":87}",
-        "{\"jsonrpc\":\"2.0\",\"id\":87,\"error\":{\"code\":-32602,\"message\":\"Invalid params\",\"data\":\"wheelY/wheelX must be int8\"}}");
     expect_rpc_context(
         &context,
         "{\"jsonrpc\":\"2.0\",\"method\":\"setStreamQualityFactor\",\"params\":{\"factor\":0.1},\"id\":8}",

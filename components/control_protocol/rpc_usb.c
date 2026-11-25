@@ -796,25 +796,3 @@ bool rpc_rel_mouse_report(const jetkvm_control_context_t *context,
     return dispatch_rpc_hid_event(context, &event, dispatch);
 }
 
-bool rpc_wheel_report(const jetkvm_control_context_t *context,
-                             const cJSON *params,
-                             rpc_dispatch_result_t *dispatch)
-{
-    int64_t wheel_y = 0;
-    int64_t wheel_x = 0;
-    if (!json_integer_in_range(rpc_param(params, "wheelY"), INT8_MIN,
-                               INT8_MAX, &wheel_y) ||
-        !json_integer_in_range(rpc_param(params, "wheelX"), INT8_MIN,
-                               INT8_MAX, &wheel_x)) {
-        return set_invalid_hid_params(
-            dispatch, "wheelY/wheelX must be int8");
-    }
-    jetkvm_hidrpc_event_t event = {
-        .type = JETKVM_HIDRPC_EVENT_WHEEL_REPORT,
-        .data.wheel = {
-            .wheel_y = (int8_t)wheel_y,
-            .wheel_x = (int8_t)wheel_x,
-        },
-    };
-    return dispatch_rpc_hid_event(context, &event, dispatch);
-}

@@ -133,6 +133,14 @@ jetkvm_control_result_t jetkvm_control_handle_hidrpc_with_context(
         event.data.rel_mouse.dy = (int8_t)input[2];
         event.data.rel_mouse.buttons = input[3];
         break;
+    case JETKVM_HIDRPC_TYPE_WHEEL_REPORT:
+        if (input_size != 3U) {
+            return JETKVM_CONTROL_MALFORMED_INPUT;
+        }
+        event.type = JETKVM_HIDRPC_EVENT_WHEEL_REPORT;
+        event.data.wheel.wheel_y = (int8_t)input[1];
+        event.data.wheel.wheel_x = (int8_t)input[2];
+        break;
     case JETKVM_HIDRPC_TYPE_KEYBOARD_MACRO_REPORT: {
         if (input_size < 6U || input[1] > 1U) {
             return JETKVM_CONTROL_MALFORMED_INPUT;
