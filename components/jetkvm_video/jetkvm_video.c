@@ -61,6 +61,7 @@
 #include "jetkvm_video_quality.h"
 #include "video_encode_totals.h"
 #include "hdmi_hpd_retry.h"
+#include "hdmi_bridge_fault.h"
 #include "hdmi_health.h"
 #include "webrtc_transport.h"
 
@@ -166,6 +167,9 @@
 #define CSI_FRAME_SYNC_TIMEOUT_US   50000
 #define ACTIVE_TIMING_CHECK_MS      500
 #define HDMI_CONNECTION_CHECK_MS    500
+#define HDMI_BRIDGE_SETUP_CHECK_MS  1000
+/* Checks in a row without an answer before the bridge counts as faulted. */
+#define HDMI_BRIDGE_SILENT_CHECKS   3
 #define VIDEO_STATS_INTERVAL_US     (2 * 1000 * 1000)
 #define VIDEO_HEAP_INTERVAL_US      (30 * 1000 * 1000)
 #define VIDEO_TIMING_WINDOW_SAMPLES 96
@@ -355,6 +359,8 @@ typedef struct {
      * points receive &bridge and never see the capture state machine. */
     jetkvm_hdmi_bridge_t bridge;
     esp_ldo_channel_handle_t mipi_ldo;
+    hdmi_bridge_fault_t bridge_fault;
+    uint32_t bridge_silent_checks;
     esp_cam_ctlr_handle_t cam;
     void *frame_buffer;
     size_t frame_buffer_size;
@@ -3316,6 +3322,18 @@ static bool guest_display_serve(app_ctx_t *ctx)
     return true;
 }
 
+/* After a setup of the bridge from a reset, which wrote the preset: puts
+ * the guest EDID back while the guest display holds the receiver, so the
+ * bridge holds what s_guest_display_owner says. A restore in progress
+ * writes the preset itself on a later pass. */
+static esp_err_t guest_display_after_bridge_setup(app_ctx_t *ctx)
+{
+    if (s_guest_display_owner.bridge != GUEST_DISPLAY_BRIDGE_GUEST) {
+        return ESP_OK;
+    }
+    return tc_program_edid_bytes(&ctx->bridge, s_guest_display_owner.edid);
+}
+
 /* True when the physical capture loop must not run this pass: the guest
  * display holds the receiver or service video holds capture buffers. */
 static bool guest_display_service(app_ctx_t *ctx)
@@ -4874,6 +4892,60 @@ out:
     return ret;
 }
 
+/* A register access of the bridge failed, or the bridge lost its setup. The
+ * capture loop then tears capture down and sets the bridge up again. */
+static void hdmi_bridge_fault(app_ctx_t *ctx, const char *what, esp_err_t error)
+{
+    if (hdmi_bridge_fault_raise(&ctx->bridge_fault, esp_timer_get_time())) {
+        ESP_LOGE(TAG, "HDMI bridge fault %" PRIu32 ": %s: %s",
+                 ctx->bridge_fault.faults, what, esp_err_to_name(error));
+    }
+}
+
+/* Finds a bridge that needs its setup again while no register write of the
+ * pipeline would show it: one that went through a reset by itself and now
+ * waits with HPD low, and one that stays silent while there is no video. */
+static void hdmi_bridge_setup_check(app_ctx_t *ctx, int64_t *next_check_us)
+{
+    const int64_t now_us = esp_timer_get_time();
+    if (now_us < *next_check_us) {
+        return;
+    }
+    *next_check_us = now_us + HDMI_BRIDGE_SETUP_CHECK_MS * INT64_C(1000);
+    bool lost = false;
+    const esp_err_t ret = tc_setup_lost(&ctx->bridge, &lost);
+    if (ret != ESP_OK) {
+        if (++ctx->bridge_silent_checks >= HDMI_BRIDGE_SILENT_CHECKS) {
+            hdmi_bridge_fault(ctx, "no answer", ret);
+        }
+        return;
+    }
+    ctx->bridge_silent_checks = 0;
+    if (lost) {
+        hdmi_bridge_fault(ctx, "the bridge has its reset values",
+                          ESP_ERR_INVALID_STATE);
+    }
+}
+
+/* Stops the bridge's CSI output before the P4 side of the pipeline is torn
+ * down. The teardown does not need the bridge to answer. */
+static void hdmi_stream_stop(app_ctx_t *ctx)
+{
+    const esp_err_t ret = tc_enable_stream(&ctx->bridge, false);
+    if (ret != ESP_OK) {
+        hdmi_bridge_fault(ctx, "stream stop", ret);
+    }
+}
+
+/* Raises HPD for the host display policy. */
+static void hdmi_hpd_raise(app_ctx_t *ctx)
+{
+    const esp_err_t ret = tc_set_hpd_output(&ctx->bridge, true);
+    if (ret != ESP_OK) {
+        hdmi_bridge_fault(ctx, "HPD raise", ret);
+    }
+}
+
 /* A pass that expects video at the detected rate fps. Returns true when it
  * reset the bridge, which tears capture down: the caller starts its loop
  * over. */
@@ -4902,11 +4974,12 @@ static bool hdmi_health_check(app_ctx_t *ctx, hdmi_health_t *health,
              timings->width, timings->height, timings->fps, health->frames,
              health->unstreamable ? ", mode not streamable" : "",
              health->resets, HDMI_HEALTH_MAX_RESETS);
-    ESP_ERROR_CHECK(tc_enable_stream(&ctx->bridge, false));
+    hdmi_stream_stop(ctx);
     ESP_ERROR_CHECK(csi_destroy(ctx));
-    /* As at boot, a bridge that fails its setup restarts the Mini: no
-     * later pass would set it up again. */
-    ESP_ERROR_CHECK(hdmi_bridge_reset(ctx));
+    const esp_err_t reset_ret = hdmi_bridge_reset(ctx);
+    if (reset_ret != ESP_OK) {
+        hdmi_bridge_fault(ctx, "setup after a recovery reset", reset_ret);
+    }
     /* The EDID write of the reset raised HPD again. */
     hdmi_hpd_retry_arm(hpd_retry);
     return true;
@@ -4921,6 +4994,7 @@ static void hdmi_capture_task(void *arg)
     uint32_t loop_trace = 0;
     int64_t next_active_timing_check_us = 0;
     int64_t next_hdmi_connection_check_us = 0;
+    int64_t next_bridge_setup_check_us = 0;
     bool host_display_advertised = true;
     /* tc_initial_setup() below raises HPD after it writes the EDID. */
     hdmi_hpd_retry_t hpd_retry = {.armed = true};
@@ -4975,7 +5049,7 @@ static void hdmi_capture_task(void *arg)
     ESP_LOGI(TAG, "init:i2c");
     tc_i2c_init(&ctx.bridge);
     ESP_LOGI(TAG, "init:probe");
-    ESP_ERROR_CHECK(tc_probe_chip(&ctx.bridge));
+    esp_err_t setup_ret = tc_probe_chip(&ctx.bridge);
     jetkvm_video_edid_preset_t stored_edid =
         JETKVM_DEFAULT_VIDEO_EDID_PRESET;
     esp_err_t stored_edid_error =
@@ -4988,16 +5062,77 @@ static void hdmi_capture_task(void *arg)
     const p4_edid_descriptor_t *initial_edid =
         p4_edid_descriptor(stored_edid);
     ESP_LOGI(TAG, "init:setup refclk=%" PRIu32, TC358743_REFCLK_HZ);
-    ESP_ERROR_CHECK(tc_initial_setup(&ctx.bridge, TC358743_REFCLK_HZ,
-                                     initial_edid));
-    ESP_LOGI(TAG, "init:done");
-    tc_log_signal_status(&ctx.bridge);
+    if (setup_ret == ESP_OK) {
+        setup_ret = tc_initial_setup(&ctx.bridge, TC358743_REFCLK_HZ,
+                                     initial_edid);
+    }
+    if (setup_ret == ESP_OK) {
+        ctx.bridge_fault.up_since_us = esp_timer_get_time();
+        ESP_LOGI(TAG, "init:done");
+        tc_log_signal_status(&ctx.bridge);
+    } else {
+        /* The loop below sets the bridge up again; the preset marked ready
+         * here is the one it writes. */
+        hdmi_bridge_fault(&ctx, "setup at boot", setup_ret);
+    }
     if (p4_edid_control_mark_ready(stored_edid)) {
         p4_device_set_edid_control_available(true);
         ESP_LOGI(TAG, "EDID control ready preset=%s", initial_edid->label);
     }
 
     while (1) {
+        /* An OTA install holds the capture suspended: a bridge fault waits
+         * for its end, because the setup tears capture down and pulses HPD,
+         * and the check does not look for one. */
+        const bool bridge_recovery_held = __atomic_load_n(
+            &s_capture_suspended, __ATOMIC_ACQUIRE);
+        if (ctx.bridge_fault.faulted && !bridge_recovery_held) {
+            if (ctx.cam) {
+                ESP_ERROR_CHECK(csi_destroy(&ctx));
+            }
+            hdmi_health_pause(&health);
+            if (!hdmi_bridge_fault_setup_due(&ctx.bridge_fault,
+                                             esp_timer_get_time())) {
+                vTaskDelay(pdMS_TO_TICKS(50));
+                continue;
+            }
+            esp_err_t reset_ret = hdmi_bridge_reset(&ctx);
+            if (reset_ret == ESP_OK) {
+                reset_ret = guest_display_after_bridge_setup(&ctx);
+            }
+            const int64_t reset_done_us = esp_timer_get_time();
+            hdmi_bridge_fault_setup_done(&ctx.bridge_fault, reset_done_us,
+                                         reset_ret == ESP_OK);
+            if (reset_ret != ESP_OK) {
+                ESP_LOGE(TAG,
+                         "HDMI bridge setup %" PRIu32 " after fault %" PRIu32
+                         " failed: %s; next setup in %" PRId64 " s",
+                         ctx.bridge_fault.attempts, ctx.bridge_fault.faults,
+                         esp_err_to_name(reset_ret),
+                         (ctx.bridge_fault.next_setup_us - reset_done_us) /
+                             1000000);
+                continue;
+            }
+            ESP_LOGW(TAG,
+                     "HDMI bridge set up again after fault %" PRIu32
+                     " (setup %" PRIu32 ")",
+                     ctx.bridge_fault.faults, ctx.bridge_fault.attempts);
+            /* The EDID write of the setup raised HPD. */
+            host_display_advertised = true;
+            hpd_retry_pulse_low = false;
+            hdmi_hpd_retry_arm(&hpd_retry);
+            hdmi_health_arm(&health);
+            no_signal_count = 0;
+            next_active_timing_check_us = 0;
+            ctx.bridge_silent_checks = 0;
+            continue;
+        }
+        if (!bridge_recovery_held) {
+            hdmi_bridge_setup_check(&ctx, &next_bridge_setup_check_us);
+            if (ctx.bridge_fault.faulted) {
+                continue;
+            }
+        }
         /* Poll before policy branches that skip capture during idle or sleep. */
         video_update_hdmi_connection(&ctx.bridge,
                                      &next_hdmi_connection_check_us);
@@ -5021,7 +5156,7 @@ static void hdmi_capture_task(void *arg)
             !__atomic_load_n(&s_network_available, __ATOMIC_ACQUIRE);
         if (requested_preview != ctx.preview_only_active) {
             if (ctx.cam) {
-                ESP_ERROR_CHECK(tc_enable_stream(&ctx.bridge, false));
+                hdmi_stream_stop(&ctx);
                 ESP_ERROR_CHECK(csi_destroy(&ctx));
             }
             ctx.preview_only_active = requested_preview;
@@ -5032,7 +5167,7 @@ static void hdmi_capture_task(void *arg)
                              __ATOMIC_RELEASE);
             if (requested_preview) {
                 if (!host_display_advertised && p4_host_display_may_raise()) {
-                    ESP_ERROR_CHECK(tc_set_hpd_output(&ctx.bridge, true));
+                    hdmi_hpd_raise(&ctx);
                     host_display_advertised = true;
                 }
             } else {
@@ -5048,7 +5183,7 @@ static void hdmi_capture_task(void *arg)
 
         if (ctx.preview_only_active && !host_display_advertised &&
             p4_host_display_may_raise()) {
-            ESP_ERROR_CHECK(tc_set_hpd_output(&ctx.bridge, true));
+            hdmi_hpd_raise(&ctx);
             host_display_advertised = true;
         }
         esp_err_t host_display_ret =
@@ -5175,7 +5310,7 @@ static void hdmi_capture_task(void *arg)
                         ESP_LOGW(TAG, "active HDMI signal lost: %s; rebuilding hardware pipeline",
                                  esp_err_to_name(timing_ret));
                     }
-                    ESP_ERROR_CHECK(tc_enable_stream(&ctx.bridge, false));
+                    hdmi_stream_stop(&ctx);
                     ESP_ERROR_CHECK(csi_destroy(&ctx));
                     vTaskDelay(pdMS_TO_TICKS(100));
                     continue;
@@ -5241,7 +5376,7 @@ static void hdmi_capture_task(void *arg)
                     ESP_LOGW(TAG, "soft CSI restart failed: %s; rebuilding pipeline",
                              esp_err_to_name(restart_ret));
                 }
-                ESP_ERROR_CHECK(tc_enable_stream(&ctx.bridge, false));
+                hdmi_stream_stop(&ctx);
                 ESP_ERROR_CHECK(csi_destroy(&ctx));
                 vTaskDelay(pdMS_TO_TICKS(200));
             }
@@ -5270,7 +5405,7 @@ static void hdmi_capture_task(void *arg)
                 continue;
             }
             if (no_signal_count == 0) {
-                ESP_ERROR_CHECK(tc_enable_stream(&ctx.bridge, false));
+                hdmi_stream_stop(&ctx);
                 ESP_ERROR_CHECK(csi_destroy(&ctx));
             }
             if ((no_signal_count % 3) == 0) {
@@ -5334,7 +5469,7 @@ static void hdmi_capture_task(void *arg)
         if (!any_candidate) {
             ESP_LOGW(TAG, "unsupported HDMI mode %ux%u@%u frame=%ux%u for all candidates",
                      detected.width, detected.height, detected.fps, detected.frame_width, detected.frame_height);
-            ESP_ERROR_CHECK(tc_enable_stream(&ctx.bridge, false));
+            hdmi_stream_stop(&ctx);
             ESP_ERROR_CHECK(csi_destroy(&ctx));
             vTaskDelay(pdMS_TO_TICKS(1000));
             continue;

@@ -848,6 +848,16 @@ esp_err_t tc_initial_setup(jetkvm_hdmi_bridge_t *ctx, uint32_t refclk_hz,
     return tc_enable_stream(ctx, false);
 }
 
+esp_err_t tc_setup_lost(jetkvm_hdmi_bridge_t *ctx, bool *lost)
+{
+    uint32_t fifoctl = 0;
+    esp_err_t ret = tc_read_reg(ctx, FIFOCTL, 2, &fifoctl);
+    if (ret == ESP_OK) {
+        *lost = fifoctl != TC358743_FIFO_LEVEL;
+    }
+    return ret;
+}
+
 esp_err_t tc_get_sys_status(jetkvm_hdmi_bridge_t *ctx, uint8_t *sys_status)
 {
     uint32_t status = 0;
