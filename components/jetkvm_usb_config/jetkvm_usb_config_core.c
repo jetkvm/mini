@@ -155,8 +155,11 @@ esp_err_t jetkvm_usb_config_set_configuration_string(
     if (!config || !printable_ascii(configuration, true)) {
         return ESP_ERR_INVALID_ARG;
     }
-    copy_string(config->configuration, configuration);
-    config->schema_version = JETKVM_USB_CONFIG_SCHEMA_VERSION;
+
+    jetkvm_usb_config_t updated = *config;
+    updated.schema_version = JETKVM_USB_CONFIG_SCHEMA_VERSION;
+    copy_string(updated.configuration, configuration);
+    *config = updated;
     return ESP_OK;
 }
 

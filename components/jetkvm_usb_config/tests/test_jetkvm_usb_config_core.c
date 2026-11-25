@@ -109,6 +109,11 @@ static void test_configuration_string_validation(void)
            ESP_OK);
     assert(strlen(config.configuration) == 31U);
 
+    /* The input may be the field that the setter writes. */
+    assert(jetkvm_usb_config_set_configuration_string(
+               &config, config.configuration) == ESP_OK);
+    assert(memcmp(config.configuration, maximum, sizeof(maximum)) == 0);
+
     /* The identity setter leaves the configuration string alone. */
     assert(jetkvm_usb_config_set_identity(
                &config, 1U, 1U, "", "JetKVM", "Product") == ESP_OK);
