@@ -11,6 +11,7 @@
  * and address events itself.
  */
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include "jetkvm_control.h"
 
@@ -69,6 +70,11 @@ void jetkvm_mdns_set_network(const char *hostname, uint8_t mode);
 void jetkvm_mdns_set_setup(bool setup);
 void jetkvm_mdns_set_https_port(uint16_t port);
 void jetkvm_mdns_start(void);
+/* The name the responder answers to now, without ".local", and its length; ""
+ * and 0 when no responder runs. It is the planned hostname, or that name with
+ * the number that espressif/mdns added because another host on the link has
+ * the name. */
+size_t jetkvm_mdns_get_hostname(char *hostname, size_t capacity);
 
 #ifdef __cplusplus
 }

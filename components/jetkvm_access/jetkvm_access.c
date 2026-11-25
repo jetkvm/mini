@@ -362,7 +362,7 @@ static bool host_allowed(httpd_req_t *req)
     size_t length = strlen(name);
     if (length && name[length - 1] == '.') name[--length] = '\0';
     if (!length) return false;
-    char names[4][JETKVM_ACCESS_HOST_NAME_CAPACITY];
+    char names[5][JETKVM_ACCESS_HOST_NAME_CAPACITY];
     size_t count = s_host_names ? s_host_names(names, sizeof(names) / sizeof(names[0])) : 0;
     if (extra_host_name(name)) return true;
     for (size_t i = 0; i < count; ++i) {

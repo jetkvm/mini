@@ -12,11 +12,40 @@ static SemaphoreHandle_t s_lock;
 static EXT_RAM_BSS_ATTR jetkvm_mdns_device_t s_device;
 static EXT_RAM_BSS_ATTR jetkvm_mdns_plan_t s_running;
 static bool s_started;
+/* The name the responder answers to now. espressif/mdns renames itself when
+ * another host on the link has the name. The responder's task writes it while
+ * a setter holds s_lock and waits for that task, so it has its own lock. */
+static portMUX_TYPE s_hostname_lock = portMUX_INITIALIZER_UNLOCKED;
+static char s_hostname[MDNS_NAME_BUF_LEN];
 
+static void set_hostname(const char *hostname)
+{
+    char name[sizeof(s_hostname)];
+    snprintf(name, sizeof(name), "%s", hostname ? hostname : "");
+    portENTER_CRITICAL(&s_hostname_lock);
+    memcpy(s_hostname, name, sizeof(s_hostname));
+    portEXIT_CRITICAL(&s_hostname_lock);
+}
+
+static void hostname_changed(const char *hostname, void *arg)
+{
+    (void)arg;
+    set_hostname(hostname);
+}
+
+static void stop_responder(void)
+{
+    mdns_free();
+    set_hostname(NULL);
+}
+
+/* espressif/mdns puts each item in front of its list and sends the list from
+ * the front, so the items go in in reverse to leave in the plan's order. */
 static void txt_items(const jetkvm_mdns_plan_t *plan, mdns_txt_item_t items[JETKVM_MDNS_TXT_COUNT])
 {
     for (size_t i = 0; i < JETKVM_MDNS_TXT_COUNT; ++i) {
-        items[i] = (mdns_txt_item_t){.key = plan->txt[i].key, .value = plan->txt[i].value};
+        const jetkvm_mdns_txt_t *txt = &plan->txt[JETKVM_MDNS_TXT_COUNT - 1 - i];
+        items[i] = (mdns_txt_item_t){.key = txt->key, .value = txt->value};
     }
 }
 
@@ -25,11 +54,13 @@ static esp_err_t start_responder(const jetkvm_mdns_plan_t *plan)
     mdns_txt_item_t items[JETKVM_MDNS_TXT_COUNT];
     txt_items(plan, items);
     esp_err_t err = mdns_init();
+    /* mdns_free() removes the callback. */
+    if (err == ESP_OK) err = mdns_register_hostname_changed_callback(hostname_changed, NULL);
     if (err == ESP_OK) err = mdns_hostname_set(plan->hostname);
     if (err == ESP_OK) err = mdns_service_add(plan->instance, JETKVM_MDNS_SERVICE_TYPE,
                                               JETKVM_MDNS_SERVICE_PROTO, plan->port,
                                               items, JETKVM_MDNS_TXT_COUNT);
-    if (err != ESP_OK) mdns_free();
+    if (err != ESP_OK) stop_responder();
     return err;
 }
 
@@ -64,7 +95,7 @@ static void apply(void)
     unsigned changes = jetkvm_mdns_changes(&s_running, &wanted);
     if (!changes) return;
     if (changes & JETKVM_MDNS_STOP) {
-        mdns_free();
+        stop_responder();
         memset(&s_running, 0, sizeof(s_running));
         ESP_LOGI(TAG, "mDNS responder stopped");
         return;
@@ -74,7 +105,7 @@ static void apply(void)
         err = start_responder(&wanted);
     } else if (update_responder(&wanted, changes) != ESP_OK) {
         /* Start over rather than leave a half-updated advertisement. */
-        mdns_free();
+        stop_responder();
         err = start_responder(&wanted);
     }
     if (err != ESP_OK) {
@@ -98,6 +129,17 @@ void jetkvm_mdns_init(const char *device_id, const char *version, uint16_t http_
     snprintf(s_device.device_id, sizeof(s_device.device_id), "%s", device_id ? device_id : "");
     snprintf(s_device.version, sizeof(s_device.version), "%s", version ? version : "");
     s_device.http_port = http_port;
+}
+
+size_t jetkvm_mdns_get_hostname(char *hostname, size_t capacity)
+{
+    if (!hostname || !capacity) return 0;
+    char name[sizeof(s_hostname)];
+    portENTER_CRITICAL(&s_hostname_lock);
+    memcpy(name, s_hostname, sizeof(name));
+    portEXIT_CRITICAL(&s_hostname_lock);
+    size_t length = (size_t)snprintf(hostname, capacity, "%s", name);
+    return length < capacity ? length : capacity - 1;
 }
 
 void jetkvm_mdns_set_network(const char *hostname, uint8_t mode)

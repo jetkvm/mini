@@ -73,13 +73,18 @@ static jetkvm_oidc_validator_t *s_cloud_oidc_validator;
 static jetkvm_tailscale_context_t s_tailscale_context;
 
 /* The names a browser may use for the device besides its addresses: the
- * hostname it gives the LAN and, on a tailnet, its Tailscale names. */
+ * hostname it gives the LAN, the name its mDNS responder took when another
+ * host on the link has that hostname and, on a tailnet, its Tailscale names. */
 static size_t access_host_names(char (*names)[JETKVM_ACCESS_HOST_NAME_CAPACITY], size_t capacity)
 {
     size_t count = 0;
     jetkvm_network_settings_t network;
     if (count < capacity && jetkvm_network_settings_get(&network, NULL) && network.hostname[0]) {
         snprintf(names[count++], JETKVM_ACCESS_HOST_NAME_CAPACITY, "%s", network.hostname);
+    }
+    if (count < capacity && jetkvm_mdns_get_hostname(names[count], JETKVM_ACCESS_HOST_NAME_CAPACITY) &&
+        (!count || strcasecmp(names[count], names[0]) != 0)) {
+        ++count;
     }
     jetkvm_tailscale_status_t *tailnet = s_tailscale_context.get_status ?
         malloc(sizeof(*tailnet)) : NULL;
