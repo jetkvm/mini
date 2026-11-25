@@ -88,6 +88,18 @@ int main(void)
     assert(webrtc_transport_set_guest_mode(1920, 0, 30) == ESP_ERR_NOT_SUPPORTED);
     assert(webrtc_transport_set_guest_mode(1920, 1080, 0) == ESP_ERR_NOT_SUPPORTED);
     assert(webrtc_transport_set_mode(3840, 2160, 30) == ESP_ERR_NOT_SUPPORTED);
+    /* The capture path: 640x480 to 1920x1080, 23 to 61 fps as measured, and
+     * no more pixels a second than 1920x1080 at 30. */
+    assert(!supported_mode(639, 480, 60) && !supported_mode(640, 479, 60));
+    assert(!supported_mode(1921, 1080, 30) && !supported_mode(1920, 1081, 30));
+    assert(!supported_mode(1920, 1080, 22) && !supported_mode(1280, 720, 62));
+    assert(!supported_mode(1920, 1080, 31) && !supported_mode(1920, 1080, 60));
+    assert(!supported_mode(1280, 1024, 60) && !supported_mode(1600, 900, 60));
+    assert(supported_mode(1920, 1080, 30) && supported_mode(1920, 1080, 23));
+    assert(supported_mode(800, 600, 61));
+    assert(supported_mode(1280, 720, 60) && supported_mode(1280, 720, 30));
+    assert(supported_mode(640, 480, 60) && supported_mode(800, 600, 60));
+    assert(supported_mode(1024, 768, 60) && supported_mode(1680, 1050, 30));
     assert(webrtc_transport_set_guest_mode(3840, 2160, 60) == ESP_OK &&
            s_ctx.width == 3840 && s_ctx.height == 2160 && s_ctx.video_epoch == 1);
     assert(s_ctx.guest_mode);

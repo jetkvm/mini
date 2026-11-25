@@ -433,6 +433,36 @@ static void test_ota_suspension_defers_requests(void)
     rebuild_physical_capture();
 }
 
+static void test_bridge_setup_keeps_the_guest_edid(void)
+{
+    uint8_t a[256];
+    build(OSVC_GUEST_RES_1080P60, 0x70000001U, a);
+    /* With the physical display, the setup's preset is what the bridge
+     * must hold: nothing more is written. */
+    assert(guest_display_after_bridge_setup(&s_ctx) == ESP_OK);
+    assert(s_guest_writes == 0 && s_preset_writes == 0);
+
+    assert(jetkvm_video_present_guest(a) == ESP_OK);
+    assert(service() && jetkvm_video_guest_display_presented());
+    reset_counts();
+    /* The bridge fails, and its setup from a reset writes the preset. The
+     * guest EDID goes back, and the guest display stays presented. */
+    memcpy(s_ram, s_preset_bytes[s_applied], 256);
+    assert(guest_display_after_bridge_setup(&s_ctx) == ESP_OK);
+    assert(s_guest_writes == 1 && memcmp(s_ram, a, 256) == 0);
+    assert(jetkvm_video_guest_display_presented() && s_guest_mode_cleared == 0);
+    /* A guest EDID write that fails is the setup's failure. */
+    s_guest_error = ESP_ERR_TIMEOUT;
+    assert(guest_display_after_bridge_setup(&s_ctx) == ESP_ERR_TIMEOUT);
+    s_guest_error = ESP_OK;
+    assert(guest_display_after_bridge_setup(&s_ctx) == ESP_OK);
+
+    assert(os_services_restore() == ESP_OK);
+    assert(service() && !jetkvm_video_guest_owns_display());
+    assert(memcmp(s_ram, s_preset_bytes[s_applied], 256) == 0);
+    rebuild_physical_capture();
+}
+
 static void test_restore_writes_the_applied_preset(void)
 {
     uint8_t a[256];
@@ -534,6 +564,7 @@ int main(void)
     test_write_failures();
     test_capture_teardown_failure();
     test_ota_suspension_defers_requests();
+    test_bridge_setup_keeps_the_guest_edid();
     test_restore_writes_the_applied_preset();
     test_rejected_edids();
     test_host_display_stays_advertised();
