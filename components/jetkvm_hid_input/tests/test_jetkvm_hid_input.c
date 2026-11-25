@@ -653,6 +653,40 @@ static void test_generation_change_stops_local_macro_retry(void)
     assert(!report_log_has_key(0x15U));
 }
 
+/* A browser cancel stops the retries of a device-owned macro step, also when
+ * the host takes reports again before the worker handles the cancel. */
+static void test_cancel_stops_local_macro_retry(void)
+{
+    const jetkvm_hidrpc_macro_step_t steps[] = {macro_step(0x16U, 5U)};
+    jetkvm_hid_input_stats_t before;
+    assert(jetkvm_hid_input_get_stats(&before) == ESP_OK);
+    fake_usb_reset_log();
+    fake_usb_set_keyboard_report_result(ESP_ERR_TIMEOUT);
+    assert(jetkvm_hid_input_submit_local_macro(steps, 1U, false) ==
+           JETKVM_HID_INPUT_SUBMIT_ACCEPTED);
+    jetkvm_hid_input_stats_t stats = before;
+    for (unsigned elapsed = 0U; elapsed < 50U &&
+             stats.usb_report_retries == before.usb_report_retries;
+         ++elapsed) {
+        sleep_ms(1U);
+        assert(jetkvm_hid_input_get_stats(&stats) == ESP_OK);
+    }
+    assert(stats.usb_report_retries > before.usb_report_retries);
+
+    const uint32_t generation = snapshot().active_generation;
+    jetkvm_hidrpc_event_t cancel = {
+        .type = JETKVM_HIDRPC_EVENT_CANCEL_KEYBOARD_MACRO_REPORT,
+    };
+    assert(jetkvm_hid_input_submit_event(generation, &cancel) ==
+           JETKVM_HID_INPUT_SUBMIT_ACCEPTED);
+    assert(snapshot().active_generation == generation);
+    /* The worker retries each millisecond. */
+    sleep_ms(10U);
+    fake_usb_set_keyboard_report_result(ESP_OK);
+    assert(wait_for_macro_active(false, 100U));
+    assert(!report_log_has_key(0x16U));
+}
+
 static jetkvm_usb_hid_state_t usb_state(bool initialized, bool connected,
                                          bool mounted, bool suspended,
                                          bool wake_enabled)
@@ -943,6 +977,7 @@ int main(void)
     test_local_macro_replacement();
     test_generation_change_cancels_local_macro();
     test_generation_change_stops_local_macro_retry();
+    test_cancel_stops_local_macro_retry();
 
     assert(jetkvm_hid_input_deinit() == ESP_OK);
     puts("JetKVM HID macro bridge: OK");

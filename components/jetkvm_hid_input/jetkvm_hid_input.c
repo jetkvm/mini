@@ -130,6 +130,8 @@ typedef struct {
     uint32_t generation;
     uint32_t epoch;
     uint32_t barrier_token;
+    /* Non-zero for a macro step: a later cancel stops its retries. */
+    uint32_t macro_action_sequence;
     int64_t received_at_us;
     union {
         jetkvm_hidrpc_keyboard_report_t keyboard;
@@ -698,6 +700,10 @@ typedef enum {
 static bool retry_is_live(const input_command_t *command,
                           retry_liveness_t liveness)
 {
+    if (liveness != RETRY_ALWAYS && command->macro_action_sequence != 0U &&
+        macro_cancel_sequence() > command->macro_action_sequence) {
+        return false;
+    }
     switch (liveness) {
     case RETRY_WHILE_GENERATION_ACTIVE:
         return generation_is_active(command->generation, command->epoch);
@@ -833,6 +839,7 @@ static bool process_macro_due(macro_runtime_t *runtime,
         .local = runtime->command.local,
         .generation = runtime->command.generation,
         .epoch = runtime->command.epoch,
+        .macro_action_sequence = runtime->command.action_sequence,
         .data.keyboard.modifier = step->modifier,
     };
     memcpy(command.data.keyboard.keys, step->keys,
