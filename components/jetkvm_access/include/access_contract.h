@@ -24,34 +24,23 @@ static inline uint32_t jetkvm_access_lifetime_ticks(uint32_t seconds, uint32_t h
     return (uint32_t)((uint64_t)seconds * hz);
 }
 
-/* Tailscale gives each node an IPv4 address from 100.64.0.0/10, and the
- * device's tunnel interface has that network. */
-static inline bool jetkvm_access_tailscale_range(const uint8_t *ipv4)
-{
-    return ipv4[0] == 100U && (ipv4[1] & 0xc0U) == 64U;
-}
 /* "Web interface through Tailscale only". With the setting on, the web server
- * admits a connection only when it arrived on the device's Tailscale IPv4
- * address from a Tailscale address. `local` and `peer` are the 4 bytes of
- * the connection's two addresses, or NULL for one that is not IPv4.
- * `tailscale` is the 4 bytes of the device's Tailscale address, or NULL
- * while it has none. The rule names what is admitted, so an address of any
- * other kind is refused.
+ * admits a connection only when the address it arrived on is the device's
+ * Tailscale IPv4 address. `local` is the 4 bytes of that address, or NULL
+ * when the connection did not arrive on an IPv4 address. `tailscale` is the
+ * 4 bytes of the device's Tailscale address, or NULL while it has none. The
+ * rule names what is admitted, so an address of any other kind is refused.
  *
- * The peer address is part of the rule because the network stack takes a
- * packet for the Tailscale address on each interface. It sends the answer
- * of such a connection through the tunnel, by the source address, where only
- * a tailnet peer gets it, so a host on the local network does not complete a
- * connection to the Tailscale address. The rule does not depend on that: a
- * peer with an address of the local network is refused by its address. */
-static inline bool jetkvm_access_arrived_through_tailscale(const uint8_t *local, const uint8_t *peer,
-                                                           const uint8_t *tailscale)
+ * The local address shows the path because the network stack takes a packet
+ * for the Tailscale address only when it arrived on the tunnel
+ * (tunnel_input.c of jetkvm_tailscale). lwIP alone takes it on each
+ * interface. */
+static inline bool jetkvm_access_arrived_through_tailscale(const uint8_t *local, const uint8_t *tailscale)
 {
-    return local && peer && tailscale && memcmp(local, tailscale, 4) == 0 &&
-           jetkvm_access_tailscale_range(peer);
+    return local && tailscale && memcmp(local, tailscale, 4) == 0;
 }
 static inline bool jetkvm_access_tailscale_only_admits(bool tailscale_only, const uint8_t *local,
-                                                       const uint8_t *peer, const uint8_t *tailscale)
+                                                       const uint8_t *tailscale)
 {
-    return !tailscale_only || jetkvm_access_arrived_through_tailscale(local, peer, tailscale);
+    return !tailscale_only || jetkvm_access_arrived_through_tailscale(local, tailscale);
 }

@@ -15,6 +15,7 @@ Settings and node identity are stored in NVS; keys never appear in RPC results. 
 ## Constraints
 
 - Inbound IPv4 must pass the control server's packet filter. Traffic is blocked until a filter arrives.
+- A packet for the tunnel's address is taken only when it arrived on the tunnel (`tunnel_input.c`, in front of lwIP's `ip4_input()`). lwIP alone takes such a packet on each interface, and while no peer has a WireGuard session it answers a host on the local network through the local interface. The packet filter and "Web interface through Tailscale only" depend on this rule.
 - IPv4 only, at most 64 peers (`CONFIG_ML_MAX_PEERS`), no exit nodes, subnet routes, Taildrop, or Tailscale SSH.
 - Client stacks and queues use PSRAM; the settings worker uses an internal stack because it writes NVS.
 - The build requires `CONFIG_LWIP_ESP_NETIF_CLIENT_DATA`.
