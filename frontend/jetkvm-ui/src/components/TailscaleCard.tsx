@@ -301,11 +301,7 @@ export default function TailscaleCard() {
                 <SettingsItem
                   size="SM"
                   title={m.tailscale_only_title()}
-                  description={
-                    onlyAccess.enabled || onlyAccess.throughTailscale
-                      ? m.tailscale_only_description()
-                      : m.tailscale_only_hint()
-                  }
+                  description={m.tailscale_only_description()}
                 >
                   <Checkbox
                     aria-label={m.tailscale_only_title()}
