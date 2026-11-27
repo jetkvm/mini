@@ -102,9 +102,10 @@ static size_t stun_attr_read_size(uint16_t type, const char *value, size_t attr_
 
 /* Parses the msg->size bytes in msg->buf. The length field of the header
  * and the length of each attribute come from the sender: the parser reads
- * no byte after the received ones, and it stops at the first attribute
- * that does not fit. */
-void stun_parse_msg_buf(stun_msg_t *msg)
+ * no byte after the received ones. Returns 0, or -1 for a message with an
+ * attribute that does not fit: such a message has no meaning, and a caller
+ * must not take it for a message without the attributes that follow. */
+int stun_parse_msg_buf(stun_msg_t *msg)
 {
     stun_header_t *header = (stun_header_t *)msg->buf;
     size_t received = msg->size < sizeof(msg->buf) ? msg->size : sizeof(msg->buf);
@@ -138,7 +139,7 @@ void stun_parse_msg_buf(stun_msg_t *msg)
         size_t attr_size = ntohs(attr->length);
         if (attr_size > length - pos - sizeof(stun_attr_t) ||
             attr_size < stun_attr_read_size(ntohs(attr->type), attr->value, attr_size)) {
-            break;
+            return -1;
         }
         switch (ntohs(attr->type)) {
         case STUN_ATTR_TYPE_MAPPED_ADDRESS:
@@ -201,6 +202,7 @@ void stun_parse_msg_buf(stun_msg_t *msg)
         }
         pos += 4 * ((attr_size + 3) / 4) + sizeof(stun_attr_t);
     }
+    return 0;
 }
 
 void stun_calculate_fingerprint(char *buf, size_t len, uint32_t *fingerprint)
@@ -326,7 +328,9 @@ int stun_msg_is_valid(uint8_t *buf, size_t size, char *password)
     }
     memcpy(msg.buf, buf, size);
     msg.size = size;
-    stun_parse_msg_buf(&msg);
+    if (stun_parse_msg_buf(&msg) != 0) {
+        return -1;
+    }
     stun_header_t *header = (stun_header_t *)msg.buf;
     if (msg.has_fingerprint) {
         uint32_t fingerprint = 0;
@@ -370,7 +374,9 @@ int stun_msg_is_valid_response(uint8_t *buf, size_t size, stun_credential_t cred
     }
     memcpy(msg.buf, buf, size);
     msg.size = size;
-    stun_parse_msg_buf(&msg);
+    if (stun_parse_msg_buf(&msg) != 0) {
+        return -1;
+    }
     stun_header_t *header = (stun_header_t *)msg.buf;
     if (msg.has_fingerprint) {
         uint32_t fingerprint = 0;
