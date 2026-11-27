@@ -390,13 +390,57 @@ static bool host_allowed(httpd_req_t *req)
     }
     return false;
 }
+/* What a refused Host gets. A page under a foreign name can read it, and the
+ * Host is the sender's text, so both texts are constants: no address, no name
+ * of the device, no version and nothing from the request. The IP address is
+ * on the screen of the device, which only a person at the device sees. */
+static const char HOST_REFUSAL_PAGE[] =
+    "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+    "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+    "<title>This KVM does not answer to this name</title></head><body>"
+    "<h1>This KVM does not answer to this name</h1>"
+    "<p>This JetKVM has no password. For protection, it answers only to its IP address, "
+    "its hostname, its Tailscale name and the names in its list.</p>"
+    "<p>To use this name:</p>"
+    "<ol><li>Open the KVM by its IP address. The screen of the KVM shows the IP address. "
+    "If the first setup starts, complete it.</li>"
+    "<li>Go to Settings &gt; Access &gt; Other Names for This KVM.</li>"
+    "<li>Add the name, and save.</li></ol>"
+    "<p>Or set a password in Settings &gt; Access. With a password, each name works.</p>"
+    "</body></html>";
+static const char HOST_REFUSAL_JSON[] =
+    "{\"error\":\"Unknown host\",\"hint\":\"Open the KVM by its IP address and add this name in "
+    "Settings > Access > Other Names for This KVM, or set a password. "
+    "The screen of the KVM shows the IP address.\"}";
+/* A browser that opens a page names text/html in Accept; a script, a fetch
+ * and a file of the UI do not. */
+static bool page_request(httpd_req_t *req)
+{
+    if (req->method != HTTP_GET && req->method != HTTP_HEAD) return false;
+    /* A value that does not fit counts as no page request. */
+    char accept[256] = "";
+    if (httpd_req_get_hdr_value_str(req, "Accept", accept, sizeof(accept)) != ESP_OK) return false;
+    for (const char *type = accept; *type; ++type)
+        if (strncasecmp(type, "text/html", 9) == 0) return true;
+    return false;
+}
+static void host_refusal(httpd_req_t *req)
+{
+    bool page = page_request(req);
+    httpd_resp_set_status(req, "421 Misdirected Request");
+    if (rejection_closes(req)) httpd_resp_set_hdr(req, "Connection", "close");
+    httpd_resp_set_type(req, page ? "text/html; charset=utf-8" : "application/json");
+    /* no-cache as in json_error_code(). */
+    httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
+    (void)httpd_resp_sendstr(req, page ? HOST_REFUSAL_PAGE : HOST_REFUSAL_JSON);
+}
 esp_err_t jetkvm_access_check_host(httpd_req_t *req)
 {
     /* With a password after setup, a page under another name has no login
      * cookie and gets 401, so only the setup and a Mini without a password
      * need the Host check. */
     if ((atomic_load(&s_setup) && atomic_load(&s_enabled)) || host_allowed(req)) return ESP_OK;
-    (void)json_error(req, "421 Misdirected Request", "Unknown host");
+    host_refusal(req);
     return ESP_ERR_INVALID_STATE;
 }
 static bool origin_allowed(httpd_req_t *req, bool required)
