@@ -65,6 +65,8 @@ function isEditableTarget(target: EventTarget | null) {
   );
 }
 
+const RESTORE_TIMEOUT_MS = 15_000;
+
 const settingsPages = {
   update: "/settings/general/update",
   restart: "/settings/general/reboot",
@@ -159,6 +161,7 @@ export default function WebRTCVideo({
 
   const liveDiagnosis = useDiagnosisStore(state => state.diagnosis);
   const sweepTitle = useDiagnosisStore(state => state.sweepTitle);
+  const [restoringEdid, setRestoringEdid] = useState(false);
   const startEdidSweep = useEdidSweep();
   const sweepDiagnosis = useDiagnosisStore(state => state.sweepDiagnosis);
   const diagnosis: Diagnosis = sweepDiagnosis ?? liveDiagnosis;
@@ -843,7 +846,13 @@ export default function WebRTCVideo({
     <DiagnosisCard
       diagnosis={shownDiagnosis.current}
       onAction={action => handleDiagnosisAction(action)}
-      busy={sweepTitle ? { action: "edidSweep", text: sweepTitle } : undefined}
+      busy={
+        sweepTitle
+          ? { action: "edidSweep", text: sweepTitle }
+          : restoringEdid
+            ? { action: "restoreEdid", text: "" }
+            : undefined
+      }
     />
   );
 
@@ -868,14 +877,22 @@ export default function WebRTCVideo({
       return;
     }
     if (action === "restoreEdid") {
+      setRestoringEdid(true);
+      const timeout = setTimeout(() => setRestoringEdid(false), RESTORE_TIMEOUT_MS);
+      const finish = () => {
+        clearTimeout(timeout);
+        setRestoringEdid(false);
+      };
       sendRpc("getEDIDPresets", {}, (presets: JsonRpcResponse) => {
         const defaultEdid =
           "error" in presets ? undefined : (presets.result as { edid: string }[])[0]?.edid;
         if (!defaultEdid) {
+          finish();
           notifications.error(m.diagnosis_edid_restore_failed());
           return;
         }
         sendRpc("setEDID", { edid: defaultEdid }, (resp: JsonRpcResponse) => {
+          finish();
           if ("error" in resp) {
             notifications.error(m.diagnosis_edid_restore_failed());
             return;
