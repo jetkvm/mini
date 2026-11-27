@@ -1592,8 +1592,9 @@ function DownloadFileView({ onBack }: { onBack: () => void }) {
   const [starting, setStarting] = useState(false);
   const [speed, setSpeed] = useState<number | null>(null);
   const lastSample = useRef<{ received: number; time: number } | null>(null);
-  // A storageDownloadState event has arrived since the start request went out.
-  const eventSinceStart = useRef(false);
+  // The count of storageDownloadState events. A response read before a later
+  // event is older than that event.
+  const eventCount = useRef(0);
   // The view shows a download in progress.
   const activeDownload = useRef(false);
 
@@ -1617,7 +1618,7 @@ function DownloadFileView({ onBack }: { onBack: () => void }) {
   const onEvent = useCallback(
     (payload: JsonRpcRequest) => {
       if (payload.method === "storageDownloadState") {
-        eventSinceStart.current = true;
+        eventCount.current += 1;
         applyState(payload.params as StorageDownloadState);
       }
     },
@@ -1630,8 +1631,9 @@ function DownloadFileView({ onBack }: { onBack: () => void }) {
   // channel was closed replaces the progress; on open, an earlier end is
   // not shown.
   useEffect(() => {
+    const countAtSend = eventCount.current;
     send("getStorageDownloadState", {}, (resp: JsonRpcResponse) => {
-      if ("error" in resp) return;
+      if ("error" in resp || eventCount.current !== countAtSend) return;
       const state = resp.result as StorageDownloadState;
       if (state.status === "downloading" || activeDownload.current) applyState(state);
     });
@@ -1657,7 +1659,7 @@ function DownloadFileView({ onBack }: { onBack: () => void }) {
     if (rpcDataChannel?.readyState !== "open") return;
     setStartError(null);
     setStarting(true);
-    eventSinceStart.current = false;
+    const countAtSend = eventCount.current;
     send(
       "startStorageDownload",
       { url: url.trim(), filename: fileName },
@@ -1670,7 +1672,7 @@ function DownloadFileView({ onBack }: { onBack: () => void }) {
         // The device reads the state for this response before it sends the
         // response. A download that ends in between sends its last event
         // first, and no event follows to correct the older state.
-        if (!eventSinceStart.current) applyState(resp.result as StorageDownloadState);
+        if (eventCount.current === countAtSend) applyState(resp.result as StorageDownloadState);
       },
     );
   }
