@@ -210,13 +210,17 @@ static esp_err_t httpd_req_get_hdr_value_str(httpd_req_t *req, const char *name,
 static int httpd_req_recv(httpd_req_t *req, char *buffer, size_t n) { memcpy(buffer, req->body, n); return n; }
 static const char *client_ip = "192.0.2.1";
 static int httpd_req_to_sockfd(httpd_req_t *req) { (void)req; return 1; }
+/* The peer of the listener's other open connections; the socket of a
+ * request (1) has client_ip. */
+static const char *peer_ips[8];
 static int test_getpeername(int fd, struct sockaddr *peer, socklen_t *size) {
-    (void)fd; (void)size;
+    (void)size;
+    const char *ip = fd >= 0 && fd < 8 && peer_ips[fd] ? peer_ips[fd] : client_ip;
     struct sockaddr_in6 *v6 = (struct sockaddr_in6 *)peer;
     struct sockaddr_in *v4 = (struct sockaddr_in *)peer;
     memset(peer, 0, sizeof(struct sockaddr_storage));
-    peer->sa_family = strchr(client_ip, ':') ? AF_INET6 : AF_INET;
-    return inet_pton(peer->sa_family, client_ip, peer->sa_family == AF_INET ?
+    peer->sa_family = strchr(ip, ':') ? AF_INET6 : AF_INET;
+    return inet_pton(peer->sa_family, ip, peer->sa_family == AF_INET ?
         (void *)&v4->sin_addr : (void *)&v6->sin6_addr) == 1 ? 0 : -1;
 }
 #define getpeername test_getpeername
@@ -725,9 +729,9 @@ int main(void) {
 
     /* "Web interface through Tailscale only". Off, the default, admits each
      * connection. On, it admits only a connection that arrived on the Mini's
-     * Tailscale address, closes the other open ones, and answers no request
-     * on a connection that stayed open. */
-    enum { REQUEST = 1, LAN, TAILSCALE, LAN_V6, TAILSCALE_MAPPED, OTHER_TAILNET_HOST };
+     * Tailscale address from a Tailscale address, closes the other open
+     * ones, and answers no request on a connection that stayed open. */
+    enum { REQUEST = 1, LAN, TAILSCALE, LAN_V6, TAILSCALE_MAPPED, OTHER_TAILNET_HOST, LAN_TO_TAILSCALE };
     assert(jetkvm_access_register((void *)1, &device) == ESP_OK);
     jetkvm_access_set_tailscale_address(tailscale_address);
     tailscale_ip = "100.101.102.103";
@@ -735,13 +739,21 @@ int main(void) {
     socket_ips[LAN_V6] = "2001:db8::10"; socket_ips[TAILSCALE_MAPPED] = "::ffff:100.101.102.103";
     /* An address of the Tailscale range that is not the Mini's own. */
     socket_ips[OTHER_TAILNET_HOST] = "100.101.102.104";
+    /* A host of the local network that sent to the Mini's Tailscale address. */
+    socket_ips[LAN_TO_TAILSCALE] = "100.101.102.103";
+    /* The peers: tailnet nodes through the tunnel, hosts of the local
+     * network elsewhere. */
+    peer_ips[LAN] = "192.0.2.77"; peer_ips[TAILSCALE] = "100.101.102.50";
+    peer_ips[LAN_V6] = "2001:db8::77"; peer_ips[TAILSCALE_MAPPED] = "::ffff:100.101.102.50";
+    peer_ips[OTHER_TAILNET_HOST] = "100.101.102.50"; peer_ips[LAN_TO_TAILSCALE] = "192.0.2.77";
     assert(!jetkvm_access_get_tailscale_only());
-    for (int fd = LAN; fd <= OTHER_TAILNET_HOST; ++fd) assert(jetkvm_access_admits_socket(fd));
+    for (int fd = LAN; fd <= LAN_TO_TAILSCALE; ++fd) assert(jetkvm_access_admits_socket(fd));
     /* Which connection came through Tailscale does not depend on the setting. */
     assert(!jetkvm_access_socket_through_tailscale(LAN) && jetkvm_access_socket_through_tailscale(TAILSCALE) &&
            !jetkvm_access_socket_through_tailscale(LAN_V6) &&
            jetkvm_access_socket_through_tailscale(TAILSCALE_MAPPED) &&
-           !jetkvm_access_socket_through_tailscale(OTHER_TAILNET_HOST));
+           !jetkvm_access_socket_through_tailscale(OTHER_TAILNET_HOST) &&
+           !jetkvm_access_socket_through_tailscale(LAN_TO_TAILSCALE));
     host_header = "192.0.2.10";
     assert(request("/device", HTTP_GET, "", NULL, NULL) == 200 && !strcmp(response, "{}"));
     /* A value that is not stored changes nothing. */
@@ -756,9 +768,9 @@ int main(void) {
     for (int fd = 0; fd < OPEN_SOCKETS; ++fd) assert(!closed_sockets[fd]);
     assert(!jetkvm_access_set_tailscale_only(true) && jetkvm_access_get_tailscale_only());
     assert(closed_sockets[LAN] && closed_sockets[LAN_V6] && closed_sockets[OTHER_TAILNET_HOST] &&
-           !closed_sockets[TAILSCALE] && !closed_sockets[TAILSCALE_MAPPED]);
+           closed_sockets[LAN_TO_TAILSCALE] && !closed_sockets[TAILSCALE] && !closed_sockets[TAILSCALE_MAPPED]);
     assert(!jetkvm_access_admits_socket(LAN) && !jetkvm_access_admits_socket(LAN_V6) &&
-           !jetkvm_access_admits_socket(OTHER_TAILNET_HOST) &&
+           !jetkvm_access_admits_socket(OTHER_TAILNET_HOST) && !jetkvm_access_admits_socket(LAN_TO_TAILSCALE) &&
            jetkvm_access_admits_socket(TAILSCALE) && jetkvm_access_admits_socket(TAILSCALE_MAPPED));
     /* A request on a local connection that stayed open gets no answer, and
      * its connection is shut down: a request without a body, one with a
@@ -773,9 +785,14 @@ int main(void) {
         .method = HTTP_GET, .origin = "http://192.0.2.10"};
     assert(jetkvm_access_check_request(&local_socket, true) != ESP_OK && !response[0] &&
            closed_sockets[REQUEST]);
-    /* The same requests through Tailscale are answered, by address and by name. */
+    /* A request to the Tailscale address from a host of the local network
+     * gets no answer either. */
     memset(closed_sockets, 0, sizeof(closed_sockets));
     server_ip = "100.101.102.103"; host_header = "100.101.102.103";
+    assert(request("/device", HTTP_GET, "", NULL, NULL) == 200 && !response[0] && closed_sockets[REQUEST]);
+    /* The same requests through Tailscale are answered, by address and by name. */
+    memset(closed_sockets, 0, sizeof(closed_sockets));
+    client_ip = "100.101.102.50";
     assert(request("/device", HTTP_GET, "", NULL, NULL) == 200 && !strcmp(response, "{}") &&
            !closed_sockets[REQUEST]);
     host_header = "mini.local";
@@ -805,7 +822,7 @@ int main(void) {
     assert(jetkvm_access_get_tailscale_only());
     assert(!jetkvm_factory_reset_request(NULL)); complete_reset();
     assert(!jetkvm_access_get_tailscale_only() && jetkvm_access_admits_socket(LAN));
-    host_header = "mini.local";
-    memset(socket_ips, 0, sizeof(socket_ips));
+    host_header = "mini.local"; client_ip = "192.0.2.1";
+    memset(socket_ips, 0, sizeof(socket_ips)); memset(peer_ips, 0, sizeof(peer_ips));
     puts("Setup/reset integration: HTTP modes, persistence, rejection, login, legacy records, erasure and failed-phase recovery: PASS");
 }

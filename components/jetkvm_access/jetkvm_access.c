@@ -264,21 +264,28 @@ void jetkvm_access_set_tailscale_address(bool (*address)(uint8_t ipv4[4]))
 {
     s_tailscale_address = address;
 }
+/* The 4 bytes of an IPv4 address, also of one mapped into IPv6, else NULL. */
+static const uint8_t *socket_ipv4(const struct sockaddr_storage *address)
+{
+    if (address->ss_family == AF_INET) {
+        return (const uint8_t *)&((const struct sockaddr_in *)address)->sin_addr;
+    }
+    if (address->ss_family == AF_INET6 &&
+        IN6_IS_ADDR_V4MAPPED(&((const struct sockaddr_in6 *)address)->sin6_addr)) {
+        return (const uint8_t *)&((const struct sockaddr_in6 *)address)->sin6_addr + 12;
+    }
+    return NULL;
+}
 bool jetkvm_access_socket_through_tailscale(int fd)
 {
-    struct sockaddr_storage local;
-    socklen_t size = sizeof(local);
-    if (getsockname(fd, (struct sockaddr *)&local, &size) != 0) return false;
-    const uint8_t *own = NULL;
-    if (local.ss_family == AF_INET) {
-        own = (const uint8_t *)&((struct sockaddr_in *)&local)->sin_addr;
-    } else if (local.ss_family == AF_INET6 &&
-               IN6_IS_ADDR_V4MAPPED(&((struct sockaddr_in6 *)&local)->sin6_addr)) {
-        own = (const uint8_t *)&((struct sockaddr_in6 *)&local)->sin6_addr + 12;
-    }
+    struct sockaddr_storage local, peer;
+    socklen_t local_size = sizeof(local), peer_size = sizeof(peer);
+    if (getsockname(fd, (struct sockaddr *)&local, &local_size) != 0 ||
+        getpeername(fd, (struct sockaddr *)&peer, &peer_size) != 0) return false;
     uint8_t tailscale[4];
     bool known = s_tailscale_address && s_tailscale_address(tailscale);
-    return jetkvm_access_arrived_through_tailscale(own, known ? tailscale : NULL);
+    return jetkvm_access_arrived_through_tailscale(socket_ipv4(&local), socket_ipv4(&peer),
+                                                   known ? tailscale : NULL);
 }
 bool jetkvm_access_admits_socket(int fd)
 {
