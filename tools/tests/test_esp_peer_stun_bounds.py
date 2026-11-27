@@ -223,6 +223,15 @@ int main(void)
     datagram[43] = 1;
     assert(stun_msg_is_valid(datagram, 44, password) == -1);
     assert(stun_msg_is_valid_response(datagram, 44, STUN_CREDENTIAL_SHORT_TERM, NULL, NULL, password) == -1);
+
+    /* An attribute without its value before MESSAGE-INTEGRITY does not hide
+     * the attribute from the validator: a Binding request that has the
+     * attribute on the wire is not valid without a check of its value. */
+    stun_datagram(BINDING_REQUEST, 4 + 24, 48);
+    put16(datagram + 20, STUN_ATTR_TYPE_ERROR_CODE);
+    put16(datagram + 24, STUN_ATTR_TYPE_MESSAGE_INTEGRITY); put16(datagram + 26, 20);
+    datagram[47] = 1;
+    assert(stun_msg_is_valid(datagram, 48, password) == -1);
     return 0;
 }
 '''
