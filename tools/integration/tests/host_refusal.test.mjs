@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { test } from 'node:test';
+import { gunzipSync } from 'node:zlib';
 import { connect } from '../lib/mini.mjs';
 
 const NAME = 'kvm.bench.example';
@@ -16,8 +17,12 @@ test('a name the Mini does not know gets 421 with the way to add it, and no deta
       headers: { Host: host, ...headers } }, response => {
       const chunks = [];
       response.on('data', chunk => chunks.push(chunk));
-      response.on('end', () => resolve({ status: response.statusCode, type: response.headers['content-type'],
-        cache: response.headers['cache-control'], body: Buffer.concat(chunks).toString() }));
+      // The Mini stores the page of the UI compressed and sends it so.
+      response.on('end', () => {
+        const bytes = Buffer.concat(chunks);
+        resolve({ status: response.statusCode, type: response.headers['content-type'], cache: response.headers['cache-control'],
+          body: (response.headers['content-encoding'] === 'gzip' ? gunzipSync(bytes) : bytes).toString() });
+      });
     });
     request.on('timeout', () => request.destroy(new Error(`no answer for Host ${host}`)));
     request.on('error', reject);
