@@ -131,7 +131,7 @@ static void apply_dns(void *arg)
 bool jetkvm_network_settings_ipv6_supported(void)
 {
 #if CONFIG_LWIP_IPV6_AUTOCONFIG
-    return esp_netif_get_handle_from_ifkey("ETH_DEF") != NULL;
+    return active_netif() != NULL;
 #else
     return false;
 #endif

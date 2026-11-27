@@ -1218,6 +1218,9 @@ static void c5_wifi_event_handler(void *argument, esp_event_base_t event_base,
         }
         if (event_id == WIFI_EVENT_STA_CONNECTED) {
             __atomic_store_n(&s_station_associated, true, __ATOMIC_RELEASE);
+            /* The station interface starts with lwIP's own choice for IPv6;
+             * the ipv6_mode setting decides from here on. */
+            jetkvm_network_settings_link_up();
         } else if (event_id == WIFI_EVENT_STA_STOP) {
             __atomic_store_n(&s_station_associated, false, __ATOMIC_RELEASE);
             __atomic_store_n(&s_station_connected, false, __ATOMIC_RELEASE);
@@ -1267,6 +1270,8 @@ static void c5_wifi_event_handler(void *argument, esp_event_base_t event_base,
                 esp_wifi_get_mac(WIFI_IF_STA, mac) == ESP_OK ? mac : NULL;
             jetkvm_board_network_set_wifi_state(
                 true, mac_pointer, &event->ip_info.ip);
+            /* Also here: the link is up for certain when the address arrives. */
+            jetkvm_network_settings_link_up();
             __atomic_store_n(&s_station_connected, true, __ATOMIC_RELEASE);
             /* The next offline period gets a new setup code. */
             c5_pop_retire();

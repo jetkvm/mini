@@ -33,8 +33,8 @@ bool jetkvm_network_settings_static_applies(const jetkvm_network_settings_t *set
                                             const char *static_ssid, const char *wifi_ssid);
 
 esp_err_t jetkvm_network_settings_init(esp_netif_t *netif);
-/* The interface takes an ipv6_mode other than "disabled": the Ethernet
- * interface of a build with CONFIG_LWIP_IPV6_AUTOCONFIG. */
+/* The interface takes an ipv6_mode other than "disabled": a build with
+ * CONFIG_LWIP_IPV6_AUTOCONFIG whose interface exists. */
 bool jetkvm_network_settings_ipv6_supported(void);
 /* The interface has an IPv6 address that is not link-local and that it
  * prefers: an address that a WebRTC session can offer to the browser. */

@@ -14,7 +14,3 @@ CONFIG_WEBRTC_TRANSPORT_TASK_STACK=16384
 # and the 16 px Montserrat face supplies its icons.
 CONFIG_JETKVM_SCREEN_BUTTONS=y
 CONFIG_LV_FONT_MONTSERRAT_16=y
-
-# IPv6 addresses from router advertisements (SLAAC) for the ipv6_mode setting.
-# Its default is "disabled", and the interface then has no IPv6 address.
-CONFIG_LWIP_IPV6_AUTOCONFIG=y

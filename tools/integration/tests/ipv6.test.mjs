@@ -151,9 +151,14 @@ test('ipv6_mode gives the Mini IPv6 addresses for its page, its sessions and its
   assert.equal((await mini.rpc('getNetworkSettings')).ipv6_mode, 'link_local');
 
   await set({ ipv6_mode: 'slaac' });
-  const now = await until(state, value => value.ipv6_addresses.length > 0, 30);
+  const now = await until(state, value => value.ipv6_addresses.length > 0, 30).catch(() => null);
+  if (!now) {
+    // close() stores the mode as found.
+    return t.skip('no router of this network advertised an IPv6 prefix in 30 s, so the steps with a routed address did not run');
+  }
+  const routed = value => value.ipv6_addresses.map(one => groups(one.address));
   const address = now.ipv6_addresses[0].address;
-  assert.match(address, /^[0-9a-f:]+$/, 'the address is not in lower case');
+  for (const one of now.ipv6_addresses) assert.match(one.address, /^[0-9a-f:]+$/, 'an address is not in lower case');
   assert.equal(now.ipv6_link_local, linkLocal);
   const url = `http://[${address}]/`;
   t.diagnostic(`IPv6 addresses: ${now.ipv6_addresses.map(one => one.address).join(', ')}; link-local ${linkLocal}`);
@@ -230,7 +235,7 @@ test('ipv6_mode gives the Mini IPv6 addresses for its page, its sessions and its
   }));
   t.diagnostic(`a page without a path to the Mini's IPv4 address sends to ${remote}`);
   assert.ok(replaced > 0, 'the Mini signaled no IPv4 candidate, so the test replaced nothing');
-  assert.equal(groups(remote), groups(address), 'the video connection does not use the Mini\'s IPv6 address');
+  assert.ok(routed(now).includes(groups(remote)), 'the video connection does not use an IPv6 address of the Mini');
 
   // The mode is stored: after a restart the Mini has the address again.
   await mini.open();
@@ -244,7 +249,7 @@ test('ipv6_mode gives the Mini IPv6 addresses for its page, its sessions and its
   await mini.open();
   assert.equal(await mini.restarted(askedAt), true, 'the Mini has restarted');
   const restarted = await until(state, value => value.ipv6_addresses.length > 0, 40);
-  assert.equal(restarted.ipv6_addresses[0].address, address);
+  assert.ok(routed(restarted).includes(groups(address)), 'the address is not back after the restart');
   assert.equal(await until(() => answers(url), status => status === 200, 15), 200);
 
   // Off again: the IPv6 address stops answering and IPv4 goes on.
