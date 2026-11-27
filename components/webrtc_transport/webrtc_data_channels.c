@@ -542,6 +542,19 @@ static bool render_video_input_event(transport_ctx_t *ctx,
     return true;
 }
 
+/* The parts of a context that the capability list is derived from. The
+ * deviceCapabilities event and the RPC context both take them from here, so
+ * that the event and getDeviceCapabilities report the same list: the UI reads
+ * only the event. A provider that a new capability needs belongs here. */
+static void set_capability_providers(jetkvm_control_context_t *context)
+{
+    context->get_wifi_settings = jetkvm_c5_wifi_get_settings;
+    context->virtual_media.get_state = rpc_get_virtual_media_state_adapter;
+    context->get_network_settings = jetkvm_network_settings_get;
+    context->set_network_settings = jetkvm_network_settings_set;
+    context->network_ipv6 = jetkvm_network_settings_ipv6_supported();
+}
+
 static bool render_rpc_event(transport_ctx_t *ctx, webrtc_rpc_event_kind_t kind,
                              const webrtc_rpc_event_snapshot_t *snapshot,
                              char *output, size_t capacity, size_t *size)
@@ -558,12 +571,8 @@ static bool render_rpc_event(transport_ctx_t *ctx, webrtc_rpc_event_kind_t kind,
             app_version, system_version, JETKVM_DEVICE_SKU, output, capacity, size);
     }
     if (kind == WEBRTC_RPC_EVENT_DEVICE_CAPABILITIES) {
-        /* The providers getDeviceCapabilities derives the board's features
-         * from (see the RPC context below), so both report the same list. */
-        static const jetkvm_control_context_t board = {
-            .get_wifi_settings = jetkvm_c5_wifi_get_settings,
-            .virtual_media = {.get_state = rpc_get_virtual_media_state_adapter},
-        };
+        jetkvm_control_context_t board = {0};
+        set_capability_providers(&board);
         return jetkvm_control_render_capabilities_notification(
             &board, output, capacity, size);
     }
@@ -1369,7 +1378,6 @@ int peer_on_data(esp_peer_data_frame_t *frame, void *arg)
                 .get = rpc_get_usb_configuration,
             },
             .virtual_media = {
-                .get_state = rpc_get_virtual_media_state_adapter,
                 .get_space = rpc_get_virtual_media_space_adapter,
                 .list_files = rpc_list_virtual_media_files_adapter,
                 .delete_file = rpc_delete_virtual_media_file_adapter,
@@ -1396,14 +1404,12 @@ int peer_on_data(esp_peer_data_frame_t *frame, void *arg)
         /* Taken on demand by getNetworkState through the hook; every other
          * RPC frame skips the network lock and the lwIP lease inspection. */
         control_context.snapshot_network = jetkvm_network_snapshot;
-        control_context.get_network_settings = jetkvm_network_settings_get;
-        control_context.get_wifi_settings = jetkvm_c5_wifi_get_settings;
+        set_capability_providers(&control_context);
         control_context.set_wifi_band = jetkvm_c5_wifi_set_band;
         control_context.scan_wifi_networks = jetkvm_c5_wifi_scan_networks;
         control_context.save_wifi_network = jetkvm_c5_wifi_save_network;
         control_context.remove_wifi_network = jetkvm_c5_wifi_remove_network;
         control_context.connect_wifi_network = jetkvm_c5_wifi_connect_network;
-        control_context.set_network_settings = jetkvm_network_settings_set;
         control_context.renew_dhcp_lease = jetkvm_network_renew_dhcp;
         control_context.get_mac_address_settings = jetkvm_mac_address_settings_get;
         control_context.set_mac_address_settings = jetkvm_mac_address_settings_set;

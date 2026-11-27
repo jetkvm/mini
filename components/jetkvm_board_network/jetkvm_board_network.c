@@ -344,7 +344,9 @@ static void screen_network_apply(jetkvm_screen_state_t *state)
     screen_copy_text(state->mac, sizeof(state->mac), runtime.mac);
     screen_copy_text(state->ipv4, sizeof(state->ipv4),
                      state->network_connected ? runtime.ipv4 : "");
+    /* "" unless the ipv6_mode setting gave the interface an address. */
     state->ipv6[0] = '\0';
+    if (state->network_connected) jetkvm_network_ipv6_address(state->ipv6, sizeof(state->ipv6));
 }
 
 static void screen_cloud_domain_from_url(char *destination, size_t capacity,
@@ -511,6 +513,7 @@ static void eth_event_handler(void *arg, esp_event_base_t event_base,
                 (void)esp_eth_ioctl(eth_handle, ETH_CMD_G_DUPLEX_MODE, &duplex);
             }
             screen_network_set_link(true, eth_handle);
+            jetkvm_network_settings_link_up();
             ESP_LOGI(ETH_TAG,
                      "Link Up HW=%02x:%02x:%02x:%02x:%02x:%02x speed=%s duplex=%s",
                      mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3],
@@ -542,11 +545,16 @@ static void eth_event_handler(void *arg, esp_event_base_t event_base,
     if (event_id == IP_EVENT_ETH_GOT_IP && event_data != NULL) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         screen_network_set_ipv4(&event->ip_info.ip);
+        /* Also here: the link is up for certain when the address arrives. */
+        jetkvm_network_settings_link_up();
         ESP_LOGI(ETH_TAG, "ETH Got IP: " IPSTR " gw: " IPSTR,
                  IP2STR(&event->ip_info.ip), IP2STR(&event->ip_info.gw));
     } else if (event_id == IP_EVENT_ETH_LOST_IP) {
         screen_network_set_ipv4(NULL);
         ESP_LOGI(ETH_TAG, "ETH Lost IP");
+    } else if (event_id == IP_EVENT_GOT_IP6 && event_data != NULL) {
+        ip_event_got_ip6_t *event = (ip_event_got_ip6_t *)event_data;
+        ESP_LOGI(ETH_TAG, "ETH Got IPv6: " IPV6STR, IPV62STR(event->ip6_info.ip));
     }
 }
 
@@ -562,6 +570,12 @@ void jetkvm_board_network_ethernet_start(void)
     esp_netif_netstack_config_t tracked_stack = *cfg.stack;
     tracked_stack.lwip.input_fn = jetkvm_ethernet_input;
     cfg.stack = &tracked_stack;
+    /* With CONFIG_LWIP_IPV6_AUTOCONFIG the default interface takes an address
+     * from each router advertisement. The ipv6_mode setting decides that
+     * (jetkvm_network_settings_link_up), and its default is "disabled". */
+    esp_netif_inherent_config_t base = *cfg.base;
+    base.flags &= ~ESP_NETIF_FLAG_IPV6_AUTOCONFIG_ENABLED;
+    cfg.base = &base;
     esp_netif_t *eth_netif = esp_netif_new(&cfg);
     ESP_ERROR_CHECK(eth_netif != NULL ? ESP_OK : ESP_ERR_NO_MEM);
     ESP_ERROR_CHECK((esp_netif_get_flags(eth_netif) &

@@ -77,7 +77,8 @@ static bool ntp_server(const char *text)
 bool jetkvm_network_settings_from_blob(const void *blob, size_t size, jetkvm_network_settings_t *settings)
 {
     if (!blob || !settings || (size != sizeof(*settings) && size != JETKVM_NETWORK_SETTINGS_LEGACY_SIZE &&
-                               size != JETKVM_NETWORK_SETTINGS_TIME_SYNC_SIZE)) return false;
+                               size != JETKVM_NETWORK_SETTINGS_TIME_SYNC_SIZE &&
+                               size != JETKVM_NETWORK_SETTINGS_MDNS_SIZE)) return false;
     memset(settings, 0, sizeof(*settings));
     memcpy(settings, blob, size);
     return jetkvm_network_settings_validate(settings) == NULL;
@@ -116,6 +117,7 @@ const char *jetkvm_network_settings_validate(const jetkvm_network_settings_t *se
     if (bytes[offsetof(jetkvm_network_settings_t, time_sync_custom)] > 1 ||
         bytes[offsetof(jetkvm_network_settings_t, time_sync_disable_fallback)] > 1) return "Invalid time sync mode";
     if (settings->mdns_mode > JETKVM_MDNS_MODE_IPV4_ONLY) return "Invalid mDNS mode";
+    if (settings->ipv6_mode > JETKVM_IPV6_MODE_LINK_LOCAL) return "Invalid IPv6 mode";
     for (size_t i = 0; i < JETKVM_TIME_SYNC_MAX_SERVERS; ++i) {
         if (!memchr(settings->time_sync_ntp_servers[i], 0, sizeof(settings->time_sync_ntp_servers[i])) ||
             (settings->time_sync_ntp_servers[i][0] && !ntp_server(settings->time_sync_ntp_servers[i])))

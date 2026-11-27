@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Lays out the Mini's screens with LVGL on this machine, for both boards, with
 # the production button code, and checks two things:
-# - each IPv4 address stays inside its line on the home screen, without the
-#   button strip and with the strip at each edge
-#   (host_renderer/test_home_address_fit.c);
+# - each IPv4 address stays inside its line on the home screen and each IPv6
+#   address on its two lines, without the button strip and with the strip at
+#   each edge (host_renderer/test_home_address_fit.c);
 # - Advanced > Tailscale Only is on the page only while the setting is on, and
 #   a hold on it asks to turn the setting off
 #   (host_renderer/test_tailscale_only_menu.c).

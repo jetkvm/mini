@@ -44,6 +44,7 @@
 #include "jetkvm_hid_input.h"
 #include "jetkvm_hid_profiles.h"
 #include "jetkvm_memory_policy.h"
+#include "jetkvm_network_settings.h"
 #include "jetkvm_settings.h"
 #include "jetkvm_usb_service.h"
 #include "jetkvm_video_quality.h"
@@ -1745,6 +1746,12 @@ static esp_err_t open_peer(transport_ctx_t *ctx, uint32_t session_id,
         .alive_binding_retries = 3,
         .keep_role =
             role != WEBRTC_TRANSPORT_SESSION_LOCAL_CONTROLLING,
+        /* A second UDP socket and a host candidate for the interface's IPv6
+         * address, so that a browser that reaches the Mini only over IPv6
+         * gets video. Not for a session through the cloud: its signaling and
+         * its STUN servers use IPv4. */
+        .ipv6_support = role != WEBRTC_TRANSPORT_SESSION_CLOUD_CONTROLLED &&
+                        jetkvm_network_ipv6_routed(),
     };
     esp_peer_cfg_t peer_cfg = {
         .role = role != WEBRTC_TRANSPORT_SESSION_LOCAL_CONTROLLING ?

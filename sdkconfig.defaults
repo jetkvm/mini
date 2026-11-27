@@ -100,6 +100,9 @@ CONFIG_WEBRTC_TRANSPORT_RTP_POOL_BYTES=1048576
 CONFIG_LWIP_MAX_SOCKETS=16
 # User-provided NTP servers ahead of the public fallback.
 CONFIG_LWIP_SNTP_MAX_SERVERS=4
+# IPv6 addresses from router advertisements (SLAAC) for the ipv6_mode setting.
+# Its default is "disabled", and the interface then has no IPv6 address.
+CONFIG_LWIP_IPV6_AUTOCONFIG=y
 
 # mDNS responder (components/jetkvm_mdns): the Ethernet or the Wi-Fi station
 # interface and one service. It only answers, so no browse and no console

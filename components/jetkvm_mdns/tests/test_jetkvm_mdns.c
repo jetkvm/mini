@@ -43,10 +43,13 @@ static void test_plan(void)
     jetkvm_mdns_plan(&device, &plan);
     expect_service(&plan, 443, "false");
 
+    assert(!plan.ipv4_only);
+
     device = base();
     device.mode = JETKVM_MDNS_MODE_IPV4_ONLY;
     jetkvm_mdns_plan(&device, &plan);
     expect_service(&plan, 80, "false");
+    assert(plan.ipv4_only);
 
     device.mode = JETKVM_MDNS_MODE_DISABLED;
     jetkvm_mdns_plan(&device, &plan);
@@ -90,6 +93,14 @@ static void test_changes(void)
     device.https_port = 443;
     jetkvm_mdns_plan(&device, &wanted);
     assert(jetkvm_mdns_changes(&running, &wanted) == (JETKVM_MDNS_HOSTNAME | JETKVM_MDNS_PORT));
+
+    /* "ipv4_only" and "auto" differ in the address families only. */
+    device = base();
+    device.mode = JETKVM_MDNS_MODE_IPV4_ONLY;
+    jetkvm_mdns_plan(&device, &wanted);
+    assert(jetkvm_mdns_changes(&running, &wanted) == JETKVM_MDNS_FAMILIES);
+    assert(jetkvm_mdns_changes(&wanted, &running) == JETKVM_MDNS_FAMILIES);
+    assert(jetkvm_mdns_changes(&stopped, &wanted) == JETKVM_MDNS_START);
 
     device = base();
     device.mode = JETKVM_MDNS_MODE_DISABLED;

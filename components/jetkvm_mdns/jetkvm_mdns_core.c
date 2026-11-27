@@ -8,6 +8,7 @@ void jetkvm_mdns_plan(const jetkvm_mdns_device_t *device, jetkvm_mdns_plan_t *pl
     memset(plan, 0, sizeof(*plan));
     if (device->mode == JETKVM_MDNS_MODE_DISABLED || !device->hostname[0]) return;
     plan->enabled = true;
+    plan->ipv4_only = device->mode == JETKVM_MDNS_MODE_IPV4_ONLY;
     /* Upstream answers to the lower-case name; the instance keeps the case. */
     for (size_t i = 0; device->hostname[i] && i + 1 < sizeof(plan->hostname); ++i) {
         plan->hostname[i] = (char)tolower((unsigned char)device->hostname[i]);
@@ -30,6 +31,7 @@ unsigned jetkvm_mdns_changes(const jetkvm_mdns_plan_t *running, const jetkvm_mdn
     if (strcmp(running->hostname, wanted->hostname) || strcmp(running->instance, wanted->instance))
         changes |= JETKVM_MDNS_HOSTNAME;
     if (running->port != wanted->port) changes |= JETKVM_MDNS_PORT;
+    if (running->ipv4_only != wanted->ipv4_only) changes |= JETKVM_MDNS_FAMILIES;
     for (size_t i = 0; i < JETKVM_MDNS_TXT_COUNT; ++i) {
         if (strcmp(running->txt[i].value, wanted->txt[i].value)) changes |= JETKVM_MDNS_TXT;
     }

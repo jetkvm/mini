@@ -11,6 +11,7 @@ These have nothing Mini-specific in them:
 - **Connection retries** (`src/webrtc/signaling/useWebSocketSignaling.ts`, `tests/signaling-lifecycle.mjs`). A failed attempt (no answer within 10 s, no data channel, failed peer) is retried up to three times on a new signaling socket before the page shows the failure.
 - **Upload speed and time left** (`src/utils/uploadEta.ts`, `tests/upload-eta.mjs`, `src/routes/devices.$id.mount.tsx`). The rate is measured over the last 10 s, so it falls during a stall.
 - **Clickable settings rows** (`src/components/SettingsItem.tsx`). Clicking a row's text no longer presses the row's button.
+- **IPv6 information card** (`src/routes/devices.$id.settings.network.tsx`, `src/components/Ipv6NetworkCard.tsx`). The card is hidden while the IPv6 mode is Disabled or the device reports no IPv6 address, and the Gateway field is shown only with a value.
 - **Component options** used by the features below: `SplitButton` sizes, themes and item descriptions, an optional description in `SettingsSectionHeader`, and a `VideoPausedOverlay` that takes its title and text.
 - **Inter instead of Circular** (`src/assets/fonts/`, `src/index.css`, `index.html`, `MetricsChart.tsx`). Inter is under the OFL, so it can ship in an open-source build; Circular is a commercial font.
 
@@ -24,6 +25,7 @@ Each of these is behind a capability that the firmware reports, so the UI shows 
 | Tailscale on its own settings page | `tailscale` | `devices.$id.settings.tailscale.tsx`, `TailscaleCard.tsx` |
 | Web interface through Tailscale only, on the Tailscale page | `tailscale_only` | `TailscaleCard.tsx` |
 | Extra host names the KVM answers under while it has no password | `extra_hostnames` | `devices.$id.settings.access._index.tsx`, `e2e/extra-hostnames.spec.ts` |
+| The IPv6 mode Static and the mDNS mode IPv6 only in the network settings. The page offers a mode only to a device that reports its capability. Upstream's firmware takes both modes and reports neither capability, so it must report them before upstream takes this change | `ipv6_static`, `mdns_ipv6_only` | `devices.$id.settings.network.tsx`, `e2e/mini/network-modes.spec.ts` |
 | Display rotation in quarter turns, display buttons | `display_quarter_turns`, `display_buttons` | `devices.$id.settings.hardware.tsx` |
 | TF card space, image count and exFAT format | `removable_storage` | `devices.$id.mount.tsx` |
 | Versioned cloud setup page after adoption | none; read from the registration response | `src/routes/adopt.tsx`, `tests/adoption-routing.mjs` |

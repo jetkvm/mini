@@ -36,11 +36,15 @@ export default function Ipv6NetworkCard({
               <span className="text-sm font-medium">{networkState?.ipv6_link_local}</span>
             </div>
 
-            <div className="flex flex-col justify-between">
-              <span className="text-sm text-slate-600 dark:text-slate-400">{m.ipv6_gateway()}</span>
-              &nbsp;
-              <span className="text-sm font-medium">{networkState?.ipv6_gateway}</span>
-            </div>
+            {networkState?.ipv6_gateway && (
+              <div className="flex flex-col justify-between">
+                <span className="text-sm text-slate-600 dark:text-slate-400">
+                  {m.ipv6_gateway()}
+                </span>
+                &nbsp;
+                <span className="text-sm font-medium">{networkState.ipv6_gateway}</span>
+              </div>
+            )}
           </div>
 
           <div className="space-y-3 pt-2">

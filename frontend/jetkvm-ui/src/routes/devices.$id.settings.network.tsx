@@ -97,7 +97,9 @@ export default function SettingsNetworkRoute() {
   const hasHttpProxy = useCapability("http_proxy");
   const hasDomain = useCapability("domain");
   const hasMdns = useCapability("mdns");
+  const hasMdnsIpv6Only = useCapability("mdns_ipv6_only");
   const hasIpv6 = useCapability("ipv6");
+  const hasIpv6Static = useCapability("ipv6_static");
   const hasWifi = useCapability("wifi");
   const setNetworkState = useNetworkStateStore(state => state.setNetworkState);
 
@@ -374,6 +376,12 @@ export default function SettingsNetworkRoute() {
   const dhcpClient = watch("dhcp_client");
   const ipv4mode = watch("ipv4_mode");
   const ipv6mode = watch("ipv6_mode");
+  // The information card has nothing to show with IPv6 off or without an address.
+  const ipv6CardHidden =
+    ipv6mode === "disabled" ||
+    (ipv6mode !== "static" &&
+      !networkState?.ipv6_link_local &&
+      !networkState?.ipv6_addresses?.length);
   const domain = watch("domain");
   const timeSyncMode = watch("time_sync_mode");
 
@@ -529,7 +537,9 @@ export default function SettingsNetworkRoute() {
                       { value: "disabled", label: m.network_mdns_disabled() },
                       { value: "auto", label: m.network_mdns_auto() },
                       { value: "ipv4_only", label: m.network_mdns_ipv4_only() },
-                      { value: "ipv6_only", label: m.network_mdns_ipv6_only() },
+                      ...(hasMdnsIpv6Only
+                        ? [{ value: "ipv6_only", label: m.network_mdns_ipv6_only() }]
+                        : []),
                     ]}
                     {...register("mdns_mode")}
                   />
@@ -640,14 +650,16 @@ export default function SettingsNetworkRoute() {
                       options={[
                         { value: "disabled", label: m.network_ipv6_mode_disabled() },
                         { value: "slaac", label: m.network_ipv6_mode_slaac() },
-                        { value: "static", label: m.network_ipv6_mode_static() },
+                        ...(hasIpv6Static
+                          ? [{ value: "static", label: m.network_ipv6_mode_static() }]
+                          : []),
                         { value: "link_local", label: m.network_ipv6_mode_link_local() },
                       ]}
                       {...register("ipv6_mode")}
                     />
                   </SettingsItem>
 
-                  <div className="space-y-4">
+                  <div className="space-y-4" hidden={ipv6CardHidden}>
                     <AutoHeight>
                       {!networkState ? (
                         <GridCard>

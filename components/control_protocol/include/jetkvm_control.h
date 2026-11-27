@@ -984,6 +984,10 @@ typedef struct {
 #define JETKVM_NETWORK_HOSTNAME_CAPACITY 64U
 #define JETKVM_NETWORK_MAC_CAPACITY 18U
 #define JETKVM_NETWORK_IPV4_CAPACITY 16U
+/* An IPv6 address as text, with its terminator. */
+#define JETKVM_NETWORK_IPV6_CAPACITY 46U
+/* Addresses of router advertisements that a snapshot reports. */
+#define JETKVM_NETWORK_IPV6_ADDRESSES 2U
 #define JETKVM_NETWORK_TIMESTAMP_CAPACITY 32U
 #define JETKVM_TIME_SYNC_MAX_SERVERS 3U
 #define JETKVM_TIME_SYNC_SERVER_CAPACITY 64U
@@ -1003,11 +1007,24 @@ typedef struct {
     /* A jetkvm_mdns_mode_t. Appended after the time-sync layout; older blobs
      * load as 0, upstream's default "auto". */
     uint8_t mdns_mode;
+    /* A jetkvm_ipv6_mode_t. Appended after mdns_mode; older blobs load as 0,
+     * "disabled". */
+    uint8_t ipv6_mode;
 } jetkvm_network_settings_t;
 
-/* The mDNS responder setting (upstream mdns_mode). The Mini has no IPv6
- * address, so "auto" answers on IPv4 only, as "ipv4_only" does, and upstream's
- * "ipv6_only" is not supported. */
+/* The IPv6 setting (upstream ipv6_mode). The Mini takes "disabled",
+ * "link_local" (the link-local address only) and "slaac" (also the addresses
+ * of the router advertisements). Upstream's "static", "dhcpv6" and
+ * "slaac_and_dhcpv6" are not supported. IPv4 does not depend on the mode. */
+typedef enum {
+    JETKVM_IPV6_MODE_DISABLED = 0,
+    JETKVM_IPV6_MODE_SLAAC = 1,
+    JETKVM_IPV6_MODE_LINK_LOCAL = 2,
+} jetkvm_ipv6_mode_t;
+
+/* The mDNS responder setting (upstream mdns_mode). "auto" answers on IPv4 and,
+ * on an interface with IPv6 addresses (ipv6_mode), on IPv6; "ipv4_only" keeps
+ * IPv6 out. Upstream's "ipv6_only" is not supported. */
 typedef enum {
     JETKVM_MDNS_MODE_AUTO = 0,
     JETKVM_MDNS_MODE_DISABLED = 1,
@@ -1044,6 +1061,9 @@ typedef struct {
     char lease_server[16];
     char lease_expiry[JETKVM_NETWORK_TIMESTAMP_CAPACITY];
     unsigned lease_seconds;
+    /* "" without one. The addresses are those that the interface prefers. */
+    char ipv6_link_local[JETKVM_NETWORK_IPV6_CAPACITY];
+    char ipv6_addresses[JETKVM_NETWORK_IPV6_ADDRESSES][JETKVM_NETWORK_IPV6_CAPACITY];
 } jetkvm_network_state_t;
 
 typedef struct {
@@ -1272,6 +1292,9 @@ typedef struct {
     const char *(*connect_wifi_network)(const char *ssid, void *ctx);
     bool (*get_network_settings)(jetkvm_network_settings_t *settings, void *ctx);
     const char *(*set_network_settings)(const jetkvm_network_settings_t *settings, void *ctx);
+    /** The interface takes an ipv6_mode other than "disabled". Without it the
+     *  mode is a read-only "disabled" and the UI hides the IPv6 setting. */
+    bool network_ipv6;
     const char *(*renew_dhcp_lease)(void *ctx);
     /** The MAC address setting; it takes effect at the next boot. */
     bool (*get_mac_address_settings)(jetkvm_mac_address_settings_t *settings, void *ctx);

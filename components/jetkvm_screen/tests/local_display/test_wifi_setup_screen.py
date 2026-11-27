@@ -45,6 +45,8 @@ static size_t strlcpy(char *d, const char *s, size_t n) {
  size_t l = strlen(s); if (n) { size_t c = l < n - 1 ? l : n - 1; memcpy(d, s, c); d[c] = 0; } return l;
 }
 static void wifi_update_display_mode(void) {}
+/* The interface of this test has no IPv6 address. */
+static void jetkvm_network_ipv6_address(char *address, size_t capacity) { if (capacity) address[0] = 0; }
 static char title[64], line[64];
 static struct { int no_network_title, home_info_ipv6_addr_1; } objects = {1, 2};
 static void set_label_text(int obj, const char *text) { strcpy(obj == 1 ? title : line, text); }

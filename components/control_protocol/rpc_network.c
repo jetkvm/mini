@@ -9,6 +9,41 @@ static const struct { const char *key; const char *value; } fixed_settings[] = {
     {"dhcp_client", "lwip"}, {"domain", "local"}, {"http_proxy", ""},
     {"ipv6_mode", "disabled"}, {"lldp_mode", "disabled"},
 };
+/* ipv6_mode is fixed only on an interface without IPv6 (context->network_ipv6). */
+static bool fixed_setting(const jetkvm_control_context_t *context, size_t index)
+{
+    return !context->network_ipv6 || strcmp(fixed_settings[index].key, "ipv6_mode") != 0;
+}
+static const char *const ipv6_mode_names[] = {
+    [JETKVM_IPV6_MODE_DISABLED] = "disabled",
+    [JETKVM_IPV6_MODE_SLAAC] = "slaac",
+    [JETKVM_IPV6_MODE_LINK_LOCAL] = "link_local",
+};
+#define IPV6_MODE_COUNT (sizeof(ipv6_mode_names) / sizeof(ipv6_mode_names[0]))
+static const char *ipv6_mode_name(uint8_t mode)
+{
+    return mode < IPV6_MODE_COUNT ? ipv6_mode_names[mode] : "disabled";
+}
+/* For an interface with IPv6; without it ipv6_mode is one of fixed_settings.
+ * Returns NULL when parsed, otherwise "ipv6_mode" for an upstream mode that
+ * the Mini does not have or "" for malformed input. A missing mode is
+ * "disabled". */
+static const char *parse_ipv6_mode(const jetkvm_control_context_t *context, const cJSON *settings,
+                                   jetkvm_network_settings_t *parsed)
+{
+    if (!context->network_ipv6) return NULL;
+    const cJSON *mode = cJSON_GetObjectItemCaseSensitive(settings, "ipv6_mode");
+    if (!mode || cJSON_IsNull(mode)) return NULL;
+    if (!cJSON_IsString(mode)) return "";
+    for (uint8_t i = 0; i < IPV6_MODE_COUNT; ++i) {
+        if (strcmp(mode->valuestring, ipv6_mode_names[i]) == 0) {
+            parsed->ipv6_mode = i;
+            return NULL;
+        }
+    }
+    return strcmp(mode->valuestring, "static") == 0 || strcmp(mode->valuestring, "dhcpv6") == 0 ||
+           strcmp(mode->valuestring, "slaac_and_dhcpv6") == 0 ? "ipv6_mode" : "";
+}
 static const char *const mdns_mode_names[] = {
     [JETKVM_MDNS_MODE_AUTO] = "auto",
     [JETKVM_MDNS_MODE_DISABLED] = "disabled",
@@ -20,8 +55,8 @@ static const char *mdns_mode_name(uint8_t mode)
     return mode < MDNS_MODE_COUNT ? mdns_mode_names[mode] : "auto";
 }
 /* Returns NULL when parsed, otherwise "mdns_mode" for upstream's ipv6_only
- * (the Mini has no IPv6 address) or "" for malformed input. A missing mode
- * saves upstream's default, auto. */
+ * (the Mini's responder always answers on IPv4) or "" for malformed input. A
+ * missing mode saves upstream's default, auto. */
 static const char *parse_mdns_mode(const cJSON *settings, jetkvm_network_settings_t *parsed)
 {
     const cJSON *mode = cJSON_GetObjectItemCaseSensitive(settings, "mdns_mode");
@@ -42,7 +77,8 @@ static const char *time_sync_mode_name(const jetkvm_network_settings_t *settings
     return settings->time_sync_custom ? "custom" : "ntp_only";
 }
 
-static cJSON *settings_json(const jetkvm_network_settings_t *settings)
+static cJSON *settings_json(const jetkvm_control_context_t *context,
+                            const jetkvm_network_settings_t *settings)
 {
     cJSON *result = cJSON_CreateObject();
     cJSON *readonly = cJSON_AddArrayToObject(result, "read_only_fields");
@@ -51,6 +87,10 @@ static cJSON *settings_json(const jetkvm_network_settings_t *settings)
         !cJSON_AddStringToObject(result, "ipv4_mode", settings->dhcp ? "dhcp" : "static") ||
         !cJSON_AddStringToObject(result, "mdns_mode", mdns_mode_name(settings->mdns_mode))) goto fail;
     for (size_t i = 0; i < sizeof(fixed_settings) / sizeof(fixed_settings[0]); ++i) {
+        if (!fixed_setting(context, i)) {
+            if (!cJSON_AddStringToObject(result, "ipv6_mode", ipv6_mode_name(settings->ipv6_mode))) goto fail;
+            continue;
+        }
         if (!cJSON_AddStringToObject(result, fixed_settings[i].key, fixed_settings[i].value) ||
             !cJSON_AddItemToArray(readonly, cJSON_CreateString(fixed_settings[i].key))) goto fail;
     }
@@ -91,7 +131,7 @@ bool rpc_get_network_settings(const jetkvm_control_context_t *context,
         dispatch->error_message = "Network settings unavailable";
         return true;
     }
-    dispatch->result = settings_json(&settings);
+    dispatch->result = settings_json(context, &settings);
     return dispatch->result != NULL;
 }
 
@@ -167,6 +207,7 @@ bool rpc_set_network_settings(const jetkvm_control_context_t *context,
         (strcmp(mode, "dhcp") != 0 && strcmp(mode, "static") != 0)) goto invalid;
     parsed.dhcp = strcmp(mode, "dhcp") == 0;
     for (size_t i = 0; i < sizeof(fixed_settings) / sizeof(fixed_settings[0]); ++i) {
+        if (!fixed_setting(context, i)) continue;
         const cJSON *value = cJSON_GetObjectItemCaseSensitive(settings, fixed_settings[i].key);
         if (value && !cJSON_IsNull(value) &&
             (!cJSON_IsString(value) || strcmp(value->valuestring, fixed_settings[i].value) != 0)) {
@@ -177,6 +218,7 @@ bool rpc_set_network_settings(const jetkvm_control_context_t *context,
         }
     }
     const char *unsupported = parse_mdns_mode(settings, &parsed);
+    if (!unsupported) unsupported = parse_ipv6_mode(context, settings, &parsed);
     if (!unsupported) unsupported = parse_time_sync(settings, &parsed);
     if (unsupported && !unsupported[0]) goto invalid;
     if (unsupported) {
@@ -253,7 +295,7 @@ bool rpc_set_network_settings(const jetkvm_control_context_t *context,
     }
     /* Reply with what was saved, like upstream; the setter may fill a default hostname. */
     if (context->get_network_settings) (void)context->get_network_settings(&parsed, context->network_ctx);
-    dispatch->result = settings_json(&parsed);
+    dispatch->result = settings_json(context, &parsed);
     return dispatch->result != NULL;
 invalid:
     dispatch->error_code = -32602;
@@ -337,15 +379,34 @@ static cJSON *network_state_json(const jetkvm_network_state_t *state)
 {
     cJSON *result = cJSON_CreateObject();
     cJSON *ipv4 = cJSON_AddArrayToObject(result, "ipv4_addresses");
-    if (!result || !ipv4 || !cJSON_AddArrayToObject(result, "ipv6_addresses") ||
+    cJSON *ipv6 = cJSON_AddArrayToObject(result, "ipv6_addresses");
+    if (!result || !ipv4 || !ipv6 ||
         !cJSON_AddStringToObject(result, "interface_name", state->interface_name) ||
         !cJSON_AddStringToObject(result, "hostname", state->hostname) ||
         !cJSON_AddStringToObject(result, "mac_address", state->mac_address) ||
         !cJSON_AddBoolToObject(result, "up", state->up) ||
         !cJSON_AddBoolToObject(result, "online", state->online) ||
         !cJSON_AddBoolToObject(result, "ipv4_ready", state->ipv4_ready) ||
-        !cJSON_AddBoolToObject(result, "ipv6_ready", false) ||
+        !cJSON_AddBoolToObject(result, "ipv6_ready", state->ipv6_link_local[0] != '\0') ||
         !cJSON_AddStringToObject(result, "last_updated", state->last_updated)) goto fail;
+    /* Upstream's fields: the UI lists ipv6_addresses and shows the lifetimes
+     * only when they have a value. The Mini does not read the lifetimes. */
+    if (state->ipv6_link_local[0] &&
+        !cJSON_AddStringToObject(result, "ipv6_link_local", state->ipv6_link_local)) goto fail;
+    for (size_t i = 0; i < JETKVM_NETWORK_IPV6_ADDRESSES; ++i) {
+        if (!state->ipv6_addresses[i][0]) continue;
+        cJSON *address = cJSON_CreateObject();
+        if (!address || !cJSON_AddItemToArray(ipv6, address)) {
+            cJSON_Delete(address);
+            goto fail;
+        }
+        if (!cJSON_AddStringToObject(address, "address", state->ipv6_addresses[i]) ||
+            !cJSON_AddStringToObject(address, "prefix", "") ||
+            !cJSON_AddStringToObject(address, "valid_lifetime", "") ||
+            !cJSON_AddStringToObject(address, "preferred_lifetime", "") ||
+            !cJSON_AddStringToObject(address, "scope", "global") ||
+            !cJSON_AddNumberToObject(address, "flags", 0)) goto fail;
+    }
     if (state->ipv4_ready &&
         (!cJSON_AddStringToObject(result, "ipv4_address", state->ipv4_address) ||
          !cJSON_AddItemToArray(ipv4, cJSON_CreateString(state->ipv4_address)))) goto fail;

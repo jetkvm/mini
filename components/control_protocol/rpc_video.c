@@ -52,6 +52,9 @@ static bool add_capability(cJSON *list, bool present, const char *name)
  * (getExtraHostnames, setExtraHostnames), so the UI shows that setting.
  * "mdns": the network settings carry mdns_mode, so the UI shows the mDNS
  * setting.
+ * "ipv6": the interface takes an ipv6_mode other than "disabled", so the UI
+ * shows the IPv6 setting. The Mini does not report "ipv6_static", so the UI
+ * leaves the "static" mode out.
  * "storage_download": the build registered a download into the TF card that
  * starts and cancels (startStorageDownload, cancelStorageDownload), so the
  * mount page shows "Download from URL".
@@ -86,6 +89,8 @@ static cJSON *device_capabilities_json(const jetkvm_control_context_t *context)
                         "extra_hostnames") ||
         !add_capability(result, context && context->get_network_settings &&
                         context->set_network_settings, "mdns") ||
+        !add_capability(result, context && context->network_ipv6 &&
+                        context->set_network_settings, "ipv6") ||
         !add_capability(result, s_default_storage_download.start &&
                                     s_default_storage_download.cancel,
                         "storage_download") ||

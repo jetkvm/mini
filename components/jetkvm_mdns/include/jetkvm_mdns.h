@@ -8,7 +8,9 @@
  *
  * The responder uses the predefined interfaces of espressif/mdns: ETH_DEF on
  * the Ethernet board, WIFI_STA_DEF on the Wi-Fi board. It follows their link
- * and address events itself.
+ * and address events itself, and with them it answers over IPv6 and with the
+ * IPv6 addresses of an interface that has them (the ipv6_mode setting). The
+ * mode "ipv4_only" turns that off.
  */
 #include <stdbool.h>
 #include <stddef.h>
@@ -44,6 +46,8 @@ typedef struct {
 /* The responder as it must run. */
 typedef struct {
     bool enabled;
+    /* No answer over IPv6 and no AAAA record (the mode "ipv4_only"). */
+    bool ipv4_only;
     char hostname[JETKVM_NETWORK_HOSTNAME_CAPACITY]; /* lower case, without ".local" */
     char instance[JETKVM_NETWORK_HOSTNAME_CAPACITY];
     uint16_t port;
@@ -60,6 +64,7 @@ enum {
     JETKVM_MDNS_HOSTNAME = 1U << 2,
     JETKVM_MDNS_PORT = 1U << 3,
     JETKVM_MDNS_TXT = 1U << 4,
+    JETKVM_MDNS_FAMILIES = 1U << 5,
 };
 unsigned jetkvm_mdns_changes(const jetkvm_mdns_plan_t *running, const jetkvm_mdns_plan_t *wanted);
 
