@@ -2762,6 +2762,91 @@ for (const secure of [true, false]) {
   });
 }
 
+test('the fake cloud passes a session\'s offer and candidate to the Mini, and the Mini\'s answer and candidate to the browser', async () => {
+  const port = await freePort();
+  const cloud = startFakeCloud(`http://127.0.0.1:${port}/oidc/jwks`, { tls: false });
+  // A frame as the Mini sends it: masked, with a 7-bit or a 16-bit length.
+  const frame = (opcode, last, text) => {
+    const payload = Buffer.from(text);
+    const mask = Buffer.from([7, 11, 13, 17]);
+    const length = payload.length < 126 ? Buffer.from([0x80 | payload.length])
+      : Buffer.from([0x80 | 126, payload.length >> 8, payload.length & 0xff]);
+    return Buffer.concat([Buffer.from([(last ? 0x80 : 0) | opcode]), length, mask, payload.map((byte, i) => byte ^ mask[i % 4])]);
+  };
+  try {
+    const adoption = cloud.adoption();
+    const { secretToken } = JSON.parse((await ask(`${cloud.url}/devices/token`, { method: 'POST', body: JSON.stringify({ tempToken: adoption.token }) })).body);
+    const socket = net.connect(port, '127.0.0.1');
+    socket.on('error', () => {});
+    await new Promise(resolve => socket.once('connect', resolve));
+    socket.write('GET / HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n' +
+      `Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nAuthorization: Bearer ${secretToken}\r\n\r\n`);
+    await new Promise(resolve => socket.once('data', resolve));
+    // The text messages that the cloud sends to the Mini; its pings are skipped.
+    let received = Buffer.alloc(0);
+    const texts = [];
+    socket.on('data', chunk => {
+      received = Buffer.concat([received, chunk]);
+      for (;;) {
+        if (received.length < 2) return;
+        const short = received[1] & 0x7f;
+        const lengthBytes = short === 126 ? 2 : short === 127 ? 8 : 0;
+        if (received.length < 2 + lengthBytes) return;
+        const length = short === 126 ? received.readUInt16BE(2) : short === 127 ? Number(received.readBigUInt64BE(2)) : short;
+        if (received.length < 2 + lengthBytes + length) return;
+        if (received[0] === 0x81) texts.push(received.subarray(2 + lengthBytes, 2 + lengthBytes + length).toString());
+        received = received.subarray(2 + lengthBytes + length);
+      }
+    });
+
+    const toBrowser = [];
+    const session = cloud.session(message => toBrowser.push(message));
+    // An offer of a session is longer than the 65535 bytes of a 16-bit length.
+    const sd = 'o'.repeat(70_000);
+    const candidate = { candidate: 'candidate:1 1 udp 1 192.0.2.9 5000 typ relay', sdpMid: '0', sdpMLineIndex: 0 };
+    session.offer(sd, ['stun:192.0.2.1:3478']);
+    session.candidate(candidate);
+    await until(() => texts.length === 2, 2000, 'the Mini did not get the offer and the candidate');
+    const offer = JSON.parse(texts[0]);
+    assert.equal(offer.type, 'offer');
+    assert.equal(offer.data.sd, sd);
+    assert.deepEqual(offer.data.iceServers, ['stun:192.0.2.1:3478']);
+    // The login that the cloud adds is signed with the key of its key set.
+    const { keys } = JSON.parse((await ask(`${cloud.url}/oidc/jwks`)).body);
+    const [head, claims, signature] = offer.data.OidcGoogle.split('.');
+    assert.ok(verify('sha256', Buffer.from(`${head}.${claims}`), createPublicKey({ key: keys[0], format: 'jwk' }), Buffer.from(signature, 'base64url')));
+    assert.deepEqual(JSON.parse(texts[1]), { type: 'new-ice-candidate', data: candidate });
+
+    // The Mini sends its answer in parts, here with a ping between them, and
+    // then a candidate. A message of another type is not for the browser.
+    const answer = JSON.stringify({ type: 'answer', data: 'a'.repeat(300) });
+    socket.write(Buffer.concat([frame(0x1, false, answer.slice(0, 200)), frame(0x9, true, 'hi'), frame(0x0, true, answer.slice(200)),
+      frame(0x1, true, JSON.stringify({ type: 'other', data: 1 })), frame(0x1, true, JSON.stringify({ type: 'new-ice-candidate', data: candidate }))]));
+    await until(() => toBrowser.length === 2, 2000, 'the browser did not get the answer and the candidate');
+    assert.deepEqual(toBrowser, [{ type: 'answer', data: 'a'.repeat(300) }, { type: 'new-ice-candidate', data: candidate }]);
+
+    // A closed session gets no message, and a cloud without the Mini's socket passes no offer.
+    session.close();
+    socket.write(frame(0x1, true, JSON.stringify({ type: 'new-ice-candidate', data: candidate })));
+    const closed = new Promise(resolve => socket.once('close', resolve));
+    cloud.drop();
+    await closed;
+    assert.equal(toBrowser.length, 2);
+    // The cloud sees the end of the socket a moment after the client does.
+    await until(() => !cloud.connected(), 2000, 'the cloud still has the Mini\'s socket');
+    await until(() => {
+      try {
+        session.offer(sd);
+        return false;
+      } catch (error) {
+        return /the Mini has no socket at the cloud/.test(error.message);
+      }
+    }, 2000, 'the cloud passed an offer without the Mini\'s socket');
+  } finally {
+    cloud.close();
+  }
+});
+
 // A Mini for an adoption: its /adopt page, its cloud state, and a
 // registration that exchanges the token at the cloud, as the Mini does.
 // refuse: the registration answers 500 without asking the cloud.

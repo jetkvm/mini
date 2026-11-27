@@ -33,6 +33,7 @@ run "python unittest discover (tools)" \
     python3 -m unittest discover -s tools/tests -t . -p "test_*.py" -q
 
 run "tools/combined_load unit tests" node --test tools/combined_load/runner/combined_load.test.mjs
+run "tools/integration stand-in TURN server" node --test tools/integration/lib/turn.test.mjs
 run "patches/tests/run_static_test.sh" bash patches/tests/run_static_test.sh
 
 if [ "$failed" -ne 0 ]; then

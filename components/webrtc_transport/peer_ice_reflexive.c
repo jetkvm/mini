@@ -59,7 +59,8 @@ void *jetkvm_ice_authenticated_pair(void *agent, const esp_peer_addr_t *source,
         source->ipv4[0], source->ipv4[1], source->ipv4[2], source->ipv4[3],
         (unsigned)source->port);
     if (length <= 0 || (size_t)length >= sizeof(candidate)) return NULL;
-    /* This SDK has no prflx type and pairs only equal candidate types. Store
+    /* This SDK has no prflx type, and a remote candidate that is not a relay
+     * candidate pairs only with the local candidate of its own type. Store
      * the learned direct UDP endpoint as a host candidate internally, with
      * the request's PRIORITY. It is not advertised in SDP. Use the normal
      * bounded allocators, preserving existing candidates and credentials. */

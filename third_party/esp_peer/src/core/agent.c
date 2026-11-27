@@ -183,6 +183,19 @@ PRIVATE bool agent_pair_exists(agent_t *agent, ice_candidate_t *local, ice_candi
  return false;
 }
 
+/* Whether the agent checks a local candidate against a remote one. Candidates
+ * of equal type pair. A remote relay candidate is an address on the peer's
+ * TURN server, which a local candidate that sends directly can reach as any
+ * other address, so it also pairs with the local host candidate. The local
+ * server-reflexive candidate sends from the socket of the host candidate, so
+ * a pair with it would send each check a second time. */
+PRIVATE bool agent_candidates_pair(const ice_candidate_t *local,const ice_candidate_t *remote) {
+ if (local->addr.family!=remote->addr.family || local->transport!=remote->transport) return false;
+ if (local->type==remote->type) return true;
+ return remote->type==ICE_CANDIDATE_TYPE_RELAY && local->type==ICE_CANDIDATE_TYPE_HOST &&
+        local->transport==ICE_CANDIDATE_TRANSPORT_UDP;
+}
+
 void jetkvm_ice_pair_candidates(void *handle) {
  agent_t *agent=handle;
  int i,j,n;
@@ -191,13 +204,14 @@ void jetkvm_ice_pair_candidates(void *handle) {
   for(j=0;j<agent->remote_candidates_count;j++) {
    ice_candidate_t *remote=&agent->remote_candidates[j];
    if (force_tcp_only && remote->transport!=ICE_CANDIDATE_TRANSPORT_TCP) continue;
-   if (agent->local_candidates[i].type==remote->type &&
-       agent->local_candidates[i].addr.family==remote->addr.family &&
-       agent->local_candidates[i].transport==remote->transport &&
+   if (agent_candidates_pair(&agent->local_candidates[i],remote) &&
        agent->candidate_pairs_num<agent->max_paired_candidates &&
        !agent_pair_exists(agent,&agent->local_candidates[i],remote)) {
     ice_candidate_pair_t *pair=&agent->candidate_pairs[agent->candidate_pairs_num];
-    pair->type=remote->type;pair->local=&agent->local_candidates[i];pair->remote=remote;
+    /* The type of a pair says how the agent sends on it: a relay pair goes
+     * through the agent's own TURN allocation, any other pair goes out of
+     * the socket. That depends on the local candidate only. */
+    pair->type=agent->local_candidates[i].type;pair->local=&agent->local_candidates[i];pair->remote=remote;
     pair->priority=(uint64_t)agent->local_candidates[i].priority+remote->priority;
     pair->state=ICE_CANDIDATE_STATE_FROZEN;
     agent->sort_pairs[agent->candidate_pairs_num]=pair;agent->candidate_pairs_num++;
@@ -816,6 +830,18 @@ void *jetkvm_ice_find_pair(void *handle,const esp_peer_addr_t *addr) {
  return NULL;
 }
 
+/* The pair of a packet that a peer address sent through the agent's own TURN
+ * allocation. When that address is a relay address of the peer, a direct pair
+ * has the same remote address and sorts before the relay pair, but the
+ * packet did not come on it. */
+PRIVATE ice_candidate_pair_t *agent_find_relayed_pair(agent_t *agent,const esp_peer_addr_t *addr) {
+ for (int i=0;i<agent->candidate_pairs_num;i++) {
+  ice_candidate_pair_t *pair=agent->sort_pairs[i];
+  if (pair->type==ICE_CANDIDATE_TYPE_RELAY && agent_same_addr(addr,&pair->remote->addr)) return pair;
+ }
+ return jetkvm_ice_find_pair(agent,addr);
+}
+
 PRIVATE void agent_process_stun_request(agent_t *agent, esp_peer_addr_t *remote, stun_msg_t *stun_msg)
 {
     char ip_str[128];
@@ -867,7 +893,7 @@ PRIVATE void agent_process_stun_request(agent_t *agent, esp_peer_addr_t *remote,
             }
             break;
         case STUN_METHOD_DATA: {
-            ice_candidate_pair_t *pair = jetkvm_ice_find_pair(agent, &stun_msg->relayed_addr);
+            ice_candidate_pair_t *pair = agent_find_relayed_pair(agent, &stun_msg->relayed_addr);
             if (!pair) {
                 LOGE("%d Not found for bind remote22 %s", agent->mode, esp_peer_addr_to_str(remote, ip_str));
                 break;

@@ -1,6 +1,7 @@
 // A stand-in for JetKVM Cloud: the sign-in and name pages an adoption passes,
 // the login's key set, the token exchange, the Mini's WebSocket and device
-// removal. It does not relay sessions.
+// removal. session() relays the signaling of one browser session to the Mini
+// and back, as cloud-api's webrtc-signaling.ts does.
 //
 // The Mini must run a bench build that takes its keys from this server
 // (JETKVM_MOCK_CLOUD_JWKS_URL) and trusts the e2e test CA. The server's TLS
@@ -73,8 +74,8 @@ export function serverCertificate(urlHost) {
  *
  * Returns the cloud: its `url`, `signInPage()` for the browser that adopts
  * the Mini, `adoption()` for the Mini's /cloud/register, `connected()`,
- * `socketAt()`, `handshakes()`, `asked()`, `drop()`, `problem()` and
- * `close()`.
+ * `socketAt()`, `handshakes()`, `asked()`, `session()`, `drop()`,
+ * `problem()` and `close()`.
  */
 export function startFakeCloud(jwksUrl, { tls = true } = {}) {
   const { hostname, port } = new URL(jwksUrl);
@@ -95,15 +96,37 @@ export function startFakeCloud(jwksUrl, { tls = true } = {}) {
   let tokenExchanges = 0;   // adoption tokens that were exchanged
   let sockets = 0;          // WebSockets of the Mini that were accepted
   let appVersion = null;    // the version that the Mini's newest WebSocket named
+  let toBrowser = null;     // takes the Mini's answer and candidates of the session that session() relays
 
-  // A token to exchange and a login that this cloud signed.
-  const adoption = () => {
+  // A login that this cloud signed, for the account that adopts the Mini.
+  const login = () => {
     const now = Math.floor(Date.now() / 1000);
     const head = `${base64url(JSON.stringify({ alg: 'RS256', kid, typ: 'JWT' }))}.` +
       base64url(JSON.stringify({ iss: 'https://accounts.google.com', aud: CLIENT_ID, sub: 'combined-load', iat: now, exp: now + 3600 }));
+    return `${head}.${base64url(sign('sha256', Buffer.from(head), privateKey))}`;
+  };
+  // A token to exchange and a login.
+  const adoption = () => {
     tempToken = randomBytes(16).toString('hex');
     problem = null;
-    return { token: tempToken, oidcGoogle: `${head}.${base64url(sign('sha256', Buffer.from(head), privateKey))}`, clientId: CLIENT_ID };
+    return { token: tempToken, oidcGoogle: login(), clientId: CLIENT_ID };
+  };
+  // One text message to the Mini, as a server sends it: one frame, no mask.
+  const sendText = text => {
+    const payload = Buffer.from(text);
+    let header;
+    if (payload.length < 126) {
+      header = Buffer.from([0x81, payload.length]);
+    } else if (payload.length < 65536) {
+      header = Buffer.from([0x81, 126, 0, 0]);
+      header.writeUInt16BE(payload.length, 2);
+    } else {
+      header = Buffer.alloc(10);
+      header[0] = 0x81;
+      header[1] = 127;
+      header.writeBigUInt64BE(BigInt(payload.length), 2);
+    }
+    socket.write(Buffer.concat([header, payload]));
   };
 
   // The TLS handshake of each connection, until its first request says whose
@@ -185,6 +208,7 @@ export function startFakeCloud(jwksUrl, { tls = true } = {}) {
     sockets++;
     appVersion = request.headers['x-app-version'] ?? null;
     let buffer = Buffer.alloc(0);
+    let fragments = [];   // the frames of a message that the Mini sends in parts, as it does with an answer
     connection.on('data', chunk => {
       heardAt = Date.now();
       buffer = Buffer.concat([buffer, chunk]);
@@ -200,9 +224,23 @@ export function startFakeCloud(jwksUrl, { tls = true } = {}) {
         const mask = buffer.subarray(start - 4, start);
         const payload = Buffer.from(buffer.subarray(start, start + length).map((byte, i) => byte ^ mask[i % 4]));
         const opcode = buffer[0] & 0x0f;
+        const last = (buffer[0] & 0x80) !== 0;
         buffer = buffer.subarray(start + length);
         if (opcode === 0x9 && payload.length < 126) connection.write(Buffer.concat([Buffer.from([0x8a, payload.length]), payload]));
         if (opcode === 0x8) return connection.destroy();
+        if (opcode > 0x2) continue;
+        // A text message or a part of one: the Mini's signaling.
+        fragments.push(payload);
+        if (!last) continue;
+        const text = Buffer.concat(fragments).toString('utf8');
+        fragments = [];
+        let message = null;
+        try {
+          message = JSON.parse(text);
+        } catch {
+          // not signaling
+        }
+        if (message?.type === 'answer' || message?.type === 'new-ice-candidate') toBrowser?.({ type: message.type, data: message.data });
       }
     });
     connection.on('close', () => { if (socket === connection) socket = null; });
@@ -278,6 +316,28 @@ export function startFakeCloud(jwksUrl, { tls = true } = {}) {
      * null before the first socket and for a socket without that header.
      */
     asked: () => ({ keyFetches, tokenExchanges, sockets, appVersion }),
+    /**
+     * Relays the signaling of one browser session. `browser` takes the Mini's
+     * messages for the browser, { type: 'answer' | 'new-ice-candidate', data }.
+     * Returns what the browser sends: offer(sd, iceServers) with the `sd` of
+     * the browser's offer message and the URLs of the STUN servers that the
+     * cloud gives the Mini (the cloud gives it no TURN login), candidate(data)
+     * with the data of a new-ice-candidate message, and close(). The offer
+     * carries a login of the account that adopted the Mini, as the cloud adds
+     * it. A new session takes the place of the one before it.
+     */
+    session(browser) {
+      toBrowser = browser;
+      const toMini = (type, data) => {
+        if (!socket) throw new Error('the Mini has no socket at the cloud');
+        sendText(JSON.stringify({ type, data }));
+      };
+      return {
+        offer: (sd, iceServers = []) => toMini('offer', { sd, ip: socket?.remoteAddress ?? '', iceServers, OidcGoogle: login() }),
+        candidate: data => toMini('new-ice-candidate', data),
+        close: () => { if (toBrowser === browser) toBrowser = null; },
+      };
+    },
     /** Closes the Mini's WebSocket without a close frame, as a cloud that loses the connection does. */
     drop: () => { socket?.destroy(); },
     /** Why a request since the last adoption() did not get to the cloud, or null. */
