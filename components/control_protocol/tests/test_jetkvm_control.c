@@ -1232,6 +1232,80 @@ static void test_extra_hostnames_contract(void)
     jetkvm_control_set_default_extra_hostnames_context(NULL);
 }
 
+static unsigned stored_timeout;
+static unsigned timeout_activity;
+static bool timeout_storage_fails;
+static unsigned timeout_get(void *ctx) { assert(ctx == &stored_timeout); return stored_timeout; }
+static const char *timeout_set(unsigned minutes, void *ctx)
+{
+    assert(ctx == &stored_timeout && minutes <= JETKVM_SESSION_TIMEOUT_MAX_MINUTES);
+    if (timeout_storage_fails) return "The session timeout could not be stored";
+    stored_timeout = minutes;
+    return NULL;
+}
+static void note_timeout_activity(void) { ++timeout_activity; }
+static void test_session_timeout_contract(void)
+{
+    jetkvm_control_context_t none = {0};
+    expect_rpc_context(&none, "{\"jsonrpc\":\"2.0\",\"method\":\"getLocalAuthSessionTimeout\",\"id\":1}",
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32601,\"message\":\"Method not found\"}}");
+    jetkvm_control_set_default_session_timeout_context(&(jetkvm_session_timeout_context_t){
+        .get = timeout_get, .set = timeout_set, .ctx = &stored_timeout});
+    expect_rpc_context(&none, "{\"jsonrpc\":\"2.0\",\"method\":\"getLocalAuthSessionTimeout\",\"params\":{},\"id\":2}",
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":0}");
+    expect_rpc_context(&none, "{\"jsonrpc\":\"2.0\",\"method\":\"setLocalAuthSessionTimeout\",\"params\":{\"timeoutMinutes\":15},\"id\":3}",
+        "{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":null}");
+    expect_rpc_context(&none, "{\"jsonrpc\":\"2.0\",\"method\":\"getLocalAuthSessionTimeout\",\"id\":4}",
+        "{\"jsonrpc\":\"2.0\",\"id\":4,\"result\":15}");
+    expect_rpc_context(&none, "{\"jsonrpc\":\"2.0\",\"method\":\"setLocalAuthSessionTimeout\",\"params\":{\"timeoutMinutes\":1440},\"id\":5}",
+        "{\"jsonrpc\":\"2.0\",\"id\":5,\"result\":null}");
+    /* Upstream refuses values outside 0..1440 minutes; so do these. */
+    const char *invalid[] = {"{\"timeoutMinutes\":-1}", "{\"timeoutMinutes\":1441}",
+        "{\"timeoutMinutes\":2.5}", "{\"timeoutMinutes\":\"5\"}", "{}"};
+    for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+        char request[256];
+        snprintf(request, sizeof(request),
+            "{\"jsonrpc\":\"2.0\",\"method\":\"setLocalAuthSessionTimeout\",\"params\":%s,\"id\":6}", invalid[i]);
+        expect_rpc_context(&none, request,
+            "{\"jsonrpc\":\"2.0\",\"id\":6,\"error\":{\"code\":-32602,\"message\":\"Invalid params\","
+            "\"data\":\"session timeout must be between 0 and 1440 minutes\"}}");
+    }
+    assert(stored_timeout == 1440);
+    timeout_storage_fails = true;
+    expect_rpc_context(&none, "{\"jsonrpc\":\"2.0\",\"method\":\"setLocalAuthSessionTimeout\",\"params\":{\"timeoutMinutes\":5},\"id\":7}",
+        "{\"jsonrpc\":\"2.0\",\"id\":7,\"error\":{\"code\":-32603,\"message\":\"Internal error\","
+        "\"data\":\"The session timeout could not be stored\"}}");
+    timeout_storage_fails = false;
+
+    /* A local session's state-changing calls are activity; the reads the UI
+     * polls, ping and unknown methods are not. */
+    jetkvm_control_context_t local = {.note_local_activity = note_timeout_activity};
+    expect_rpc_context(&local, "{\"jsonrpc\":\"2.0\",\"method\":\"getLocalAuthSessionTimeout\",\"id\":8}",
+        "{\"jsonrpc\":\"2.0\",\"id\":8,\"result\":1440}");
+    expect_rpc_context(&local, "{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":9}",
+        "{\"jsonrpc\":\"2.0\",\"id\":9,\"result\":\"pong\"}");
+    expect_rpc_context(&local, "{\"jsonrpc\":\"2.0\",\"method\":\"setNoSuchThing\",\"id\":10}",
+        "{\"jsonrpc\":\"2.0\",\"id\":10,\"error\":{\"code\":-32601,\"message\":\"Method not found\"}}");
+    assert(timeout_activity == 0);
+    expect_rpc_context(&local, "{\"jsonrpc\":\"2.0\",\"method\":\"setLocalAuthSessionTimeout\",\"params\":{\"timeoutMinutes\":0},\"id\":11}",
+        "{\"jsonrpc\":\"2.0\",\"id\":11,\"result\":null}");
+    assert(timeout_activity == 1);
+    const char *readers[] = {"getVideoState", "listStorageFiles", "checkMountUrl", "isUpdatePending", "ping"};
+    for (size_t i = 0; i < sizeof(readers) / sizeof(readers[0]); ++i)
+        assert(!jetkvm_control_rpc_counts_as_activity(readers[i]));
+    const char *writers[] = {"setJigglerState", "keyboardReport", "absMouseReport", "wheelReport",
+        "reboot", "mountWithHTTP", "wakeHost", "renewDHCPLease", "guestClipboardSet"};
+    for (size_t i = 0; i < sizeof(writers) / sizeof(writers[0]); ++i)
+        assert(jetkvm_control_rpc_counts_as_activity(writers[i]));
+    assert(jetkvm_control_hidrpc_counts_as_activity(JETKVM_HIDRPC_EVENT_KEYPRESS_REPORT));
+    assert(jetkvm_control_hidrpc_counts_as_activity(JETKVM_HIDRPC_EVENT_ABS_MOUSE_REPORT));
+    assert(jetkvm_control_hidrpc_counts_as_activity(JETKVM_HIDRPC_EVENT_KEYBOARD_MACRO_REPORT));
+    assert(jetkvm_control_hidrpc_counts_as_activity(JETKVM_HIDRPC_EVENT_CANCEL_KEYBOARD_MACRO_REPORT));
+    assert(!jetkvm_control_hidrpc_counts_as_activity(JETKVM_HIDRPC_EVENT_KEYPRESS_KEEPALIVE_REPORT));
+    jetkvm_control_set_default_session_timeout_context(NULL);
+    puts("Session timeout RPCs and local activity: OK");
+}
+
 static unsigned deregister_calls;
 static const char *deregister_error;
 static const char *deregister_device(void *ctx)
@@ -1781,6 +1855,7 @@ int main(void)
     test_hidrpc();
     test_tls_contract();
     test_extra_hostnames_contract();
+    test_session_timeout_contract();
     test_board_capabilities();
     test_audio_contract();
     test_cloud_deregistration();

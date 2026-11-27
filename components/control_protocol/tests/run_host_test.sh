@@ -19,6 +19,7 @@ cc -std=c11 -Wall -Wextra -Werror \
   "$repo_root/components/control_protocol/rpc_ota.c" \
   "$repo_root/components/control_protocol/rpc_tls.c" \
   "$repo_root/components/control_protocol/rpc_extra_hostnames.c" \
+  "$repo_root/components/control_protocol/rpc_session_timeout.c" \
   "$repo_root/components/control_protocol/rpc_tailscale.c" \
   "$repo_root/components/control_protocol/rpc_mqtt.c" \
   "$repo_root/components/control_protocol/rpc_macros.c" \

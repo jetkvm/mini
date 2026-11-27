@@ -11,6 +11,7 @@
 #include <string.h>
 #include <strings.h>
 #include "cJSON.h"
+#include "esp_log.h"
 #include "esp_random.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -40,6 +41,16 @@ static atomic_uint s_epoch;
 static atomic_uint s_expiry;
 static atomic_bool s_enabled;
 static atomic_bool s_setup;
+/* Idle timeout of the local login (upstream localAuthSessionTimeoutMinutes):
+ * 0 is off. The last activity is a tick count, which is monotonic and kept
+ * in RAM only, like the token. */
+static atomic_uint s_idle_minutes;
+static atomic_uint s_last_activity;
+/* The token and the epoch that the last idle expiry ended: a request with
+ * that cookie gets the session_expired code, and a signaling socket of that
+ * epoch closes with code 4003. */
+static char s_expired_token[65];
+static atomic_uint s_expired_epoch;
 typedef struct {
     char ip[INET6_ADDRSTRLEN];
     int64_t next_attempt_us, expires_us;
@@ -203,7 +214,8 @@ esp_err_t jetkvm_access_rejection_result(httpd_req_t *req)
 {
     return rejection_closes(req) ? ESP_FAIL : ESP_OK;
 }
-static esp_err_t json_error(httpd_req_t *req, const char *status, const char *message)
+static esp_err_t json_error_code(httpd_req_t *req, const char *status, const char *message,
+                                 const char *code)
 {
     httpd_resp_set_status(req, status);
     if (rejection_closes(req)) httpd_resp_set_hdr(req, "Connection", "close");
@@ -213,10 +225,15 @@ static esp_err_t json_error(httpd_req_t *req, const char *status, const char *me
      * redirects on.  With no-store that fetch stays in flight and pages
      * waiting for network idle never settle.  Upstream sends no directive. */
     httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
-    char body[128];
-    snprintf(body, sizeof(body), "{\"error\":\"%s\"}", message);
+    char body[160];
+    if (code) snprintf(body, sizeof(body), "{\"error\":\"%s\",\"code\":\"%s\"}", message, code);
+    else snprintf(body, sizeof(body), "{\"error\":\"%s\"}", message);
     (void)httpd_resp_sendstr(req, body);
     return jetkvm_access_rejection_result(req);
+}
+static esp_err_t json_error(httpd_req_t *req, const char *status, const char *message)
+{
+    return json_error_code(req, status, message, NULL);
 }
 void jetkvm_access_set_host_names(size_t (*names)(char (*names)[JETKVM_ACCESS_HOST_NAME_CAPACITY],
                                                   size_t capacity))
@@ -391,10 +408,10 @@ static bool origin_allowed(httpd_req_t *req, bool required)
     snprintf(expected, sizeof(expected), "%s://%s", owner->secure ? "https" : "http", host);
     return strcmp(origin, expected) == 0;
 }
-static bool cookie_matches(httpd_req_t *req)
+static bool cookie_has(httpd_req_t *req, const char *token)
 {
     char cookie[1024];
-    if (!s_token[0] || httpd_req_get_hdr_value_str(req, "Cookie", cookie, sizeof(cookie)) != ESP_OK) return false;
+    if (!token[0] || httpd_req_get_hdr_value_str(req, "Cookie", cookie, sizeof(cookie)) != ESP_OK) return false;
     bool match = false;
     char *part = cookie;
     while (part && *part) {
@@ -402,11 +419,81 @@ static bool cookie_matches(httpd_req_t *req)
         char *end = strchr(part, ';');
         size_t length = end ? (size_t)(end - part) : strlen(part);
         if (length == 10 + 64 && memcmp(part, "authToken=", 10) == 0 &&
-            jetkvm_password_equal(part + 10, s_token, 64)) match = true;
+            jetkvm_password_equal(part + 10, token, 64)) match = true;
         part = end ? end + 1 : NULL;
     }
     wipe(cookie, sizeof(cookie));
     return match;
+}
+static bool cookie_matches(httpd_req_t *req) { return cookie_has(req, s_token); }
+static void rotate_token(bool issue);
+static uint32_t idle_timeout_ticks(void)
+{
+    return jetkvm_access_lifetime_ticks(atomic_load(&s_idle_minutes) * 60U, configTICK_RATE_HZ);
+}
+/* Upstream counts protected HTTP requests, input and state-changing RPC calls
+ * as activity; the signaling paths only keep a connection alive. */
+static bool signaling_path(const httpd_req_t *req);
+void jetkvm_access_note_activity(void)
+{
+    atomic_store(&s_last_activity, xTaskGetTickCount());
+}
+/* A password and a timeout, and no activity for the timeout. Lock-free, so a
+ * caller can poll it; expire_idle_locked() decides, and needs a token. The
+ * token's own lifetime does not count: a session that input kept past it
+ * still expires when it goes idle. */
+static bool login_idle(void)
+{
+    uint32_t timeout = idle_timeout_ticks();
+    /* The activity first: a store between the two reads then only makes the
+     * difference smaller, where the other order would wrap it. */
+    uint32_t last = atomic_load(&s_last_activity);
+    uint32_t now = xTaskGetTickCount();
+    return timeout && atomic_load(&s_enabled) && now - last >= timeout;
+}
+static bool expire_idle_locked(void)
+{
+    if (!login_idle() || !s_token[0]) return false;
+    memcpy(s_expired_token, s_token, sizeof(s_expired_token));
+    atomic_store(&s_expired_epoch, atomic_load(&s_epoch));
+    /* A new epoch ends the local session of the login: its signaling socket,
+     * peer, queued input and uploads, as a password change does. */
+    rotate_token(false);
+    ESP_LOGI("jetkvm_access", "local login expired after inactivity");
+    return true;
+}
+bool jetkvm_access_expire_idle(void)
+{
+    if (!s_mutex || !login_idle()) return false;
+    xSemaphoreTakeRecursive(s_mutex, portMAX_DELAY);
+    bool expired = expire_idle_locked();
+    jetkvm_access_unlock();
+    return expired;
+}
+bool jetkvm_access_epoch_expired(uint32_t epoch)
+{
+    return epoch && epoch == atomic_load(&s_expired_epoch);
+}
+unsigned jetkvm_access_get_idle_minutes(void) { return atomic_load(&s_idle_minutes); }
+const char *jetkvm_access_set_idle_minutes(unsigned minutes)
+{
+    if (minutes > JETKVM_ACCESS_MAX_IDLE_MINUTES) return "session timeout must be between 0 and 1440 minutes";
+    if (!s_mutex) return "Access control unavailable";
+    xSemaphoreTakeRecursive(s_mutex, portMAX_DELAY);
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open("jk_access", NVS_READWRITE, &handle);
+    if (err == ESP_OK) {
+        err = nvs_set_u16(handle, "idle_minutes", (uint16_t)minutes);
+        if (err == ESP_OK) err = nvs_commit(handle);
+        nvs_close(handle);
+    }
+    if (err == ESP_OK) {
+        /* A changed timeout counts from the change. */
+        jetkvm_access_note_activity();
+        atomic_store(&s_idle_minutes, minutes);
+    }
+    jetkvm_access_unlock();
+    return err == ESP_OK ? NULL : "The session timeout could not be stored";
 }
 esp_err_t jetkvm_access_check_request(httpd_req_t *req, bool require_origin)
 {
@@ -419,14 +506,26 @@ esp_err_t jetkvm_access_check_request(httpd_req_t *req, bool require_origin)
         return ESP_ERR_INVALID_STATE;
     }
     xSemaphoreTakeRecursive(s_mutex, portMAX_DELAY);
+    (void)expire_idle_locked();
     uint32_t epoch = atomic_load(&s_epoch);
     bool setup = atomic_load(&s_setup);
     bool allowed = setup && jetkvm_access_epoch_valid(epoch) &&
                    (!s_password.enabled || (token_fresh() && cookie_matches(req)));
-    if (allowed) owner->request_epoch = epoch;
+    bool expired = !allowed && setup && s_password.enabled && cookie_has(req, s_expired_token);
+    if (allowed) {
+        owner->request_epoch = epoch;
+        if (!signaling_path(req)) jetkvm_access_note_activity();
+    }
     jetkvm_access_unlock();
     if (allowed) return ESP_OK;
-    (void)json_error(req, "401 Unauthorized", setup ? "Authentication required" : "Setup required");
+    if (expired) {
+        /* Upstream clears the cookie of an expired login and names the reason,
+         * so the UI shows it on the login page. */
+        httpd_resp_set_hdr(req, "Set-Cookie", "authToken=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict");
+        (void)json_error_code(req, "401 Unauthorized", "Session expired", "session_expired");
+    } else {
+        (void)json_error(req, "401 Unauthorized", setup ? "Authentication required" : "Setup required");
+    }
     return ESP_ERR_INVALID_STATE;
 }
 static void rotate_token(bool issue)
@@ -444,6 +543,7 @@ static void rotate_token(bool issue)
         for (size_t i = 0; i < sizeof(bytes); ++i) snprintf(s_token + 2*i, 3, "%02x", bytes[i]);
         wipe(bytes, sizeof(bytes));
         atomic_store(&s_expiry, xTaskGetTickCount() + jetkvm_access_lifetime_ticks(TOKEN_SECONDS, configTICK_RATE_HZ));
+        jetkvm_access_note_activity();
     }
     atomic_store(&s_enabled, s_password.enabled != 0);
 }
@@ -465,6 +565,13 @@ static bool request_path_is(const httpd_req_t *req, const char *path)
     size_t length = strlen(path);
     return strncmp(req->uri, path, length) == 0 &&
         (req->uri[length] == '\0' || req->uri[length] == '?');
+}
+static bool signaling_path(const httpd_req_t *req)
+{
+    /* The WebSocket, and the event poll and signal post of the diagnostic
+     * HTTP transport. */
+    return request_path_is(req, "/webrtc/signaling/client") ||
+        request_path_is(req, "/webrtc/events") || request_path_is(req, "/webrtc/signal");
 }
 static esp_err_t auth_handler(httpd_req_t *req)
 {
@@ -675,6 +782,7 @@ esp_err_t jetkvm_access_init(void (*revoke_local)(void))
     if (s_mutex) return ESP_OK;
     if (psa_crypto_init() != PSA_SUCCESS) return ESP_FAIL;
     jetkvm_password_defaults(&s_password);
+    atomic_store(&s_idle_minutes, 0);
     bool setup = false;
     nvs_handle_t handle;
     esp_err_t err = nvs_open("jk_access", NVS_READONLY, &handle);
@@ -688,6 +796,9 @@ esp_err_t jetkvm_access_init(void (*revoke_local)(void))
         nvs_handle_t names;
         if (nvs_open("jk_access", NVS_READONLY, &names) == ESP_OK) {
             load_extra_host_names(names);
+            uint16_t minutes = 0;
+            if (nvs_get_u16(names, "idle_minutes", &minutes) == ESP_OK &&
+                minutes <= JETKVM_ACCESS_MAX_IDLE_MINUTES) atomic_store(&s_idle_minutes, minutes);
             nvs_close(names);
         }
     } else if (err == ESP_ERR_NVS_NOT_FOUND) err = ESP_OK;
