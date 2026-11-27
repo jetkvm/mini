@@ -11,6 +11,7 @@ import {
   isTimeOfDay,
   menuOfSchedule,
   scheduleForMenu,
+  settingWriter,
 } from "@/utils/displaySchedule";
 import { m } from "@localizations/messages.js";
 
@@ -23,9 +24,6 @@ export function DisplayScheduleSetting() {
   // The time fields as typed; a field is stored when it loses the focus.
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
-  // The schedule that the device has, and the count of the writes so far.
-  const stored = useRef<DisplaySchedule | null>(null);
-  const writes = useRef(0);
 
   const show = useCallback((value: DisplaySchedule) => {
     setSchedule(value);
@@ -33,18 +31,39 @@ export function DisplayScheduleSetting() {
     setEnd(value.end);
   }, []);
 
+  // The writer lives as long as the component and sends through the RPC
+  // channel of the moment.
+  const sendNow = useRef(send);
   useEffect(() => {
-    // The read runs again when the RPC channel changes. A write that starts
-    // while a read is on its way is newer than the answer to the read.
-    const read = writes.current;
+    sendNow.current = send;
+  }, [send]);
+  const [writer] = useState(() =>
+    settingWriter<DisplaySchedule>({
+      send: value =>
+        new Promise(resolve => {
+          void sendNow
+            .current("setDisplaySchedule", { params: value }, (resp: JsonRpcResponse) =>
+              resolve("error" in resp ? resp.error.data || m.unknown_error() : null),
+            )
+            .then(sent => {
+              if (!sent) resolve(m.unknown_error());
+            });
+        }),
+      show,
+      succeeded: () => notifications.success(m.hardware_display_schedule_success()),
+      failed: error => notifications.error(m.hardware_display_schedule_error({ error })),
+    }),
+  );
+
+  // Runs again when the RPC channel changes.
+  useEffect(() => {
+    writer.reset();
     send("getDisplaySchedule", {}, (resp: JsonRpcResponse) => {
       if ("error" in resp) {
         console.error("Failed to get display schedule:", resp.error);
         return;
       }
-      if (read !== writes.current) return;
-      stored.current = resp.result as DisplaySchedule;
-      show(stored.current);
+      writer.read(resp.result as DisplaySchedule);
     });
     send("getDisplayScheduleTimezones", {}, (resp: JsonRpcResponse) => {
       if ("error" in resp) {
@@ -53,7 +72,7 @@ export function DisplayScheduleSetting() {
       }
       setTimezones(resp.result as string[]);
     });
-  }, [send, show]);
+  }, [send, writer]);
 
   const timezoneOptions = useMemo(
     () => timezones.map(timezone => ({ value: timezone, label: timezone })),
@@ -63,27 +82,7 @@ export function DisplayScheduleSetting() {
   // Until the device has answered, there is no schedule to show.
   if (!schedule) return null;
 
-  // The page shows the new schedule at once. When the device refuses it, or
-  // the request cannot be sent, the page shows the schedule that the device
-  // has. After a newer write, the answer to that write decides instead.
-  const store = (next: DisplaySchedule) => {
-    const write = ++writes.current;
-    const failed = (error: string) => {
-      notifications.error(m.hardware_display_schedule_error({ error }));
-      if (write === writes.current && stored.current) show(stored.current);
-    };
-    show(next);
-    void send("setDisplaySchedule", { params: next }, (resp: JsonRpcResponse) => {
-      if ("error" in resp) {
-        failed(resp.error.data || m.unknown_error());
-        return;
-      }
-      stored.current = next;
-      notifications.success(m.hardware_display_schedule_success());
-    }).then(sent => {
-      if (!sent) failed(m.unknown_error());
-    });
-  };
+  const store = writer.write;
 
   const storeTime = (field: "start" | "end", value: string) => {
     if (value === schedule[field]) return;
