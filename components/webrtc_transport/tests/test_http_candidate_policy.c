@@ -163,7 +163,8 @@ static void test_policy_and_resource_limits(void)
     webrtc_http_candidate_policy_begin(&policy, 0x1234U, &owner, &device);
     assert(policy.owner_bound);
     assert(!policy.rewrite_enabled);
-    assert(rewrite(&policy, candidate, output, sizeof(output)) ==
+    assert(rewrite(&policy, "candidate:f 1 udp 1 192.168.1.7 58483 typ host",
+                   output, sizeof(output)) ==
            WEBRTC_HTTP_CANDIDATE_POLICY_UNAVAILABLE);
 
     /* A browser on another private subnet (a routed VLAN) or on the
@@ -193,6 +194,37 @@ static void test_policy_and_resource_limits(void)
     }
     webrtc_http_candidate_policy_begin(&policy, 0x1234U, &owner, NULL);
     assert(!policy.rewrite_enabled);
+
+    /* A LAN with public addresses in two subnets. The rewrite is off, but a
+     * candidate that carries the address of the signaling socket is admitted.
+     * Another address, an mDNS name and an invalid candidate are not. */
+    owner = ipv4("198.51.100.20");
+    device = ipv4("203.0.113.5");
+    webrtc_http_candidate_policy_begin(&policy, 0x1234U, &owner, &device);
+    assert(!policy.rewrite_enabled);
+    assert(rewrite(&policy, "candidate:1 1 udp 2122260223 198.51.100.20 55184 typ host",
+                   output, sizeof(output)) == WEBRTC_HTTP_CANDIDATE_OK);
+    assert(strcmp(output, "candidate:1 1 udp 2122260223 198.51.100.20 55184 typ host") == 0);
+    assert(rewrite(&policy, "candidate:1 1 udp 2122260223 198.51.100.21 55184 typ host",
+                   output, sizeof(output)) == WEBRTC_HTTP_CANDIDATE_POLICY_UNAVAILABLE);
+    assert(rewrite(&policy, "candidate:1 1 udp 2122260223 192.168.1.7 55184 typ host",
+                   output, sizeof(output)) == WEBRTC_HTTP_CANDIDATE_POLICY_UNAVAILABLE);
+    assert(rewrite(&policy, "candidate:1 1 udp 2122260223 abc.local 55184 typ host",
+                   output, sizeof(output)) == WEBRTC_HTTP_CANDIDATE_POLICY_UNAVAILABLE);
+    assert(rewrite(&policy, "candidate:1 1 udp 2122260223 198.51.100.20 55184 typ srflx",
+                   output, sizeof(output)) == WEBRTC_HTTP_CANDIDATE_POLICY_UNAVAILABLE);
+    /* The candidate limit applies to admitted candidates too. */
+    char admitted[80];
+    for (unsigned i = 1; i < WEBRTC_HTTP_CANDIDATE_LIMIT; ++i) {
+        snprintf(admitted, sizeof(admitted),
+                 "candidate:1 1 udp 1 198.51.100.20 %u typ host", 6000U + i);
+        assert(rewrite(&policy, admitted, output, sizeof(output)) == WEBRTC_HTTP_CANDIDATE_OK);
+    }
+    assert(rewrite(&policy, "candidate:1 1 udp 1 198.51.100.20 7000 typ host",
+                   output, sizeof(output)) == WEBRTC_HTTP_CANDIDATE_LIMIT_REACHED);
+    /* The device candidates are rewritten only for a tailnet socket. */
+    webrtc_http_candidate_policy_t device_policy;
+    assert(!webrtc_http_candidate_policy_for_device(&policy, &device_policy));
 }
 
 static void test_embedded_offer_candidates(void)
