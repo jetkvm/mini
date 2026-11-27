@@ -7,9 +7,9 @@ import dgram from 'node:dgram';
 import { addressTowards } from '../../combined_load/runner/switches.mjs';
 
 const COOKIE = 0x2112a442;
-const METHOD = { binding: 0x001, allocate: 0x003, refresh: 0x004, send: 0x006, data: 0x007, createPermission: 0x008, channelBind: 0x009 };
-const CLASS = { request: 0x000, indication: 0x010, success: 0x100, error: 0x110 };
-const ATTRIBUTE = {
+export const METHOD = { binding: 0x001, allocate: 0x003, refresh: 0x004, send: 0x006, data: 0x007, createPermission: 0x008, channelBind: 0x009 };
+export const CLASS = { request: 0x000, indication: 0x010, success: 0x100, error: 0x110 };
+export const ATTRIBUTE = {
   mappedAddress: 0x0001, username: 0x0006, messageIntegrity: 0x0008, errorCode: 0x0009, channelNumber: 0x000c,
   lifetime: 0x000d, xorPeerAddress: 0x0012, data: 0x0013, realm: 0x0014, nonce: 0x0015, xorRelayedAddress: 0x0016,
   xorMappedAddress: 0x0020,
@@ -20,7 +20,7 @@ const LIFETIME_S = 600;
 const key = ({ address, port }) => `${address}:${port}`;
 
 // An IPv4 address and port as STUN writes them, XORed with the magic cookie or not.
-function addressValue({ address, port }, xor) {
+export function addressValue({ address, port }, xor) {
   const value = Buffer.alloc(8);
   value[1] = 0x01;
   value.writeUInt16BE(xor ? port ^ (COOKIE >>> 16) : port, 2);
@@ -29,14 +29,14 @@ function addressValue({ address, port }, xor) {
   return value;
 }
 
-function xorAddress(value) {
+export function xorAddress(value) {
   if (value.length < 8 || value[1] !== 0x01) return null;
   const number = (value.readUInt32BE(4) ^ COOKIE) >>> 0;
   return { address: [24, 16, 8, 0].map(shift => (number >>> shift) & 0xff).join('.'), port: value.readUInt16BE(2) ^ (COOKIE >>> 16) };
 }
 
 // A STUN message's attributes by type, and where MESSAGE-INTEGRITY starts.
-function parse(message) {
+export function parse(message) {
   const attributes = new Map();
   let integrityAt = null;
   for (let at = 20; at + 4 <= message.length;) {
@@ -52,13 +52,13 @@ function parse(message) {
 
 // The HMAC-SHA1 of a message up to its MESSAGE-INTEGRITY attribute at `end`,
 // with the length field that counts that attribute.
-function integrity(message, end, secret) {
+export function integrity(message, end, secret) {
   const covered = Buffer.from(message.subarray(0, end));
   covered.writeUInt16BE(end - 20 + 24, 2);
   return createHmac('sha1', secret).update(covered).digest();
 }
 
-function build(type, transaction, attributes, secret) {
+export function build(type, transaction, attributes, secret) {
   const parts = [];
   for (const [attribute, value] of attributes) {
     const head = Buffer.alloc(4);
@@ -123,10 +123,16 @@ export async function turnRelay(mini, { peerFirst = false } = {}) {
     allocation.relay.send(data, peer.port, peer.address);
   };
 
-  const allocate = client => new Promise((resolve, reject) => {
+  // A client's allocation, made by the Allocate request of `transaction`:
+  // its relay socket, and `ready` once that socket has its port.
+  const allocate = (client, transaction) => {
     const relay = dgram.createSocket('udp4');
-    const allocation = { relay, heard: new Set(), channels: new Map(), numbers: new Map() };
-    relay.once('error', reject);
+    const allocation = { relay, transaction: transaction.toString('hex'), heard: new Set(), channels: new Map(), numbers: new Map() };
+    allocation.ready = new Promise((resolve, reject) => {
+      relay.once('error', reject);
+      relay.bind(0, address, resolve);
+    });
+    relay.on('error', () => {});
     relay.on('message', (data, peer) => {
       allocation.heard.add(key(peer));
       counts.peers.add(key(peer));
@@ -142,8 +148,8 @@ export async function turnRelay(mini, { peerFirst = false } = {}) {
           [[ATTRIBUTE.xorPeerAddress, addressValue(peer, true)], [ATTRIBUTE.data, data]]), client.port, client.address);
       }
     });
-    relay.bind(0, address, () => resolve(allocation));
-  });
+    return allocation;
+  };
 
   server.on('message', async (message, client) => {
     if (message.length < 4) return;
@@ -182,15 +188,20 @@ export async function turnRelay(mini, { peerFirst = false } = {}) {
     const answer = (extra = []) => reply(build(method | CLASS.success, transaction, extra, secret));
     const refuse = (code, reason) => reply(build(method | CLASS.error, transaction, [[ATTRIBUTE.errorCode, errorCode(code, reason)]], secret));
     if (method === METHOD.allocate) {
-      if (allocation) return refuse(437, 'Allocation Mismatch');
+      // A client sends its Allocate again when the answer is late or lost.
+      // The same transaction gets the answer of the first time; another
+      // transaction of a client with an allocation is refused.
+      if (allocation && allocation.transaction !== transaction.toString('hex')) return refuse(437, 'Allocation Mismatch');
+      const made = allocation ?? allocate(client, transaction);
+      allocations.set(key(client), made);
       try {
-        const created = await allocate(client);
-        allocations.set(key(client), created);
-        return answer([[ATTRIBUTE.xorRelayedAddress, addressValue(created.relay.address(), true)],
-          [ATTRIBUTE.lifetime, uint32(LIFETIME_S)], [ATTRIBUTE.xorMappedAddress, addressValue(client, true)]]);
+        await made.ready;
       } catch {
+        allocations.delete(key(client));
         return refuse(508, 'Insufficient Capacity');
       }
+      return answer([[ATTRIBUTE.xorRelayedAddress, addressValue(made.relay.address(), true)],
+        [ATTRIBUTE.lifetime, uint32(LIFETIME_S)], [ATTRIBUTE.xorMappedAddress, addressValue(client, true)]]);
     }
     if (!allocation) return refuse(437, 'Allocation Mismatch');
     if (method === METHOD.refresh) {

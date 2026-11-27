@@ -830,6 +830,18 @@ void *jetkvm_ice_find_pair(void *handle,const esp_peer_addr_t *addr) {
  return NULL;
 }
 
+/* The pair of a packet that a peer address sent through the agent's own TURN
+ * allocation. When that address is a relay address of the peer, a direct pair
+ * has the same remote address and sorts before the relay pair, but the
+ * packet did not come on it. */
+PRIVATE ice_candidate_pair_t *agent_find_relayed_pair(agent_t *agent,const esp_peer_addr_t *addr) {
+ for (int i=0;i<agent->candidate_pairs_num;i++) {
+  ice_candidate_pair_t *pair=agent->sort_pairs[i];
+  if (pair->type==ICE_CANDIDATE_TYPE_RELAY && agent_same_addr(addr,&pair->remote->addr)) return pair;
+ }
+ return jetkvm_ice_find_pair(agent,addr);
+}
+
 PRIVATE void agent_process_stun_request(agent_t *agent, esp_peer_addr_t *remote, stun_msg_t *stun_msg)
 {
     char ip_str[128];
@@ -881,7 +893,7 @@ PRIVATE void agent_process_stun_request(agent_t *agent, esp_peer_addr_t *remote,
             }
             break;
         case STUN_METHOD_DATA: {
-            ice_candidate_pair_t *pair = jetkvm_ice_find_pair(agent, &stun_msg->relayed_addr);
+            ice_candidate_pair_t *pair = agent_find_relayed_pair(agent, &stun_msg->relayed_addr);
             if (!pair) {
                 LOGE("%d Not found for bind remote22 %s", agent->mode, esp_peer_addr_to_str(remote, ip_str));
                 break;

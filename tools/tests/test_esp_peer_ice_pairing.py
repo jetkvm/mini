@@ -29,6 +29,7 @@ typedef struct {
     uint8_t max_paired_candidates, candidate_pairs_num, local_candidates_count, remote_candidates_count;
     ice_candidate_t *local_candidates, *remote_candidates;
     ice_candidate_pair_t *candidate_pairs, **sort_pairs;
+    void *tcp;
 } agent_t;
 '''
 
@@ -98,6 +99,20 @@ int main(void)
     assert(agent.candidate_pairs_num == 2);
     assert(pair_type(&agent, &allocated[1], &relays[0]) == RELAY);
     assert(pair_type(&agent, &allocated[0], &relays[0]) == HOST);
+    /* Both pairs have the peer's relay address. A packet from it on the
+     * socket is of the direct pair, which sorts first; a packet from it
+     * through the allocation is of the relay pair. */
+    ice_candidate_pair_t *direct = jetkvm_ice_find_pair(&agent, &relays[0].addr);
+    assert(direct && direct->local == &allocated[0]);
+    ice_candidate_pair_t *relayed = agent_find_relayed_pair(&agent, &relays[0].addr);
+    assert(relayed && relayed->local == &allocated[1] && relayed->type == RELAY);
+    /* Without a relay pair for the address, it is the pair of the address;
+     * an address of no pair has none. */
+    agent = agent_of(mini, 2, relays, 2);
+    relayed = agent_find_relayed_pair(&agent, &relays[1].addr);
+    assert(relayed && relayed->local == &mini[0] && relayed->remote == &relays[1]);
+    ice_candidate_t stranger = candidate(RELAY, UDP, IPV4, 77, 10);
+    assert(agent_find_relayed_pair(&agent, &stranger.addr) == NULL);
 
     /* No pair across address families or transports. */
     ice_candidate_t relay6 = candidate(RELAY, UDP, IPV6, 9, 10);
@@ -128,7 +143,8 @@ class EspPeerIcePairingTest(unittest.TestCase):
             *(typedef(ice, name) for name in ('ice_candidate_type_t', 'ice_candidate_transport_t', 'ice_candidate_t')),
             *(typedef(agent, name) for name in ('ice_candidate_state_t', 'ice_candidate_pair_t')),
             HARNESS,
-            *(function(agent, name) for name in ('agent_pair_exists', 'agent_candidates_pair', 'jetkvm_ice_pair_candidates')),
+            *(function(agent, name) for name in ('agent_pair_exists', 'agent_candidates_pair', 'jetkvm_ice_pair_candidates',
+                                                 'agent_same_addr', 'jetkvm_ice_find_pair', 'agent_find_relayed_pair')),
             TESTS,
         ])
         with tempfile.TemporaryDirectory() as directory:
