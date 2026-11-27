@@ -1,5 +1,7 @@
 import type { Page } from "@playwright/test";
 import { test, expect } from "../helpers/test";
+import { sendWheel } from "../helpers";
+import { type MouseEvent as RAMouseEvent } from "./remote-agent";
 import { agent, registerSharedSession } from "./shared";
 
 test.describe.configure({ mode: "serial" });
@@ -42,5 +44,111 @@ test.describe("Remote Host Agent: mouse", () => {
         `Blur should not move cursor to origin, got (${ev.x}, ${ev.y})`,
       ).toBe(true);
     }
+  });
+
+  // ═══════════════════════════════════════════
+  // MOUSE: WHEEL SCROLL (VERTICAL + HORIZONTAL)
+  // ═══════════════════════════════════════════
+
+  test("mouse: vertical and horizontal wheel scroll", async () => {
+    const REL_WHEEL = 0x08;
+    const REL_HWHEEL = 0x06;
+
+    // Vertical scroll
+    await agent!.clearMouseEvents();
+    await sendWheel(sharedPage, 1, 0);
+    const vWheel = await agent!.waitForMouseEvent(
+      ev => ev.type === "mouse_move_rel" && ev.code === REL_WHEEL,
+      3000,
+    );
+    expect(vWheel.length, "Vertical wheel event should be received").toBeGreaterThan(0);
+    expect(vWheel[0].value, "Positive wheelY scrolls up").toBe(1);
+
+    // Horizontal scroll
+    await agent!.clearMouseEvents();
+    await sendWheel(sharedPage, 0, 1);
+    const hWheel = await agent!.waitForMouseEvent(
+      ev => ev.type === "mouse_move_rel" && ev.code === REL_HWHEEL,
+      3000,
+    );
+    expect(hWheel.length, "Horizontal wheel event should be received").toBeGreaterThan(0);
+    expect(hWheel[0].value, "Positive wheelX scrolls right").toBe(1);
+
+    // Both axes simultaneously
+    await agent!.clearMouseEvents();
+    await sendWheel(sharedPage, -1, 1);
+    const bothV = await agent!.waitForMouseEvent(
+      ev => ev.type === "mouse_move_rel" && ev.code === REL_WHEEL,
+      3000,
+    );
+    expect(bothV.length, "Vertical wheel in combined event").toBeGreaterThan(0);
+    expect(bothV[0].value, "Negative wheelY scrolls down").toBe(-1);
+    const bothH = await agent!.waitForMouseEvent(
+      ev => ev.type === "mouse_move_rel" && ev.code === REL_HWHEEL,
+      3000,
+    );
+    expect(bothH.length, "Horizontal wheel in combined event").toBeGreaterThan(0);
+    expect(bothH[0].value, "Positive wheelX scrolls right").toBe(1);
+  });
+
+  test("mouse: wheel scroll should not produce duplicate events from both HID devices", async () => {
+    test.setTimeout(30_000);
+    const REL_WHEEL = 0x08;
+    const REL_HWHEEL = 0x06;
+
+    await agent!.waitForInputDevices(["keyboard", "absolute_mouse", "relative_mouse"], 10000);
+
+    // Retry until the agent starts receiving wheel events (host may still
+    // be re-enumerating HID devices after previous test's USB changes).
+    const vDeadline = Date.now() + 10000;
+    let vWheelEvents: RAMouseEvent[] = [];
+    while (Date.now() < vDeadline) {
+      await agent!.clearMouseEvents();
+      await sendWheel(sharedPage, 1, 0);
+      try {
+        await agent!.waitForMouseEvent(
+          ev => ev.type === "mouse_move_rel" && ev.code === REL_WHEEL,
+          2000,
+        );
+        break;
+      } catch {
+        /* agent not ready yet, retry */
+      }
+    }
+    // Allow any duplicate from the second HID device to arrive
+    await new Promise(r => setTimeout(r, 500));
+
+    const allEvents = await agent!.getMouseEvents();
+    vWheelEvents = allEvents.filter(ev => ev.type === "mouse_move_rel" && ev.code === REL_WHEEL);
+    const devices = new Set(vWheelEvents.map(ev => ev.device));
+    console.log(
+      `Vertical wheel: ${vWheelEvents.length} event(s) from device(s): ${[...devices].join(", ")}`,
+    );
+    expect(
+      vWheelEvents.length,
+      `Expected 1 vertical wheel event, got ${vWheelEvents.length} from [${[...devices].join(", ")}]. ` +
+        `Duplicate means rpcWheelReport sends to both abs and rel mouse HID devices.`,
+    ).toBe(1);
+
+    await agent!.clearMouseEvents();
+    await sendWheel(sharedPage, 0, 1);
+    await agent!.waitForMouseEvent(
+      ev => ev.type === "mouse_move_rel" && ev.code === REL_HWHEEL,
+      3000,
+    );
+    await new Promise(r => setTimeout(r, 500));
+
+    const allHEvents = await agent!.getMouseEvents();
+    const hWheelEvents = allHEvents.filter(
+      ev => ev.type === "mouse_move_rel" && ev.code === REL_HWHEEL,
+    );
+    const hDevices = new Set(hWheelEvents.map(ev => ev.device));
+    console.log(
+      `Horizontal wheel: ${hWheelEvents.length} event(s) from device(s): ${[...hDevices].join(", ")}`,
+    );
+    expect(
+      hWheelEvents.length,
+      `Expected 1 horizontal wheel event, got ${hWheelEvents.length} from [${[...hDevices].join(", ")}].`,
+    ).toBe(1);
   });
 });

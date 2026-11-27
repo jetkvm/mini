@@ -111,6 +111,7 @@ node "${component_dir}/tests/check_peer_udp_timeout.mjs"
 
 echo "webrtc_transport host tests: OK (${repo_dir})"
 python3 "$component_dir/tests/test_websocket_takeover.py"
+python3 "$component_dir/tests/test_websocket_expiry.py"
 python3 "$component_dir/tests/test_websocket_close_reuse.py"
 python3 "$component_dir/tests/test_peer_ice_reflexive.py"
 adaptive_binary="${TMPDIR:-/tmp}/kvm-p4-test-adaptive-bitrate"

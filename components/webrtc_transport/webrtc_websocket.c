@@ -35,10 +35,11 @@ typedef enum {
     WS_CLOSE_SUPERSEDED,   /* another page took the session over */
     WS_CLOSE_SEND_FAILURE, /* an outbound signaling frame could not be sent */
     WS_CLOSE_PEER,         /* the browser (or HTTPD on a protocol error) closed the socket */
+    WS_CLOSE_EXPIRED,      /* the local login expired after inactivity */
     WS_CLOSE_COUNT,
 } ws_close_reason_t;
 static const char *const s_close_names[WS_CLOSE_COUNT] = {
-    "idle", "epoch", "rebuild", "superseded", "send-failure", "peer",
+    "idle", "epoch", "rebuild", "superseded", "send-failure", "peer", "expired",
 };
 
 typedef struct websocket_listener websocket_listener_t;
@@ -141,6 +142,24 @@ static void supersede_client(websocket_client_t *client)
     close_client(client);
 }
 
+/* The access epoch of the socket ended. When the idle timeout ended it,
+ * close code 4003 (upstream signalingStatusSessionExpired) tells the page to
+ * open the login page with the reason instead of reconnecting. */
+static void close_revoked_client(websocket_client_t *client)
+{
+    if (jetkvm_access_epoch_expired(client->access_epoch)) {
+        uint8_t code[] = {0x0f, 0xa3}; /* private-use close code 4003 */
+        httpd_ws_frame_t frame = {
+            .type = HTTPD_WS_TYPE_CLOSE, .payload = code, .len = sizeof(code),
+        };
+        (void)httpd_ws_send_frame_async(client->owner->server, client->fd, &frame);
+        note_close(client, WS_CLOSE_EXPIRED);
+    } else {
+        note_close(client, WS_CLOSE_EPOCH);
+    }
+    close_client(client);
+}
+
 static esp_err_t send_event(websocket_client_t *client, const webrtc_signal_event_t *event)
 {
     char *wire = jetkvm_memory_policy_control_alloc(WS_MESSAGE_MAX + 1U);
@@ -197,9 +216,11 @@ static void poll_client(void *arg)
     (void)arg;
     if (!atomic_load(&owner->running) || !owner->client) goto done;
     websocket_client_t *client = owner->client;
+    /* An open local page has this poll, so an idle login expires here
+     * without a request. The check is lock-free until the login is idle. */
+    (void)jetkvm_access_expire_idle();
     if (!jetkvm_access_epoch_valid(client->access_epoch)) {
-        note_close(client, WS_CLOSE_EPOCH);
-        close_client(client);
+        close_revoked_client(client);
         goto done;
     }
     if (esp_timer_get_time() - client->last_receive_us > WS_IDLE_TIMEOUT_US) {

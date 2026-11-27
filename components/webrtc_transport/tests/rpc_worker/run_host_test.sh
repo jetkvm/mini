@@ -36,7 +36,7 @@ cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined "${includes[@]}" 
   "$control/jetkvm_control.c" "$control/jetkvm_hidrpc.c" "$control/rpc_video.c" \
   "$control/rpc_network.c" "$control/rpc_display_settings.c" "$control/rpc_usb.c" \
   "$control/rpc_wol.c" "$control/rpc_system.c" "$control/rpc_ota.c" \
-  "$control/rpc_tls.c" "$control/rpc_extra_hostnames.c" "$control/rpc_tailscale.c" "$control/rpc_mqtt.c" "$control/rpc_macros.c" "$control/keyboard_macro_hid.c" \
+  "$control/rpc_tls.c" "$control/rpc_extra_hostnames.c" "$control/rpc_session_timeout.c" "$control/rpc_tailscale.c" "$control/rpc_mqtt.c" "$control/rpc_macros.c" "$control/keyboard_macro_hid.c" \
   "$control/rpc_virtual_media.c" "$control/rpc_os_services.c" \
   "$root/components/jetkvm_cloud_config/jetkvm_cloud_config_core.c" \
   "$cjson/cJSON.c" -lm -o "$out/kvm-mini-rpc-worker-media-test"

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { isDeepStrictEqual } from 'node:util';
 import { hostAgent } from '../lib/host.mjs';
+import { keyboard } from '../lib/keys.mjs';
 import { connect, until } from '../lib/mini.mjs';
 import { hostTestUsb } from '../lib/usb.mjs';
 import { MAX_FREEZE_MS, hdmiCapture, watchVideo } from '../lib/video.mjs';
@@ -139,11 +140,12 @@ test('the wheel works when the relative mouse is the Mini\'s only mouse', { time
 
   // The host opens the new devices some time after it lists them: the wheel
   // is turned again until the host reports it, for 10 seconds at most.
-  const wheel = async (params, code) => {
+  const { wheel: send } = await keyboard(mini);
+  const wheel = async (wheelY, wheelX, code) => {
     const end = Date.now() + 10_000;
     while (Date.now() < end) {
       await host.clear('/events/mouse');
-      await mini.rpc('wheelReport', params);
+      await send(wheelY, wheelX);
       const turns = await until(
         async () => (await host.get('/events/mouse')).filter(event => event.type === 'mouse_move_rel' && event.code === code),
         events => events.length > 0, 2).catch(() => []);
@@ -152,10 +154,10 @@ test('the wheel works when the relative mouse is the Mini\'s only mouse', { time
     return [];
   };
   try {
-    const vertical = await wheel({ wheelY: 1, wheelX: 0 }, REL_WHEEL);
+    const vertical = await wheel(1, 0, REL_WHEEL);
     assert.ok(vertical.length > 0, 'the host gets the vertical wheel');
     assert.notEqual(vertical[0].value, 0);
-    const horizontal = await wheel({ wheelY: 0, wheelX: 1 }, REL_HWHEEL);
+    const horizontal = await wheel(0, 1, REL_HWHEEL);
     assert.ok(horizontal.length > 0, 'the host gets the horizontal wheel');
     assert.notEqual(horizontal[0].value, 0);
   } finally {
@@ -223,9 +225,10 @@ test('the host gets a wheel turn on each axis, and on both axes from one report'
   if (!rig) return;
   const { host, mini, read, events, done } = rig;
   const WHEEL = ['mouse_move_rel'];
+  const { wheel } = await keyboard(mini);
   const turn = async (wheelY, wheelX) => {
     await host.clear('/events/mouse');
-    await mini.rpc('wheelReport', { wheelY, wheelX });
+    await wheel(wheelY, wheelX);
   };
 
   await turn(1, 0);
@@ -249,9 +252,10 @@ test('the host gets only one event for a wheel turn while the Mini has both mice
   if (!rig) return;
   const { host, mini, read, events, done } = rig;
   const WHEEL = ['mouse_move_rel'];
+  const { wheel } = await keyboard(mini);
   const turn = async (wheelY, wheelX) => {
     await host.clear('/events/mouse');
-    await mini.rpc('wheelReport', { wheelY, wheelX });
+    await wheel(wheelY, wheelX);
   };
   // Every event of the axis that the host has 500 ms after the first one.
   const counted = async code => {

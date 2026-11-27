@@ -870,6 +870,16 @@ static void test_hidrpc(void)
     assert(observed.rel_mouse.dy == INT8_MAX);
     assert(observed.rel_mouse.buttons == 0x03);
 
+    const uint8_t wheel[] = { 0x04, 0x80, 0x7f };
+    expect_hidrpc_event(wheel, sizeof(wheel), &observed);
+    assert(observed.type == JETKVM_HIDRPC_EVENT_WHEEL_REPORT);
+    assert(observed.wheel.wheel_y == INT8_MIN);
+    assert(observed.wheel.wheel_x == INT8_MAX);
+    const uint8_t wheel_down[] = { 0x04, 0xff, 0x01 };
+    expect_hidrpc_event(wheel_down, sizeof(wheel_down), &observed);
+    assert(observed.wheel.wheel_y == -1);
+    assert(observed.wheel.wheel_x == 1);
+
     const uint8_t macro[] = {
         0x07, 0x01, 0x00, 0x00, 0x00, 0x02,
         0x02, 0x04, 0x05, 0x00, 0x00, 0x00, 0x00, 0x01, 0x2c,
@@ -947,6 +957,11 @@ static void test_hidrpc(void)
     expect_malformed_hidrpc(rel_mouse, sizeof(rel_mouse) - 1U);
     const uint8_t rel_mouse_long[] = { 0x06, 0, 0, 0, 0 };
     expect_malformed_hidrpc(rel_mouse_long, sizeof(rel_mouse_long));
+    expect_malformed_hidrpc(wheel, sizeof(wheel) - 1U);
+    const uint8_t wheel_type_only[] = { 0x04 };
+    const uint8_t wheel_long[] = { 0x04, 0, 0, 0 };
+    expect_malformed_hidrpc(wheel_type_only, sizeof(wheel_type_only));
+    expect_malformed_hidrpc(wheel_long, sizeof(wheel_long));
     const uint8_t macro_short[] = { 0x07, 0, 0, 0, 0 };
     const uint8_t macro_bad_bool[] = { 0x07, 2, 0, 0, 0, 0 };
     const uint8_t macro_missing_step[] = { 0x07, 0, 0, 0, 0, 1 };
@@ -1241,6 +1256,80 @@ static void test_extra_hostnames_contract(void)
     expect_rpc_context(&none, "{\"jsonrpc\":\"2.0\",\"method\":\"setExtraHostnames\",\"params\":{\"hostnames\":[]},\"id\":8}",
         "{\"jsonrpc\":\"2.0\",\"id\":8,\"result\":[]}");
     jetkvm_control_set_default_extra_hostnames_context(NULL);
+}
+
+static unsigned stored_timeout;
+static unsigned timeout_activity;
+static bool timeout_storage_fails;
+static unsigned timeout_get(void *ctx) { assert(ctx == &stored_timeout); return stored_timeout; }
+static const char *timeout_set(unsigned minutes, void *ctx)
+{
+    assert(ctx == &stored_timeout && minutes <= JETKVM_SESSION_TIMEOUT_MAX_MINUTES);
+    if (timeout_storage_fails) return "The session timeout could not be stored";
+    stored_timeout = minutes;
+    return NULL;
+}
+static void note_timeout_activity(void) { ++timeout_activity; }
+static void test_session_timeout_contract(void)
+{
+    jetkvm_control_context_t none = {0};
+    expect_rpc_context(&none, "{\"jsonrpc\":\"2.0\",\"method\":\"getLocalAuthSessionTimeout\",\"id\":1}",
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32601,\"message\":\"Method not found\"}}");
+    jetkvm_control_set_default_session_timeout_context(&(jetkvm_session_timeout_context_t){
+        .get = timeout_get, .set = timeout_set, .ctx = &stored_timeout});
+    expect_rpc_context(&none, "{\"jsonrpc\":\"2.0\",\"method\":\"getLocalAuthSessionTimeout\",\"params\":{},\"id\":2}",
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":0}");
+    expect_rpc_context(&none, "{\"jsonrpc\":\"2.0\",\"method\":\"setLocalAuthSessionTimeout\",\"params\":{\"timeoutMinutes\":15},\"id\":3}",
+        "{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":null}");
+    expect_rpc_context(&none, "{\"jsonrpc\":\"2.0\",\"method\":\"getLocalAuthSessionTimeout\",\"id\":4}",
+        "{\"jsonrpc\":\"2.0\",\"id\":4,\"result\":15}");
+    expect_rpc_context(&none, "{\"jsonrpc\":\"2.0\",\"method\":\"setLocalAuthSessionTimeout\",\"params\":{\"timeoutMinutes\":1440},\"id\":5}",
+        "{\"jsonrpc\":\"2.0\",\"id\":5,\"result\":null}");
+    /* Upstream refuses values outside 0..1440 minutes; so do these. */
+    const char *invalid[] = {"{\"timeoutMinutes\":-1}", "{\"timeoutMinutes\":1441}",
+        "{\"timeoutMinutes\":2.5}", "{\"timeoutMinutes\":\"5\"}", "{}"};
+    for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+        char request[256];
+        snprintf(request, sizeof(request),
+            "{\"jsonrpc\":\"2.0\",\"method\":\"setLocalAuthSessionTimeout\",\"params\":%s,\"id\":6}", invalid[i]);
+        expect_rpc_context(&none, request,
+            "{\"jsonrpc\":\"2.0\",\"id\":6,\"error\":{\"code\":-32602,\"message\":\"Invalid params\","
+            "\"data\":\"session timeout must be between 0 and 1440 minutes\"}}");
+    }
+    assert(stored_timeout == 1440);
+    timeout_storage_fails = true;
+    expect_rpc_context(&none, "{\"jsonrpc\":\"2.0\",\"method\":\"setLocalAuthSessionTimeout\",\"params\":{\"timeoutMinutes\":5},\"id\":7}",
+        "{\"jsonrpc\":\"2.0\",\"id\":7,\"error\":{\"code\":-32603,\"message\":\"Internal error\","
+        "\"data\":\"The session timeout could not be stored\"}}");
+    timeout_storage_fails = false;
+
+    /* A local session's state-changing calls are activity; the reads the UI
+     * polls, ping and unknown methods are not. */
+    jetkvm_control_context_t local = {.note_local_activity = note_timeout_activity};
+    expect_rpc_context(&local, "{\"jsonrpc\":\"2.0\",\"method\":\"getLocalAuthSessionTimeout\",\"id\":8}",
+        "{\"jsonrpc\":\"2.0\",\"id\":8,\"result\":1440}");
+    expect_rpc_context(&local, "{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":9}",
+        "{\"jsonrpc\":\"2.0\",\"id\":9,\"result\":\"pong\"}");
+    expect_rpc_context(&local, "{\"jsonrpc\":\"2.0\",\"method\":\"setNoSuchThing\",\"id\":10}",
+        "{\"jsonrpc\":\"2.0\",\"id\":10,\"error\":{\"code\":-32601,\"message\":\"Method not found\"}}");
+    assert(timeout_activity == 0);
+    expect_rpc_context(&local, "{\"jsonrpc\":\"2.0\",\"method\":\"setLocalAuthSessionTimeout\",\"params\":{\"timeoutMinutes\":0},\"id\":11}",
+        "{\"jsonrpc\":\"2.0\",\"id\":11,\"result\":null}");
+    assert(timeout_activity == 1);
+    const char *readers[] = {"getVideoState", "listStorageFiles", "checkMountUrl", "isUpdatePending", "ping"};
+    for (size_t i = 0; i < sizeof(readers) / sizeof(readers[0]); ++i)
+        assert(!jetkvm_control_rpc_counts_as_activity(readers[i]));
+    const char *writers[] = {"setJigglerState", "keyboardReport", "absMouseReport", "wheelReport",
+        "reboot", "mountWithHTTP", "wakeHost", "renewDHCPLease", "guestClipboardSet"};
+    for (size_t i = 0; i < sizeof(writers) / sizeof(writers[0]); ++i)
+        assert(jetkvm_control_rpc_counts_as_activity(writers[i]));
+    assert(jetkvm_control_hidrpc_counts_as_activity(JETKVM_HIDRPC_EVENT_KEYPRESS_REPORT));
+    assert(jetkvm_control_hidrpc_counts_as_activity(JETKVM_HIDRPC_EVENT_ABS_MOUSE_REPORT));
+    assert(jetkvm_control_hidrpc_counts_as_activity(JETKVM_HIDRPC_EVENT_KEYBOARD_MACRO_REPORT));
+    assert(jetkvm_control_hidrpc_counts_as_activity(JETKVM_HIDRPC_EVENT_CANCEL_KEYBOARD_MACRO_REPORT));
+    assert(!jetkvm_control_hidrpc_counts_as_activity(JETKVM_HIDRPC_EVENT_KEYPRESS_KEEPALIVE_REPORT));
+    jetkvm_control_set_default_session_timeout_context(NULL);
+    puts("Session timeout RPCs and local activity: OK");
 }
 
 static unsigned deregister_calls;
@@ -1792,6 +1881,7 @@ int main(void)
     test_hidrpc();
     test_tls_contract();
     test_extra_hostnames_contract();
+    test_session_timeout_contract();
     test_board_capabilities();
     test_audio_contract();
     test_cloud_deregistration();
@@ -1867,6 +1957,7 @@ int main(void)
             .serial_number = "ESP32-P4",
             .manufacturer = "JetKVM",
             .product = "JetKVM USB Emulation Device",
+            .configuration = "Config 1: HID",
             .absolute_mouse = true,
             .relative_mouse = true,
             .keyboard = true,
@@ -2711,7 +2802,7 @@ int main(void)
     expect_rpc_context(
         &context,
         "{\"jsonrpc\":\"2.0\",\"method\":\"getUsbConfig\",\"id\":432}",
-        "{\"jsonrpc\":\"2.0\",\"id\":432,\"result\":{\"vendor_id\":\"0x303a\",\"product_id\":\"0x400c\",\"serial_number\":\"ESP32-P4\",\"manufacturer\":\"JetKVM\",\"product\":\"JetKVM USB Emulation Device\"}}");
+        "{\"jsonrpc\":\"2.0\",\"id\":432,\"result\":{\"vendor_id\":\"0x303a\",\"product_id\":\"0x400c\",\"serial_number\":\"ESP32-P4\",\"manufacturer\":\"JetKVM\",\"product\":\"JetKVM USB Emulation Device\",\"configuration\":\"Config 1: HID\"}}");
 
     expect_rpc_context(
         &context,
@@ -2730,6 +2821,33 @@ int main(void)
                "") == 0);
     assert(strcmp(observed_usb_configuration.last_descriptor_config.product,
                   "JetKVM P4~") == 0);
+    /* A page from before the configuration field leaves it out. */
+    assert(!observed_usb_configuration.last_descriptor_config
+                .has_configuration);
+
+    expect_rpc_context(
+        &context,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"setUsbConfig\",\"params\":{\"usbConfig\":{\"vendor_id\":\"0x046d\",\"product_id\":\"0xc52b\",\"serial_number\":\"\",\"manufacturer\":\"Logitech (x64)\",\"product\":\"Logitech USB Input Device\",\"configuration\":\"RQR24.11_B0036\"}},\"id\":43211}",
+        "{\"jsonrpc\":\"2.0\",\"id\":43211,\"result\":null}");
+    assert(observed_usb_configuration.descriptor_change_calls == 2U);
+    assert(observed_usb_configuration.last_descriptor_config
+               .has_configuration);
+    assert(strcmp(
+               observed_usb_configuration.last_descriptor_config.configuration,
+               "RQR24.11_B0036") == 0);
+    assert(strcmp(observed_usb_configuration.last_descriptor_config.product,
+                  "Logitech USB Input Device") == 0);
+
+    /* An empty configuration string is a setting, not a missing field. */
+    expect_rpc_context(
+        &context,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"setUsbConfig\",\"params\":{\"usbConfig\":{\"configuration\":\"\",\"vendor_id\":\"0x303a\",\"product_id\":\"0x400c\",\"serial_number\":\"P4\",\"manufacturer\":\"JetKVM\",\"product\":\"KVM\"}},\"id\":43212}",
+        "{\"jsonrpc\":\"2.0\",\"id\":43212,\"result\":null}");
+    assert(observed_usb_configuration.descriptor_change_calls == 3U);
+    assert(observed_usb_configuration.last_descriptor_config
+               .has_configuration);
+    assert(observed_usb_configuration.last_descriptor_config
+               .configuration[0] == '\0');
 
     expect_rpc_context(
         &context,
@@ -2897,6 +3015,33 @@ int main(void)
         &context,
         "{\"jsonrpc\":\"2.0\",\"method\":\"setUsbConfig\",\"params\":{\"usbConfig\":{\"vendor_id\":\"0x303a\",\"product_id\":\"0x400c\",\"serial_number\":\"P4\",\"manufacturer\":\"J\\u00e9tKVM\",\"product\":\"KVM\"}},\"id\":43451}",
         "{\"jsonrpc\":\"2.0\",\"id\":43451,\"error\":{\"code\":-32602,\"message\":\"Invalid params\",\"data\":\"usbConfig must contain valid vendor_id, product_id, serial_number, manufacturer, and product fields\"}}");
+    const char *invalid_configurations[] = {
+        "\"12345678901234567890123456789012\"",
+        "\"Config\\t1\"",
+        "1",
+        "null",
+    };
+    for (size_t i = 0; i < sizeof(invalid_configurations) /
+                               sizeof(invalid_configurations[0]);
+         ++i) {
+        char request[384];
+        char response[320];
+        int id = 43460 + (int)i;
+        assert(snprintf(
+                   request, sizeof(request),
+                   "{\"jsonrpc\":\"2.0\",\"method\":\"setUsbConfig\",\"params\":{\"usbConfig\":{\"vendor_id\":\"0x303a\",\"product_id\":\"0x400c\",\"serial_number\":\"P4\",\"manufacturer\":\"JetKVM\",\"product\":\"KVM\",\"configuration\":%s}},\"id\":%d}",
+                   invalid_configurations[i], id) > 0);
+        assert(snprintf(
+                   response, sizeof(response),
+                   "{\"jsonrpc\":\"2.0\",\"id\":%d,\"error\":{\"code\":-32602,\"message\":\"Invalid params\",\"data\":\"usbConfig must contain valid vendor_id, product_id, serial_number, manufacturer, and product fields\"}}",
+                   id) > 0);
+        expect_rpc_context(&context, request, response);
+    }
+    /* The configuration field does not stand in for a required one. */
+    expect_rpc_context(
+        &context,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"setUsbConfig\",\"params\":{\"usbConfig\":{\"vendor_id\":\"0x303a\",\"product_id\":\"0x400c\",\"serial_number\":\"P4\",\"manufacturer\":\"JetKVM\",\"configuration\":\"KVM\"}},\"id\":43464}",
+        "{\"jsonrpc\":\"2.0\",\"id\":43464,\"error\":{\"code\":-32602,\"message\":\"Invalid params\",\"data\":\"usbConfig must contain valid vendor_id, product_id, serial_number, manufacturer, and product fields\"}}");
     expect_rpc_context(
         &context,
         "{\"jsonrpc\":\"2.0\",\"method\":\"setUsbConfig\",\"params\":{\"usbConfig\":{\"vendor_id\":\"0x303a\",\"product_id\":\"0x400c\",\"serial_number\":\"P4\",\"manufacturer\":\"JetKVM\"}},\"id\":4346}",
@@ -3417,13 +3562,6 @@ int main(void)
     assert(observed_hid.rel_mouse.dx == INT8_MIN);
     assert(observed_hid.rel_mouse.dy == INT8_MAX);
     assert(observed_hid.rel_mouse.buttons == 31U);
-    expect_rpc_context(
-        &context,
-        "{\"jsonrpc\":\"2.0\",\"method\":\"wheelReport\",\"params\":{\"wheelY\":-127,\"wheelX\":127},\"id\":76}",
-        "{\"jsonrpc\":\"2.0\",\"id\":76,\"result\":null}");
-    assert(observed_hid.type == JETKVM_HIDRPC_EVENT_WHEEL_REPORT);
-    assert(observed_hid.wheel.wheel_y == -127);
-    assert(observed_hid.wheel.wheel_x == 127);
 
     expect_rpc_context(
         &context,
@@ -3449,14 +3587,6 @@ int main(void)
         &context,
         "{\"jsonrpc\":\"2.0\",\"method\":\"relMouseReport\",\"params\":{\"dx\":128,\"dy\":0,\"buttons\":0},\"id\":85}",
         "{\"jsonrpc\":\"2.0\",\"id\":85,\"error\":{\"code\":-32602,\"message\":\"Invalid params\",\"data\":\"dx/dy must be int8 and buttons must be uint8\"}}");
-    expect_rpc_context(
-        &context,
-        "{\"jsonrpc\":\"2.0\",\"method\":\"wheelReport\",\"params\":{\"wheelY\":-129,\"wheelX\":0},\"id\":86}",
-        "{\"jsonrpc\":\"2.0\",\"id\":86,\"error\":{\"code\":-32602,\"message\":\"Invalid params\",\"data\":\"wheelY/wheelX must be int8\"}}");
-    expect_rpc_context(
-        &context,
-        "{\"jsonrpc\":\"2.0\",\"method\":\"wheelReport\",\"params\":{\"wheelY\":1.5,\"wheelX\":0},\"id\":87}",
-        "{\"jsonrpc\":\"2.0\",\"id\":87,\"error\":{\"code\":-32602,\"message\":\"Invalid params\",\"data\":\"wheelY/wheelX must be int8\"}}");
     expect_rpc_context(
         &context,
         "{\"jsonrpc\":\"2.0\",\"method\":\"setStreamQualityFactor\",\"params\":{\"factor\":0.1},\"id\":8}",

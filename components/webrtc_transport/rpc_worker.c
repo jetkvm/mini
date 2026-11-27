@@ -272,6 +272,8 @@ static void run_job(rpc_job_t *job, rpc_queue_t queue)
         .deregister_device_ctx = job,
         .guest_clipboard = jetkvm_control_default_guest_clipboard_context(),
         .guest_file = jetkvm_control_default_guest_file_context(),
+        /* Input of a cloud session does not keep the local login. */
+        .note_local_activity = job->cloud_authority ? NULL : jetkvm_access_note_activity,
     };
     char *output = job->reply.json;
     size_t capacity = sizeof(job->reply.json);
@@ -424,6 +426,11 @@ bool rpc_worker_defer(const uint8_t *input, size_t length,
     if (!admitted) {
         free_job(job);
         return false;
+    }
+    /* The request counts from here, as one the peer task dispatches: its wait
+     * in the queue must not let the login expire before it runs. */
+    if (!origin->cloud_authority && jetkvm_control_rpc_counts_as_activity(name)) {
+        jetkvm_access_note_activity();
     }
     if (!start_worker) {
         (void)xSemaphoreGive(s_job_added[queue]);

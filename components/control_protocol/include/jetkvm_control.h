@@ -198,6 +198,7 @@ typedef struct {
     char serial_number[JETKVM_USB_DESCRIPTOR_STRING_CAPACITY];
     char manufacturer[JETKVM_USB_DESCRIPTOR_STRING_CAPACITY];
     char product[JETKVM_USB_DESCRIPTOR_STRING_CAPACITY];
+    char configuration[JETKVM_USB_DESCRIPTOR_STRING_CAPACITY];
     bool absolute_mouse;
     bool relative_mouse;
     bool keyboard;
@@ -216,8 +217,11 @@ typedef bool (*jetkvm_get_usb_configuration_fn)(
     (JETKVM_USB_DESCRIPTOR_CONFIG_STRING_MAX_LENGTH + 1U)
 
 /**
- * Validated USB device-descriptor values supplied by setUsbConfig. All five
- * JSON fields are required; descriptor strings may be empty.
+ * Validated USB descriptor values supplied by setUsbConfig. The five device
+ * descriptor fields are required. The configuration descriptor string
+ * (`configuration`) is optional: a page from before that field does not send
+ * it, and has_configuration is then false so the stored string stays.
+ * Descriptor strings may be empty.
  */
 typedef struct {
     uint16_t vendor_id;
@@ -225,6 +229,8 @@ typedef struct {
     char serial_number[JETKVM_USB_DESCRIPTOR_CONFIG_STRING_CAPACITY];
     char manufacturer[JETKVM_USB_DESCRIPTOR_CONFIG_STRING_CAPACITY];
     char product[JETKVM_USB_DESCRIPTOR_CONFIG_STRING_CAPACITY];
+    bool has_configuration;
+    char configuration[JETKVM_USB_DESCRIPTOR_CONFIG_STRING_CAPACITY];
 } jetkvm_usb_descriptor_config_t;
 
 /**
@@ -1069,6 +1075,23 @@ typedef struct {
 } jetkvm_extra_hostnames_context_t;
 void jetkvm_control_set_default_extra_hostnames_context(const jetkvm_extra_hostnames_context_t *context);
 
+/* Idle timeout of the local login in minutes, 0 for off
+ * (getLocalAuthSessionTimeout, setLocalAuthSessionTimeout). set takes a value
+ * of at most JETKVM_SESSION_TIMEOUT_MAX_MINUTES and returns NULL, or why it
+ * did not store it. */
+#define JETKVM_SESSION_TIMEOUT_MAX_MINUTES 1440U
+typedef struct {
+    unsigned (*get)(void *ctx);
+    const char *(*set)(unsigned minutes, void *ctx);
+    void *ctx;
+} jetkvm_session_timeout_context_t;
+void jetkvm_control_set_default_session_timeout_context(const jetkvm_session_timeout_context_t *context);
+/* Activity of a local login, as upstream counts it: an RPC call that changes
+ * state (not get*, list*, check*, is* or ping), and HID input other than the
+ * keepalive of a held key. */
+bool jetkvm_control_rpc_counts_as_activity(const char *method);
+bool jetkvm_control_hidrpc_counts_as_activity(jetkvm_hidrpc_event_type_t type);
+
 #define JETKVM_TAILSCALE_CONTROL_URL_CAPACITY 128U
 #define JETKVM_TAILSCALE_AUTH_KEY_CAPACITY 128U
 typedef struct {
@@ -1251,6 +1274,9 @@ typedef struct {
     jetkvm_guest_file_context_t guest_file;
     void *network_ctx;
     void *hid_state_ctx;
+    /** Called for each known method that counts as activity
+     *  (jetkvm_control_rpc_counts_as_activity); set for local sessions. */
+    void (*note_local_activity)(void);
 } jetkvm_control_context_t;
 
 /** `context` supplies the providers the capability list is derived from;

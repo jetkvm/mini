@@ -2270,6 +2270,8 @@ bool jetkvm_hid_input_get_usb_configuration(
     memcpy(snapshot->manufacturer, usb.manufacturer,
            sizeof(snapshot->manufacturer));
     memcpy(snapshot->product, usb.product, sizeof(snapshot->product));
+    memcpy(snapshot->configuration, usb.configuration,
+           sizeof(snapshot->configuration));
     return true;
 }
 
