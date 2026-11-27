@@ -491,6 +491,7 @@
     "local_auth_update_password_button": "Mettre à jour le mot de passe",
     "locale_auto": "Automatique",
     "locale_change_success": "La langue a été modifiée avec succès en {locale}",
+    "locale_cy": "Cymraeg",
     "locale_da": "Dansk",
     "locale_de": "Deutsch",
     "locale_en": "English",

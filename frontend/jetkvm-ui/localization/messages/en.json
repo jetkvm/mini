@@ -547,6 +547,7 @@
     "local_auth_update_password_button": "Update Password",
     "locale_auto": "Auto",
     "locale_change_success": "Language changed successfully to {locale}",
+    "locale_cy": "Cymraeg",
     "locale_da": "Dansk",
     "locale_de": "Deutsch",
     "locale_en": "English",

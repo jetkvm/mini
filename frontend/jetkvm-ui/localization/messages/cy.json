@@ -486,6 +486,7 @@
     "local_auth_update_password_button": "Diweddaru Cyfrinair",
     "locale_auto": "Awtomatig",
     "locale_change_success": "Iaith wedi'i newid yn llwyddiannus i {locale}",
+    "locale_cy": "Cymraeg",
     "locale_da": "Dansk",
     "locale_de": "Deutsch",
     "locale_en": "English",

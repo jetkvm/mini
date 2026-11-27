@@ -474,6 +474,7 @@
     "local_auth_update_password_button": "Aktualizovať heslo",
     "locale_auto": "Automaticky",
     "locale_change_success": "Jazyk úspešne zmenený na {locale}",
+    "locale_cy": "Cymraeg",
     "locale_da": "Dansk",
     "locale_de": "Deutsch",
     "locale_en": "English",

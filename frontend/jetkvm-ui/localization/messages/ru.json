@@ -491,6 +491,7 @@
     "local_auth_update_password_button": "Обновить пароль",
     "locale_auto": "Авто",
     "locale_change_success": "Язык успешно изменён на {locale}",
+    "locale_cy": "Cymraeg",
     "locale_da": "Dansk",
     "locale_de": "Deutsch",
     "locale_en": "English",

@@ -491,6 +491,7 @@
     "local_auth_update_password_button": "更新密碼",
     "locale_auto": "自動",
     "locale_change_success": "語言已成功變更為 {locale}",
+    "locale_cy": "Cymraeg",
     "locale_da": "Dansk",
     "locale_de": "Deutsch",
     "locale_en": "English",
