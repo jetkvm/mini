@@ -348,13 +348,41 @@ static bool valid_candidate(const char *candidate, size_t candidate_size,
     return true;
 }
 
+/* A candidate whose literal address is the address of the signaling socket
+ * shows that no NAT is between the browser and the device, in any address
+ * range. An mDNS name shows nothing, so it does not qualify. */
+static bool candidate_names_owner(const webrtc_http_candidate_policy_t *policy,
+                                  const char *candidate, size_t candidate_size)
+{
+    candidate_token_t tokens[8];
+    uint16_t port = 0;
+    if (candidate_size == 0 || candidate_size > WEBRTC_HTTP_CANDIDATE_MAX ||
+        !valid_candidate(candidate, candidate_size, tokens, &port)) {
+        return false;
+    }
+    size_t size = tokens[4].end - tokens[4].begin;
+    char text[16];
+    if (size >= sizeof(text)) {
+        return false;
+    }
+    memcpy(text, candidate + tokens[4].begin, size);
+    text[size] = '\0';
+    webrtc_http_ipv4_t address;
+    return webrtc_http_ipv4_parse(text, &address) &&
+           webrtc_http_ipv4_equal(&address, &policy->owner);
+}
+
 webrtc_http_candidate_result_t webrtc_http_candidate_policy_rewrite(
     webrtc_http_candidate_policy_t *policy, uint32_t session_id,
     const char *candidate, size_t candidate_size,
     char *output, size_t output_size)
 {
     if (policy == NULL || !policy->active || policy->session_id != session_id ||
-        !policy->owner_bound || !policy->rewrite_enabled) {
+        !policy->owner_bound) {
+        return WEBRTC_HTTP_CANDIDATE_POLICY_UNAVAILABLE;
+    }
+    if (!policy->rewrite_enabled &&
+        !candidate_names_owner(policy, candidate, candidate_size)) {
         return WEBRTC_HTTP_CANDIDATE_POLICY_UNAVAILABLE;
     }
     if (candidate_size == 0 || candidate_size > WEBRTC_HTTP_CANDIDATE_MAX) {

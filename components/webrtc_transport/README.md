@@ -32,7 +32,7 @@ The local WebSocket session is separate from cloud sessions and from diagnostic 
 
 ## Local ICE policy
 
-Local ICE accepts only component-1 UDP host candidates with an IPv4 or mDNS address. When the browser and device share a private network or `/24` (see `webrtc_http_candidate_policy_begin()`), candidates are rewritten to the WebSocket peer's IPv4 address. This handles browser mDNS candidates and browsers on another subnet or VLAN. A rejected candidate is dropped without closing signaling. STUN and TURN apply only to the cloud path.
+Local ICE accepts only component-1 UDP host candidates with an IPv4 or mDNS address. When the browser and device share a private network or `/24` (see `webrtc_http_candidate_policy_begin()`), candidates are rewritten to the WebSocket peer's IPv4 address. This handles browser mDNS candidates and browsers on another subnet or VLAN. On any other network, for example a LAN with public addresses in more than one subnet, a candidate is admitted only when its IPv4 address is the WebSocket peer's address. A rejected candidate is dropped without closing signaling. STUN and TURN apply only to the cloud path.
 
 DTLS setup waits at least 100 ms per receive (`CONFIG_WEBRTC_TRANSPORT_AGENT_RECV_TIMEOUT_MS`), because the vendor DTLS adapter treats eleven empty receives as a closed connection. Connected sessions use bounded non-blocking receive slices.
 
@@ -74,6 +74,6 @@ Targets stay between 256 kbit/s and the ceiling. A new peer starts at the ceilin
 
 The local `esp_peer` source component is in `third_party/esp_peer`. Managed dependencies include `espressif/cjson` and `espressif/esp_libsrtp`. Required DTLS-SRTP and X.509 options are in `sdkconfig.defaults`.
 
-Without a hook, the esp_peer ICE agent rejects an authenticated Binding Request whose source endpoint is not in the signaled checklist, which can stall the first connection. After its MESSAGE-INTEGRITY check, `third_party/esp_peer/src/core/agent.c` calls `jetkvm_ice_authenticated_pair()` in `peer_ice_reflexive.c`, which adds the observed IPv4 endpoint. Learned endpoints use esp_peer's internal `host` type and are not signaled. A change to the esp_peer source must keep this call site, the hook's arguments, and the STUN message layout that the hook reads.
+Without a hook, the esp_peer ICE agent rejects an authenticated Binding Request whose source endpoint is not in the signaled checklist, which can stall the first connection. After its MESSAGE-INTEGRITY check, `third_party/esp_peer/src/core/agent.c` calls `jetkvm_ice_authenticated_pair()` in `peer_ice_reflexive.c`, which adds the observed IPv4 endpoint. Learned endpoints use esp_peer's internal `host` type and are not signaled. A learned endpoint also starts pairing (`peer_main_loop()` in `peer_default.c`), so a browser that signals no candidate connects. A change to the esp_peer source must keep this call site, the hook's arguments, and the STUN message layout that the hook reads.
 
 Host tests run from `tests/run_host_tests.sh`.
