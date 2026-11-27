@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the production saved-network loader against an in-memory NVS."""
+"""Run the production saved-network loader and join record against an in-memory NVS."""
 from pathlib import Path
 import subprocess
 import tempfile
@@ -149,14 +149,36 @@ int main(void)
     fail_bind = 0;
     assert(c5_load_networks() == ESP_OK && store[1].present && store[0].present);
 
-    puts("C5 saved network load and sta_cfg migration: PASS");
+    /* The first join of a saved network is written to the list; later
+     * joins, and a join with a password that is not the saved one, write
+     * nothing. */
+    reset();
+    wifi_network_list_init(&s_networks);
+    assert(wifi_network_list_upsert(&s_networks, (const uint8_t *)"Home", 4,
+                                    (const uint8_t *)"password1", 9) == WIFI_NETWORK_LIST_OK);
+    wifi_saved_network_t home = s_networks.items[0];
+    wifi_saved_network_t typo = home;
+    typo.password[0] = 'P';
+    c5_mark_joined(&typo);
+    assert(commits == 0 && !store[0].present);
+    c5_mark_joined(&home);
+    assert(commits == 1);
+    assert(wifi_network_list_decode(&stored, store[0].data, store[0].length));
+    assert(!wifi_network_list_password_unproven(&stored, home.ssid, 4, home.password, 9));
+    c5_mark_joined(&home);
+    assert(commits == 1);
+
+    puts("C5 saved network load, sta_cfg migration and join record: PASS");
     return 0;
 }
 '''
 
 with tempfile.TemporaryDirectory() as directory:
     path = Path(directory)
-    (path / 'test.c').write_text(stub + function('static esp_err_t c5_load_networks(void)') + test)
+    (path / 'test.c').write_text(
+        stub + function('static esp_err_t c5_load_networks(void)') +
+        function('static esp_err_t c5_save_networks_locked(const wifi_network_list_t *list)') +
+        function('static void c5_mark_joined(const wifi_saved_network_t *network)') + test)
     subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror',
                     '-D_DEFAULT_SOURCE', f'-I{component / "include"}',
                     str(path / 'test.c'), str(component / 'wifi_network_list.c'),

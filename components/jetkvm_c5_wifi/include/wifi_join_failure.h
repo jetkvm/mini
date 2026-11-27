@@ -10,6 +10,7 @@
 
 /* The disconnect reasons of wifi_err_reason_t that the classification names;
  * jetkvm_c5_wifi.c checks them against esp_wifi_types. */
+#define WIFI_JOIN_REASON_AUTH_EXPIRE 2U
 #define WIFI_JOIN_REASON_ASSOC_TOOMANY 5U
 #define WIFI_JOIN_REASON_MIC_FAILURE 14U
 #define WIFI_JOIN_REASON_4WAY_HANDSHAKE_TIMEOUT 15U
@@ -28,7 +29,9 @@
 
 typedef enum {
     WIFI_JOIN_OK = 0,
-    /* The AP rejected the handshake: the password is wrong. */
+    /* The password is wrong: the AP rejected the handshake, or gave no
+     * answer to a password that has not joined the network before (see
+     * wifi_join_failure_after_retry). */
     WIFI_JOIN_WRONG_PASSWORD,
     /* No AP with the name (and a matching security) answered. */
     WIFI_JOIN_NOT_FOUND,
@@ -52,6 +55,21 @@ typedef struct {
 
 /* The failure that a disconnect with `reason` during a join means. */
 wifi_join_failure_t wifi_join_failure_from_reason(uint16_t reason);
+
+/* The failure of a join whose two attempts both ended in a disconnect, with
+ * `first_reason` and then `second_reason`. As
+ * wifi_join_failure_from_reason(second_reason), except for a second
+ * AUTH_EXPIRE after an AUTH_EXPIRE or a wrong-password reason, which is a
+ * wrong password: a WPA3 (SAE) AP that checks the station's confirm first
+ * drops a wrong one without an answer, and the station's authentication then
+ * times out. One AUTH_EXPIRE alone is transient and proves nothing.
+ *
+ * The exception applies only with `password_unproven`: the network has a
+ * password that has not joined it before (the user has just entered it). An
+ * AP that is out of reach or busy gives the same two AUTH_EXPIRE, so for a
+ * password that worked before they do not mean that it is wrong. */
+wifi_join_failure_t wifi_join_failure_after_retry(uint16_t first_reason, uint16_t second_reason,
+                                                  bool password_unproven);
 
 /* The failure of a join that ended without a disconnect: no address when the
  * AP admitted the station, else a time-out. */
