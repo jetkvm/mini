@@ -55,22 +55,23 @@ export function DisplayScheduleSetting() {
     }),
   );
 
-  // Runs again when the RPC channel changes.
+  // Runs again when the RPC channel changes. The schedule is read after the
+  // answer with the zones: the controls appear with the schedule, and the menu
+  // needs the zones to turn a schedule on for the first time. Without the
+  // zones, such a schedule is in UTC.
   useEffect(() => {
     writer.reset();
-    send("getDisplaySchedule", {}, (resp: JsonRpcResponse) => {
-      if ("error" in resp) {
-        console.error("Failed to get display schedule:", resp.error);
-        return;
-      }
-      writer.read(resp.result as DisplaySchedule);
-    });
-    send("getDisplayScheduleTimezones", {}, (resp: JsonRpcResponse) => {
-      if ("error" in resp) {
-        console.error("Failed to get display schedule time zones:", resp.error);
-        return;
-      }
-      setTimezones(resp.result as string[]);
+    send("getDisplayScheduleTimezones", {}, (zones: JsonRpcResponse) => {
+      if ("error" in zones)
+        console.error("Failed to get display schedule time zones:", zones.error);
+      else setTimezones(zones.result as string[]);
+      send("getDisplaySchedule", {}, (resp: JsonRpcResponse) => {
+        if ("error" in resp) {
+          console.error("Failed to get display schedule:", resp.error);
+          return;
+        }
+        writer.read(resp.result as DisplaySchedule);
+      });
     });
   }, [send, writer]);
 
