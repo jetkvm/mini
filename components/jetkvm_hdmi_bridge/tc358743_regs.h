@@ -26,6 +26,8 @@
 
 #define TC358743_LANES              2
 #define TC358743_FIFO_LEVEL         374
+#define TC358743_FIFO_LEVEL_MAX     511
+#define TC358743_FIFO_MARGIN        32
 #define TC358743_DDC5V_DELAY_100MS  0x02
 
 #define TC358743_OUTPUT_RGB888      1

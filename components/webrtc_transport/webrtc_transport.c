@@ -169,12 +169,19 @@ static esp_err_t prime_dtls_cert_cache(void)
     return ESP_OK;
 }
 
+/* What the capture path can deliver: a frame that fits the capture buffers
+ * (jetkvm_video's FRAME_WIDTH_MAX x FRAME_HEIGHT_MAX), at a rate the H.264
+ * encoder keeps up with, which is the pixel rate of 1920x1080 at 30 frames a
+ * second (1280x720 at 60 is below it). A range, not a list of modes: the
+ * EDID says which modes the Mini offers, and a source may send another one
+ * that it scales or times itself. The frame rate is a measured, rounded
+ * number: 23.98 Hz reads as 23 or 24, and the 60.32 Hz of 800x600 as 60 or
+ * 61. */
 static bool supported_mode(uint16_t width, uint16_t height, uint16_t fps)
 {
-    return (width == 1920 && height == 1080 && fps == 30) ||
-           (width == 1280 && height == 720 && (fps == 30 || fps == 60)) ||
-           (fps == 30 && ((width == 1024 && height == 768) ||
-                          (width == 1280 && (height == 800 || height == 1024))));
+    const uint32_t pixel_rate_max = 1920UL * 1080UL * 30UL;
+    return width >= 640 && width <= 1920 && height >= 480 && height <= 1080 &&
+           fps >= 23 && fps <= 61 && (uint32_t)width * height * fps <= pixel_rate_max;
 }
 
 static bool fail_sync_idr_locked(transport_ctx_t *ctx, uint32_t generation,

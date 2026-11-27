@@ -160,4 +160,21 @@ assert re.search(
     r"STRING_SERIAL\s*:\s*0", bank_builder
 ), "an empty serial number must give iSerialNumber 0"
 
+# The configuration descriptor names the configuration string, and an empty
+# configuration string gives iConfiguration 0, as for the serial number.
+assert re.search(
+    r"TUD_CONFIG_DESCRIPTOR\(\s*1,\s*bank->interface_count,\s*"
+    r"bank->configuration_string,", body("build_configuration_descriptor")
+), "iConfiguration must come from the descriptor bank"
+assert re.search(
+    r"bank->configuration_string\s*=\s*"
+    r"bank->string_storage\[STRING_CONFIGURATION\]\[0\]\s*!=\s*'\\0'\s*\?\s*"
+    r"STRING_CONFIGURATION\s*:\s*0U;", bank_builder
+), "an empty configuration string must give iConfiguration 0"
+assert re.search(
+    r"copy_usb_string\(\s*bank->string_storage\[STRING_CONFIGURATION\],\s*"
+    r"configuration->configuration", bank_builder
+), "the configuration string must come from the requested configuration"
+assert "const char *configuration;" in HEADER
+
 print("jetkvm_usb_hid dynamic descriptor contract: PASS")

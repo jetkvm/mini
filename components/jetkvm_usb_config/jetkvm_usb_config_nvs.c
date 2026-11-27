@@ -15,6 +15,45 @@
 #define USB_CONFIG_NVS_SLOT_B_KEY "cfg_b"
 #define USB_CONFIG_RECORD_MAGIC 0x43554b4aU /* "JKUC" little endian */
 
+/* Record version 2. Version 1 records stay readable; see
+ * usb_config_nvs_record_v1_t. */
+typedef struct {
+    uint32_t magic;
+    uint16_t record_version;
+    uint16_t record_size;
+    uint32_t generation;
+    uint32_t config_schema_version;
+    uint16_t vendor_id;
+    uint16_t product_id;
+    char serial_number[JETKVM_USB_STRING_CAPACITY];
+    char manufacturer[JETKVM_USB_STRING_CAPACITY];
+    char product[JETKVM_USB_STRING_CAPACITY];
+    char configuration[JETKVM_USB_STRING_CAPACITY];
+    uint8_t keyboard;
+    uint8_t absolute_mouse;
+    uint8_t relative_mouse;
+    uint8_t mass_storage;
+    uint8_t serial_console;
+    uint8_t audio;
+    uint8_t reserved[2];
+    uint32_t crc32;
+} usb_config_nvs_record_t;
+
+_Static_assert(sizeof(usb_config_nvs_record_t) == 160U,
+               "USB configuration record layout changed");
+_Static_assert(offsetof(usb_config_nvs_record_t, generation) == 8U &&
+                   offsetof(usb_config_nvs_record_t, config_schema_version) ==
+                       12U &&
+                   offsetof(usb_config_nvs_record_t, serial_number) == 20U &&
+                   offsetof(usb_config_nvs_record_t, configuration) == 116U &&
+                   offsetof(usb_config_nvs_record_t, keyboard) == 148U &&
+                   offsetof(usb_config_nvs_record_t, crc32) == 156U,
+               "USB configuration persistence ABI changed");
+_Static_assert(offsetof(usb_config_nvs_record_t, crc32) + sizeof(uint32_t) ==
+                   sizeof(usb_config_nvs_record_t),
+               "USB configuration record CRC must be the final field");
+
+/* Record version 1, written by firmware before the configuration string. */
 typedef struct {
     uint32_t magic;
     uint16_t record_version;
@@ -34,20 +73,42 @@ typedef struct {
     uint8_t audio;
     uint8_t reserved[2];
     uint32_t crc32;
-} usb_config_nvs_record_t;
+} usb_config_nvs_record_v1_t;
 
-_Static_assert(sizeof(usb_config_nvs_record_t) == 128U,
-               "USB configuration record layout changed");
-_Static_assert(offsetof(usb_config_nvs_record_t, generation) == 8U &&
-                   offsetof(usb_config_nvs_record_t, config_schema_version) ==
-                       12U &&
-                   offsetof(usb_config_nvs_record_t, serial_number) == 20U &&
-                   offsetof(usb_config_nvs_record_t, keyboard) == 116U &&
-                   offsetof(usb_config_nvs_record_t, crc32) == 124U,
-               "USB configuration persistence ABI changed");
-_Static_assert(offsetof(usb_config_nvs_record_t, crc32) + sizeof(uint32_t) ==
-                   sizeof(usb_config_nvs_record_t),
-               "USB configuration record CRC must be the final field");
+_Static_assert(sizeof(usb_config_nvs_record_v1_t) == 128U,
+               "USB configuration record version 1 layout changed");
+_Static_assert(offsetof(usb_config_nvs_record_v1_t, keyboard) == 116U &&
+                   offsetof(usb_config_nvs_record_v1_t, crc32) == 124U,
+               "USB configuration record version 1 ABI changed");
+
+/* Convert a version 1 record to a version 2 record with the default
+ * configuration string. The CRC field is not used after this. */
+static void record_from_v1(const usb_config_nvs_record_v1_t *v1,
+                           usb_config_nvs_record_t *record)
+{
+    memset(record, 0, sizeof(*record));
+    record->magic = v1->magic;
+    record->record_version = JETKVM_USB_CONFIG_RECORD_VERSION;
+    record->record_size = (uint16_t)sizeof(*record);
+    record->generation = v1->generation;
+    record->config_schema_version = JETKVM_USB_CONFIG_SCHEMA_VERSION;
+    record->vendor_id = v1->vendor_id;
+    record->product_id = v1->product_id;
+    memcpy(record->serial_number, v1->serial_number,
+           sizeof(record->serial_number));
+    memcpy(record->manufacturer, v1->manufacturer,
+           sizeof(record->manufacturer));
+    memcpy(record->product, v1->product, sizeof(record->product));
+    memcpy(record->configuration, JETKVM_USB_DEFAULT_CONFIGURATION,
+           sizeof(JETKVM_USB_DEFAULT_CONFIGURATION));
+    record->keyboard = v1->keyboard;
+    record->absolute_mouse = v1->absolute_mouse;
+    record->relative_mouse = v1->relative_mouse;
+    record->mass_storage = v1->mass_storage;
+    record->serial_console = v1->serial_console;
+    record->audio = v1->audio;
+    memcpy(record->reserved, v1->reserved, sizeof(record->reserved));
+}
 
 typedef struct {
     bool valid;
@@ -87,6 +148,8 @@ static void record_to_config(const usb_config_nvs_record_t *record,
     memcpy(config->manufacturer, record->manufacturer,
            sizeof(config->manufacturer));
     memcpy(config->product, record->product, sizeof(config->product));
+    memcpy(config->configuration, record->configuration,
+           sizeof(config->configuration));
     config->keyboard = record->keyboard == 1U;
     config->absolute_mouse = record->absolute_mouse == 1U;
     config->relative_mouse = record->relative_mouse == 1U;
@@ -95,27 +158,54 @@ static void record_to_config(const usb_config_nvs_record_t *record,
     config->audio = record->audio == 1U;
 }
 
+/* Check the header and CRC of a stored record of `size` bytes whose CRC is
+ * the final field. */
+static esp_err_t check_record_header(const void *data, size_t size,
+                                     uint16_t record_version,
+                                     uint32_t config_schema_version)
+{
+    uint32_t magic;
+    uint16_t version;
+    uint16_t record_size;
+    uint32_t generation;
+    uint32_t schema;
+    uint32_t crc;
+    const uint8_t *bytes = (const uint8_t *)data;
+    memcpy(&magic, bytes + offsetof(usb_config_nvs_record_t, magic),
+           sizeof(magic));
+    memcpy(&version, bytes + offsetof(usb_config_nvs_record_t, record_version),
+           sizeof(version));
+    memcpy(&record_size, bytes + offsetof(usb_config_nvs_record_t, record_size),
+           sizeof(record_size));
+    memcpy(&generation, bytes + offsetof(usb_config_nvs_record_t, generation),
+           sizeof(generation));
+    memcpy(&schema,
+           bytes + offsetof(usb_config_nvs_record_t, config_schema_version),
+           sizeof(schema));
+    memcpy(&crc, bytes + size - sizeof(crc), sizeof(crc));
+
+    if (magic != USB_CONFIG_RECORD_MAGIC) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (version != record_version || schema != config_schema_version) {
+        return ESP_ERR_INVALID_VERSION;
+    }
+    if (record_size != size) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    if (generation == 0U) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (crc != record_crc32(data, size - sizeof(crc))) {
+        return ESP_ERR_INVALID_CRC;
+    }
+    return ESP_OK;
+}
+
+/* Check the fields of a record whose header and CRC are valid. */
 static esp_err_t decode_record(const usb_config_nvs_record_t *record,
                                jetkvm_usb_config_t *config)
 {
-    if (record->magic != USB_CONFIG_RECORD_MAGIC) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    if (record->record_version != JETKVM_USB_CONFIG_RECORD_VERSION ||
-        record->config_schema_version != JETKVM_USB_CONFIG_SCHEMA_VERSION) {
-        return ESP_ERR_INVALID_VERSION;
-    }
-    if (record->record_size != sizeof(*record)) {
-        return ESP_ERR_INVALID_SIZE;
-    }
-    if (record->generation == 0U) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    uint32_t expected = record_crc32(record,
-                                     offsetof(usb_config_nvs_record_t, crc32));
-    if (record->crc32 != expected) {
-        return ESP_ERR_INVALID_CRC;
-    }
     if (record->reserved[0] != 0U || record->reserved[1] != 0U ||
         !record_flag_valid(record->keyboard) ||
         !record_flag_valid(record->absolute_mouse) ||
@@ -157,6 +247,7 @@ static void config_to_record(const jetkvm_usb_config_t *config,
     copy_record_string(record->serial_number, config->serial_number);
     copy_record_string(record->manufacturer, config->manufacturer);
     copy_record_string(record->product, config->product);
+    copy_record_string(record->configuration, config->configuration);
     record->keyboard = config->keyboard ? 1U : 0U;
     record->absolute_mouse = config->absolute_mouse ? 1U : 0U;
     record->relative_mouse = config->relative_mouse ? 1U : 0U;
@@ -179,18 +270,43 @@ static slot_result_t read_slot(nvs_handle_t handle, const char *key)
         result.error = err;
         return result;
     }
-    if (record_size != sizeof(result.record)) {
+    if (record_size != sizeof(usb_config_nvs_record_t) &&
+        record_size != sizeof(usb_config_nvs_record_v1_t)) {
         result.error = ESP_ERR_INVALID_SIZE;
         return result;
     }
 
-    err = nvs_get_blob(handle, key, &result.record, &record_size);
+    union {
+        usb_config_nvs_record_t current;
+        usb_config_nvs_record_v1_t v1;
+    } stored;
+    size_t expected_size = record_size;
+    err = nvs_get_blob(handle, key, &stored, &record_size);
     if (err != ESP_OK) {
         result.error = err;
         return result;
     }
-    if (record_size != sizeof(result.record)) {
+    if (record_size != expected_size) {
         result.error = ESP_ERR_INVALID_SIZE;
+        return result;
+    }
+    if (record_size == sizeof(usb_config_nvs_record_v1_t)) {
+        err = check_record_header(&stored.v1, sizeof(stored.v1),
+                                  JETKVM_USB_CONFIG_LEGACY_RECORD_VERSION,
+                                  JETKVM_USB_CONFIG_LEGACY_SCHEMA_VERSION);
+        if (err == ESP_OK) {
+            record_from_v1(&stored.v1, &result.record);
+        }
+    } else {
+        err = check_record_header(&stored.current, sizeof(stored.current),
+                                  JETKVM_USB_CONFIG_RECORD_VERSION,
+                                  JETKVM_USB_CONFIG_SCHEMA_VERSION);
+        if (err == ESP_OK) {
+            result.record = stored.current;
+        }
+    }
+    if (err != ESP_OK) {
+        result.error = err;
         return result;
     }
     err = decode_record(&result.record, &result.config);

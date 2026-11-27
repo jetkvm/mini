@@ -50,6 +50,8 @@ static bool add_capability(cJSON *list, bool present, const char *name)
  * shows its switch (getUsbDebuggingState, setUsbDebuggingState).
  * "extra_hostnames": the web server takes other names for the device
  * (getExtraHostnames, setExtraHostnames), so the UI shows that setting.
+ * "mdns": the network settings carry mdns_mode, so the UI shows the mDNS
+ * setting.
  * "storage_download": the build registered a download into the TF card that
  * starts and cancels (startStorageDownload, cancelStorageDownload), so the
  * mount page shows "Download from URL". */
@@ -76,6 +78,8 @@ static cJSON *device_capabilities_json(const jetkvm_control_context_t *context)
                         "usb_debugging") ||
         !add_capability(result, s_default_extra_hostnames.get && s_default_extra_hostnames.set,
                         "extra_hostnames") ||
+        !add_capability(result, context && context->get_network_settings &&
+                        context->set_network_settings, "mdns") ||
         !add_capability(result, s_default_storage_download.start &&
                                     s_default_storage_download.cancel,
                         "storage_download")) {

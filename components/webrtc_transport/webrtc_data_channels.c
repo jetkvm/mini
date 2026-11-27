@@ -1004,6 +1004,9 @@ typedef struct {
     transport_ctx_t *transport;
     uint32_t generation;
     bool movement_only;
+    /* Input of a local session keeps the local login; a cloud session's
+     * does not. */
+    bool local;
 } hidrpc_submit_context_t;
 
 static void hidrpc_submit_event(const jetkvm_hidrpc_event_t *event, void *arg)
@@ -1021,6 +1024,9 @@ static void hidrpc_submit_event(const jetkvm_hidrpc_event_t *event, void *arg)
     portEXIT_CRITICAL(&ctx->lock);
     if (!active) {
         return;
+    }
+    if (submit->local && jetkvm_control_hidrpc_counts_as_activity(event->type)) {
+        jetkvm_access_note_activity();
     }
 
     jetkvm_hid_input_submit_result_t result =
@@ -1178,6 +1184,7 @@ int peer_on_data(esp_peer_data_frame_t *frame, void *arg)
     bool is_hidrpc_reliable = false;
     uint32_t rpc_access_epoch = 0;
     bool rpc_cloud_authority = false;
+    bool local_session = false;
     uint32_t rpc_input_generation = 0;
     uint32_t hid_input_generation = 0;
     uint32_t input_session_id = 0;
@@ -1207,6 +1214,7 @@ int peer_on_data(esp_peer_data_frame_t *frame, void *arg)
         hid_generation_active_locked(ctx, ctx->active_peer_generation)) {
         hid_input_generation = ctx->active_peer_generation;
     }
+    local_session = ctx->active_peer_role != WEBRTC_TRANSPORT_SESSION_CLOUD_CONTROLLED;
     if (!is_rpc && !is_hidrpc) {
         guest_current = peer_session_current_locked(ctx);
         guest_handler = ctx->guest_handler;
@@ -1217,6 +1225,7 @@ int peer_on_data(esp_peer_data_frame_t *frame, void *arg)
         .transport = ctx,
         .generation = hid_input_generation,
         .movement_only = is_hidrpc && !is_hidrpc_reliable,
+        .local = local_session,
     };
 
     if (is_hidrpc) {
@@ -1328,6 +1337,7 @@ int peer_on_data(esp_peer_data_frame_t *frame, void *arg)
             .stream_id = frame->stream_id,
         };
         jetkvm_control_context_t control_context = {
+            .note_local_activity = rpc_cloud_authority ? NULL : jetkvm_access_note_activity,
             .app_version = app_version,
             .system_version = system_version,
             .sku = JETKVM_DEVICE_SKU,
@@ -1370,6 +1380,7 @@ int peer_on_data(esp_peer_data_frame_t *frame, void *arg)
             .keyboard_macros = {
                 .get = rpc_get_keyboard_macros_adapter,
                 .set = rpc_set_keyboard_macros_adapter,
+                .run = rpc_run_keyboard_macro_adapter,
             },
             .jiggler = {
                 .get_state = rpc_get_jiggler_state_adapter,

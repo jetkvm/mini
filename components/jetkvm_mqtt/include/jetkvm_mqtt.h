@@ -39,6 +39,7 @@ typedef struct {
     bool tls_insecure;
     bool enable_ha_discovery;
     bool enable_actions;
+    bool enable_keyboard_macros;
     int32_t debounce_ms;
 } jetkvm_mqtt_config_t;
 

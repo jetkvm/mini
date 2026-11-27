@@ -198,6 +198,7 @@ typedef struct {
     char serial_number[JETKVM_USB_DESCRIPTOR_STRING_CAPACITY];
     char manufacturer[JETKVM_USB_DESCRIPTOR_STRING_CAPACITY];
     char product[JETKVM_USB_DESCRIPTOR_STRING_CAPACITY];
+    char configuration[JETKVM_USB_DESCRIPTOR_STRING_CAPACITY];
     bool absolute_mouse;
     bool relative_mouse;
     bool keyboard;
@@ -216,8 +217,11 @@ typedef bool (*jetkvm_get_usb_configuration_fn)(
     (JETKVM_USB_DESCRIPTOR_CONFIG_STRING_MAX_LENGTH + 1U)
 
 /**
- * Validated USB device-descriptor values supplied by setUsbConfig. All five
- * JSON fields are required; descriptor strings may be empty.
+ * Validated USB descriptor values supplied by setUsbConfig. The five device
+ * descriptor fields are required. The configuration descriptor string
+ * (`configuration`) is optional: a page from before that field does not send
+ * it, and has_configuration is then false so the stored string stays.
+ * Descriptor strings may be empty.
  */
 typedef struct {
     uint16_t vendor_id;
@@ -225,6 +229,8 @@ typedef struct {
     char serial_number[JETKVM_USB_DESCRIPTOR_CONFIG_STRING_CAPACITY];
     char manufacturer[JETKVM_USB_DESCRIPTOR_CONFIG_STRING_CAPACITY];
     char product[JETKVM_USB_DESCRIPTOR_CONFIG_STRING_CAPACITY];
+    bool has_configuration;
+    char configuration[JETKVM_USB_DESCRIPTOR_CONFIG_STRING_CAPACITY];
 } jetkvm_usb_descriptor_config_t;
 
 /**
@@ -560,11 +566,47 @@ typedef bool (*jetkvm_get_keyboard_macros_fn)(
 typedef bool (*jetkvm_set_keyboard_macros_fn)(
     const jetkvm_control_keyboard_macro_list_t *list, void *ctx);
 
+/* A stored step becomes a press report and a release report. */
+#define JETKVM_CONTROL_KEYBOARD_MACRO_MAX_HID_STEPS \
+    (2U * JETKVM_CONTROL_KEYBOARD_MACRO_MAX_STEPS)
+
+typedef enum {
+    JETKVM_KEYBOARD_MACRO_RUN_ACCEPTED = 0,
+    JETKVM_KEYBOARD_MACRO_RUN_BUSY,
+    JETKVM_KEYBOARD_MACRO_RUN_UNAVAILABLE,
+} jetkvm_keyboard_macro_run_result_t;
+
+/** Queue the HID steps of a stored macro without a WebRTC session. The steps
+ *  run after the call returns; a macro that runs or waits is replaced. */
+typedef jetkvm_keyboard_macro_run_result_t (*jetkvm_run_keyboard_macro_fn)(
+    const jetkvm_hidrpc_macro_step_t *steps, size_t step_count, void *ctx);
+
 typedef struct {
     jetkvm_get_keyboard_macros_fn get;
     jetkvm_set_keyboard_macros_fn set;
+    jetkvm_run_keyboard_macro_fn run;
     void *ctx;
 } jetkvm_keyboard_macros_context_t;
+
+/**
+ * Find a stored macro by ID or, when no ID matches, by name without regard
+ * to case (Go findKeyboardMacro). Returns the index in `list`, or -1.
+ */
+int jetkvm_control_keyboard_macro_find(
+    const jetkvm_control_keyboard_macro_list_t *list, const char *id_or_name);
+
+/**
+ * Convert a stored macro into HID macro steps as the web UI does
+ * (executeMacroRemote): each step with keys or modifiers becomes a press
+ * held for 20 ms and an all-zero release that waits the step's delay. Steps
+ * without keys and modifiers are skipped, and keys beyond the six slots of a
+ * report are dropped. Returns false for a key or modifier ID outside the
+ * name tables.
+ */
+bool jetkvm_control_keyboard_macro_hid_steps(
+    const jetkvm_control_keyboard_macro_t *macro,
+    jetkvm_hidrpc_macro_step_t steps[JETKVM_CONTROL_KEYBOARD_MACRO_MAX_HID_STEPS],
+    size_t *step_count);
 
 typedef struct {
     uint32_t inactivity_limit_seconds;
@@ -738,6 +780,7 @@ typedef struct {
     bool tls_insecure;
     bool enable_ha_discovery;
     bool enable_actions;
+    bool enable_keyboard_macros;
     int32_t debounce_ms;
 } jetkvm_control_mqtt_settings_t;
 
@@ -957,7 +1000,19 @@ typedef struct {
     bool time_sync_custom;
     bool time_sync_disable_fallback;
     char time_sync_ntp_servers[JETKVM_TIME_SYNC_MAX_SERVERS][JETKVM_TIME_SYNC_SERVER_CAPACITY];
+    /* A jetkvm_mdns_mode_t. Appended after the time-sync layout; older blobs
+     * load as 0, upstream's default "auto". */
+    uint8_t mdns_mode;
 } jetkvm_network_settings_t;
+
+/* The mDNS responder setting (upstream mdns_mode). The Mini has no IPv6
+ * address, so "auto" answers on IPv4 only, as "ipv4_only" does, and upstream's
+ * "ipv6_only" is not supported. */
+typedef enum {
+    JETKVM_MDNS_MODE_AUTO = 0,
+    JETKVM_MDNS_MODE_DISABLED = 1,
+    JETKVM_MDNS_MODE_IPV4_ONLY = 2,
+} jetkvm_mdns_mode_t;
 
 /** The MAC address setting (getMacAddressSettings). */
 typedef struct {
@@ -1037,6 +1092,23 @@ typedef struct {
     void *ctx;
 } jetkvm_extra_hostnames_context_t;
 void jetkvm_control_set_default_extra_hostnames_context(const jetkvm_extra_hostnames_context_t *context);
+
+/* Idle timeout of the local login in minutes, 0 for off
+ * (getLocalAuthSessionTimeout, setLocalAuthSessionTimeout). set takes a value
+ * of at most JETKVM_SESSION_TIMEOUT_MAX_MINUTES and returns NULL, or why it
+ * did not store it. */
+#define JETKVM_SESSION_TIMEOUT_MAX_MINUTES 1440U
+typedef struct {
+    unsigned (*get)(void *ctx);
+    const char *(*set)(unsigned minutes, void *ctx);
+    void *ctx;
+} jetkvm_session_timeout_context_t;
+void jetkvm_control_set_default_session_timeout_context(const jetkvm_session_timeout_context_t *context);
+/* Activity of a local login, as upstream counts it: an RPC call that changes
+ * state (not get*, list*, check*, is* or ping), and HID input other than the
+ * keepalive of a held key. */
+bool jetkvm_control_rpc_counts_as_activity(const char *method);
+bool jetkvm_control_hidrpc_counts_as_activity(jetkvm_hidrpc_event_type_t type);
 
 #define JETKVM_TAILSCALE_CONTROL_URL_CAPACITY 128U
 #define JETKVM_TAILSCALE_AUTH_KEY_CAPACITY 128U
@@ -1220,6 +1292,9 @@ typedef struct {
     jetkvm_guest_file_context_t guest_file;
     void *network_ctx;
     void *hid_state_ctx;
+    /** Called for each known method that counts as activity
+     *  (jetkvm_control_rpc_counts_as_activity); set for local sessions. */
+    void (*note_local_activity)(void);
 } jetkvm_control_context_t;
 
 /** `context` supplies the providers the capability list is derived from;

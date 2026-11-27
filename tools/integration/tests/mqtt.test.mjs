@@ -8,11 +8,13 @@ import { mqttBroker, updateServer } from '../lib/servers.mjs';
 // MQTT / Home Assistant integration against lib/mqtt_broker.mjs.
 
 const SETTING_KEYS = ['enabled', 'broker', 'port', 'username', 'password', 'base_topic', 'use_tls', 'tls_insecure',
-  'enable_ha_discovery', 'enable_actions', 'debounce_ms'];
+  'enable_ha_discovery', 'enable_actions', 'enable_keyboard_macros', 'debounce_ms'];
 // Under <base topic>/<device ID>/: the Mini's states, retained.
 const STATES = ['status', 'video/state', 'cloud/state', 'sessions/state', 'usb/state', 'jiggler/state', 'network/state',
   'system/state', 'virtual_media/state'];
-const COMMANDS = ['jiggler/set', 'reboot/set', 'virtual_media/set'];
+// The command topics and their QoS. keyboard_macro/set is QoS 0, so the
+// broker does not keep a macro for the Mini while it is away.
+const COMMANDS = { 'jiggler/set': 1, 'reboot/set': 1, 'virtual_media/set': 1, 'keyboard_macro/set': 0 };
 // Under homeassistant/<component>/jetkvm_<device ID>/<object>/config: the
 // entities that the Mini announces with remote control on.
 const ENTITIES = ['binary_sensor/online', 'binary_sensor/video_signal', 'sensor/video_resolution', 'sensor/video_fps',
@@ -107,8 +109,8 @@ test('after connecting, the Mini keeps its states and its Home Assistant entitie
 
   // The entities: exactly those of the list, each on a state that the Mini
   // keeps and with a command that the Mini has subscribed to.
-  const commands = await until(() => broker.subscriptions(clientId), now => Object.keys(now ?? {}).length === COMMANDS.length, 5);
-  assert.deepEqual(commands, Object.fromEntries(COMMANDS.map(suffix => [`${base}/${suffix}`, 1])));
+  const commands = await until(() => broker.subscriptions(clientId), now => Object.keys(now ?? {}).length === Object.keys(COMMANDS).length, 5);
+  assert.deepEqual(commands, Object.fromEntries(Object.entries(COMMANDS).map(([suffix, qos]) => [`${base}/${suffix}`, qos])));
   const configs = Object.keys(retained).filter(topic => topic.startsWith('homeassistant/'));
   assert.deepEqual(configs.sort(), ENTITIES.map(config).sort(), 'the entities that the broker keeps');
   for (const entity of ENTITIES) {
@@ -204,7 +206,7 @@ test('the Mini connects and subscribes again after the MQTT broker closed its co
   assert.equal(broker.drop(clientId), true, 'the broker closed the Mini\'s connection');
   await until(() => broker.connects(clientId), now => now > connects, 25);
   await until(() => mini.rpc('getMqttStatus'), status => status.connected === true, 10);
-  const want = Object.fromEntries(COMMANDS.map(suffix => [`${base}/${suffix}`, 1]));
+  const want = Object.fromEntries(Object.entries(COMMANDS).map(([suffix, qos]) => [`${base}/${suffix}`, qos]));
   await until(() => broker.subscriptions(clientId), now => assert.deepEqual(now, want) ?? true, 5);
   await on.memoryUnchanged();
 });

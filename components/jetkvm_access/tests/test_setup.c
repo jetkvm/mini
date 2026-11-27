@@ -32,6 +32,7 @@ typedef struct { const char *uri; int method; esp_err_t (*handler)(httpd_req_t *
 #define ESP_ERR_NO_MEM 7
 #define ESP_ERR_INVALID_STATE 8
 #define ESP_LOGW(...) ((void)0)
+#define ESP_LOGI(...) ((void)0)
 #define JETKVM_ACCESS_HOST_NAME_CAPACITY 128U
 #define JETKVM_ACCESS_EXTRA_HOST_NAMES 8U
 #define EXT_RAM_BSS_ATTR
@@ -126,8 +127,24 @@ static int nvs_get_str(int h, const char *key, char *value, size_t *n) {
     if (*n <= strlen(stored_names)) return ESP_ERR_NVS_INVALID_LENGTH;
     strcpy(value, stored_names); *n = strlen(stored_names) + 1; return 0;
 }
+/* The idle timeout is the one u16 the access namespace holds. */
+static uint16_t stored_idle_minutes;
+static bool idle_minutes_stored;
+static int nvs_set_u16(int h, const char *key, uint16_t value) {
+    assert(h == 1 && !strcmp(key, "idle_minutes"));
+    if (fail_save) return ESP_FAIL;
+    stored_idle_minutes = value; idle_minutes_stored = true; return 0;
+}
+static int nvs_get_u16(int h, const char *key, uint16_t *value) {
+    assert(h == 1 && !strcmp(key, "idle_minutes"));
+    if (!idle_minutes_stored) return ESP_ERR_NVS_NOT_FOUND;
+    *value = stored_idle_minutes; return 0;
+}
 static int nvs_erase_key(int h, const char *key) { (void)h; (void)key; staged_record.size = 0; return 0; }
-static int nvs_erase_all(int h) { (void)h; staged_record.size = 0; return 0; }
+static int nvs_erase_all(int h) {
+    if (h == 1) idle_minutes_stored = false;
+    staged_record.size = 0; return 0;
+}
 static int seek(nvs_iterator_t *p) {
     while (cursor < 3 && !records[cursor].size) ++cursor;
     *p = cursor < 3 ? &cursor : NULL; return *p ? 0 : ESP_ERR_NVS_NOT_FOUND;
@@ -215,6 +232,8 @@ static void reboot_runtime(void) {
     s_mutex = NULL; memset(s_listeners, 0, sizeof(s_listeners));
     s_password_busy = false; memset(s_login_limits, 0, sizeof(s_login_limits));
     memset(s_token, 0, sizeof(s_token)); route_count = 0;
+    memset(s_expired_token, 0, sizeof(s_expired_token));
+    atomic_store(&s_expired_epoch, 0); atomic_store(&s_last_activity, 0);
     s_busy = false; s_restart_task = NULL;
     memset(&s_intent, 0, sizeof(s_intent));
     atomic_store(&s_state, RESET_IDLE);
@@ -225,8 +244,15 @@ static size_t own_names(char (*names)[JETKVM_ACCESS_HOST_NAME_CAPACITY], size_t 
     for (; count < capacity && count < 2; ++count) strcpy(names[count], own[count]);
     return count;
 }
+/* The mDNS TXT record follows the setup state through this listener. */
+static unsigned setup_notices;
+static void setup_noticed(void) {
+    assert(jetkvm_access_is_setup());
+    ++setup_notices;
+}
 static void start_access(void) {
     jetkvm_access_set_host_names(own_names);
+    jetkvm_access_set_setup_listener(setup_noticed);
     assert(jetkvm_access_init(NULL) == ESP_OK);
     assert(jetkvm_access_attach((void *)1, false) == ESP_OK);
 }
@@ -278,7 +304,102 @@ static void complete_reset(void) {
     assert(!records[1].size && !records[2].size);
 }
 
+static unsigned revocations;
+static void count_revocation(void) { ++revocations; }
+static int device_get(const char *cookie) { return request("/device", HTTP_GET, "", NULL, cookie); }
+static void restart_with_revocation_counter(void) {
+    const httpd_uri_t device = {.uri = "/device", .method = HTTP_GET, .handler = answer_ok};
+    reboot_runtime(); jetkvm_access_set_host_names(own_names);
+    assert(jetkvm_access_init(count_revocation) == ESP_OK);
+    assert(jetkvm_access_attach((void *)1, false) == ESP_OK);
+    assert(jetkvm_access_register((void *)1, &device) == ESP_OK);
+}
+#define MINUTE_TICKS (60U * configTICK_RATE_HZ)
+/* Upstream #1788: a local login with a password and a timeout expires after
+ * that time without activity. Activity is a protected HTTP request (not the
+ * signaling socket) or input that the transport reports; expiry ends the
+ * session's epoch, and the old cookie then gets session_expired. */
+static void idle_timeout(void) {
+    memset(records, 0, sizeof(records)); idle_minutes_stored = false;
+    restart_with_revocation_counter();
+    assert(SETUP("{\"localAuthMode\":\"password\",\"password\":\"12345678\"}") == 201);
+    char cookie[192]; strcpy(cookie, response_cookie);
+    assert(jetkvm_access_get_idle_minutes() == 0);
+    /* Off by default: a day without activity keeps the login. */
+    tick += 24 * 60 * MINUTE_TICKS;
+    assert(!jetkvm_access_expire_idle() && device_get(cookie) == 200);
+
+    assert(jetkvm_access_set_idle_minutes(JETKVM_ACCESS_MAX_IDLE_MINUTES + 1));
+    assert(jetkvm_access_get_idle_minutes() == 0);
+    fail_save = true;
+    assert(jetkvm_access_set_idle_minutes(5));
+    fail_save = false;
+    assert(jetkvm_access_get_idle_minutes() == 0);
+    assert(!jetkvm_access_set_idle_minutes(5) && jetkvm_access_get_idle_minutes() == 5);
+    /* The change counts as activity, and so does each protected request. */
+    tick += 5 * MINUTE_TICKS - 1;
+    assert(device_get(cookie) == 200);
+    tick += 5 * MINUTE_TICKS - 1;
+    assert(!jetkvm_access_expire_idle());
+    /* Input keeps the login; signaling traffic does not. */
+    jetkvm_access_note_activity();
+    tick += 5 * MINUTE_TICKS - 1;
+    httpd_req_t socket = {.handle = (void *)1, .uri = "/webrtc/signaling/client",
+        .method = HTTP_GET, .origin = "http://mini.local", .cookie = cookie};
+    assert(jetkvm_access_check_request(&socket, true) == ESP_OK);
+    uint32_t epoch = jetkvm_access_request_epoch(&socket);
+    assert(jetkvm_access_epoch_valid(epoch) && !jetkvm_access_epoch_expired(epoch));
+    unsigned revoked = revocations;
+    tick += 1;
+    /* The sweep expires the login without a request and ends the epoch. */
+    assert(jetkvm_access_expire_idle());
+    assert(revocations == revoked + 1);
+    assert(!jetkvm_access_epoch_valid(epoch) && jetkvm_access_epoch_expired(epoch));
+    assert(!jetkvm_access_expire_idle() && revocations == revoked + 1);
+    assert(device_get(cookie) == 401);
+    assert(strstr(response, "\"code\":\"session_expired\""));
+    assert(strstr(response_cookie, "authToken=;") && strstr(response_cookie, "Max-Age=0"));
+    assert(jetkvm_access_check_request(&socket, true) == ESP_ERR_INVALID_STATE);
+    assert(strstr(response, "session_expired"));
+    /* A request without the expired cookie is only unauthorized. */
+    assert(device_get(NULL) == 401 && !strstr(response, "session_expired"));
+    /* A new login works and is new activity. */
+    assert(request("/auth/login-local", HTTP_POST, "{\"password\":\"12345678\"}", NULL, NULL) == 200);
+    strcpy(cookie, response_cookie);
+    assert(device_get(cookie) == 200);
+    /* A request after the timeout expires the login itself. */
+    tick += 5 * MINUTE_TICKS;
+    epoch = atomic_load(&s_epoch);
+    revoked = revocations;
+    assert(device_get(cookie) == 401 && strstr(response, "session_expired"));
+    assert(jetkvm_access_epoch_expired(epoch) && revocations == revoked + 1);
+    /* Input keeps a session past the cookie's 7 days; the timeout still ends
+     * it when it goes idle. */
+    assert(request("/auth/login-local", HTTP_POST, "{\"password\":\"12345678\"}", NULL, NULL) == 200);
+    strcpy(cookie, response_cookie);
+    epoch = atomic_load(&s_epoch);
+    tick += 7 * 24 * 60 * MINUTE_TICKS;
+    jetkvm_access_note_activity();
+    assert(!jetkvm_access_expire_idle() && jetkvm_access_epoch_valid(epoch));
+    tick += 5 * MINUTE_TICKS;
+    assert(jetkvm_access_expire_idle() && jetkvm_access_epoch_expired(epoch));
+    assert(device_get(cookie) == 401 && strstr(response, "session_expired"));
+    /* The timeout is stored; the token is not, so a restart ends the login. */
+    restart_with_revocation_counter();
+    assert(jetkvm_access_get_idle_minutes() == 5);
+    assert(device_get(cookie) == 401 && !strstr(response, "session_expired"));
+    assert(request("/auth/login-local", HTTP_POST, "{\"password\":\"12345678\"}", NULL, NULL) == 200);
+    strcpy(cookie, response_cookie);
+    /* Without a password the login never expires. */
+    assert(request("/auth/local-password", HTTP_DELETE, "{\"password\":\"12345678\"}", NULL, cookie) == 200);
+    tick += 60 * MINUTE_TICKS;
+    assert(!jetkvm_access_expire_idle() && device_get(NULL) == 200);
+    assert(!jetkvm_access_set_idle_minutes(0));
+    memset(records, 0, sizeof(records)); idle_minutes_stored = false;
+}
+
 int main(void) {
+    idle_timeout();
     reboot_runtime(); assert(!jetkvm_factory_reset_boot_begin(NULL)); start_access();
     assert_status(false, false, false);
     /* Before setup only the setup routes answer: every other guarded route,
@@ -296,15 +417,19 @@ int main(void) {
     assert(SETUP("{\"localAuthMode\":\"noPassword\",\"password\":\"12345678\"}") == 400);
     assert(request("/device/setup", HTTP_POST, "{\"localAuthMode\":\"noPassword\"}", "https://evil.test", NULL) == 403);
     assert_status(false, false, false);
+    assert(setup_notices == 0);
     fail_save = true;
     assert(SETUP("{\"localAuthMode\":\"noPassword\"}") == 500);
     assert_status(false, false, false);
+    assert(setup_notices == 0);
     fail_save = false;
     assert(SETUP("{\"localAuthMode\":\"noPassword\"}") == 201);
+    assert(setup_notices == 1);
     assert(!jetkvm_access_password_enabled()); assert_status(true, false, false);
     assert(device_request() == 200);
     assert(jetkvm_access_check_request(&socket, true) == ESP_OK);
     assert(SETUP("{\"localAuthMode\":\"password\",\"password\":\"12345678\"}") == 409);
+    assert(setup_notices == 1);
     reboot_runtime(); start_access(); assert_status(true, false, false);
     records[2].size = 8; /* A saved non-default device setting. */
     assert(!jetkvm_factory_reset_request(NULL)); assert_status(true, true, false);
@@ -316,6 +441,7 @@ int main(void) {
     assert(SETUP("{\"localAuthMode\":\"password\",\"password\":\"12345678\"}") == 201);
     assert(jetkvm_access_password_enabled()); assert_status(true, false, false);
     assert(response_cookie[0]);
+    assert(setup_notices == 2);
     assert(SETUP("{\"localAuthMode\":\"noPassword\"}") == 409);
     reboot_runtime(); start_access(); assert_status(true, false, false);
     assert(jetkvm_access_password_enabled());
@@ -394,8 +520,11 @@ int main(void) {
         for (int i = 0; i < 5; ++i)
             assert(request("/auth/login-local?test=1", HTTP_POST, "{\"password\":\"wrongpass\"}", NULL, NULL) == 401);
         assert(request("/auth/login-local", HTTP_POST, "{\"password\":\"12345678\"}", NULL, NULL) == 429);
+        unsigned notices = setup_notices;
         assert(request("/auth/password-local", HTTP_PUT,
             "{\"oldPassword\":\"12345678\",\"newPassword\":\"23456789\"}", NULL, cookie) == 200);
+        /* A password change on a set-up device is no setup. */
+        assert(setup_notices == notices);
         strcpy(cookie, response_cookie);
         assert(request("/auth/login-local", HTTP_POST, "{\"password\":\"23456789\"}", NULL, NULL) == 429);
         if (!family) {
