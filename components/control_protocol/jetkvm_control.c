@@ -319,6 +319,8 @@ static const rpc_method_t s_rpc_methods[] = {
     { "deleteStorageFile", rpc_delete_storage_file },
     { "startStorageFileUpload", rpc_start_storage_file_upload },
     { "downloadToStorage", rpc_download_to_storage },
+    { "startStorageDownload", rpc_start_storage_download },
+    { "cancelStorageDownload", rpc_cancel_storage_download },
     { "getStorageDownloadState", rpc_get_storage_download_state },
     { "keyboardReport", rpc_keyboard_report },
     { "keypressReport", rpc_keypress_report },

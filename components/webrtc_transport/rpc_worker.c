@@ -44,6 +44,7 @@ static const struct {
     { "unmountImage", QUEUE_MEDIA },
     { "formatStorage", QUEUE_MEDIA },
     { "downloadToStorage", QUEUE_MEDIA },
+    { "startStorageDownload", QUEUE_MEDIA },
     { "startStorageFileUpload", QUEUE_MEDIA },
     { "setUsbConfig", QUEUE_MEDIA },
     { "setUsbDevices", QUEUE_MEDIA },

@@ -445,7 +445,8 @@ typedef struct {
     void *ctx;
 } jetkvm_virtual_media_context_t;
 
-/* downloadToStorage: one HTTP(S) GET streamed into a file on the TF card. */
+/* startStorageDownload (and its older name downloadToStorage): one HTTP(S)
+ * GET streamed into a file on the TF card. */
 #define JETKVM_CONTROL_STORAGE_DOWNLOAD_ERROR_CAPACITY 128U
 
 typedef enum {
@@ -453,6 +454,7 @@ typedef enum {
     JETKVM_CONTROL_STORAGE_DOWNLOAD_DOWNLOADING,
     JETKVM_CONTROL_STORAGE_DOWNLOAD_DONE,
     JETKVM_CONTROL_STORAGE_DOWNLOAD_ERROR,
+    JETKVM_CONTROL_STORAGE_DOWNLOAD_CANCELLED,
 } jetkvm_control_storage_download_phase_t;
 
 typedef struct {
@@ -471,6 +473,10 @@ typedef struct {
                   size_t error_capacity, void *ctx);
     bool (*get_state)(jetkvm_control_storage_download_state_t *state,
                       void *ctx);
+    /** cancelStorageDownload: ask the running download to stop; returns at
+     *  once. The device reports "storage_download" only with start and
+     *  cancel. */
+    void (*cancel)(void *ctx);
     void *ctx;
 } jetkvm_storage_download_context_t;
 

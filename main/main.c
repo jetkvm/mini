@@ -578,6 +578,9 @@ static void storage_download_copy_state(
                    "download filename capacity");
     _Static_assert(sizeof(output->error) == sizeof(state.error),
                    "download error capacity");
+    _Static_assert((int)JETKVM_CONTROL_STORAGE_DOWNLOAD_CANCELLED ==
+                       (int)JETKVM_STORAGE_DOWNLOAD_CANCELLED,
+                   "download phases");
     *output = (jetkvm_control_storage_download_state_t){
         .phase = (jetkvm_control_storage_download_phase_t)state.phase,
         .bytes = state.bytes,
@@ -653,6 +656,12 @@ static bool storage_download_get_state(
     (void)ctx;
     storage_download_copy_state(state);
     return true;
+}
+
+static void storage_download_cancel(void *ctx)
+{
+    (void)ctx;
+    (void)jetkvm_storage_download_cancel();
 }
 
 /* The live cloud WebSocket, not the registration getCloudState reports. */
@@ -1317,6 +1326,20 @@ void app_main(void)
     mdns_prepare();
     jetkvm_control_set_default_session_timeout_context(&(jetkvm_session_timeout_context_t){
         .get = session_timeout_get, .set = session_timeout_set});
+    /* Before the transport start: the first deviceCapabilities reply of an
+     * rpc channel reports storage_download from this context. */
+    const jetkvm_storage_download_hooks_t storage_download_hooks = {
+        .listener = storage_download_listener,
+        .video_pause = storage_download_video_pause,
+    };
+    jetkvm_storage_download_set_hooks(&storage_download_hooks);
+    const jetkvm_storage_download_context_t storage_download_context = {
+        .start = storage_download_start,
+        .get_state = storage_download_get_state,
+        .cancel = storage_download_cancel,
+    };
+    jetkvm_control_set_default_storage_download_context(
+        &storage_download_context);
     ESP_ERROR_CHECK(webrtc_transport_start());
     mdns_advertise();
     if (s_cloud_oidc_validator) {
@@ -1334,18 +1357,6 @@ void app_main(void)
                      esp_err_to_name(ret));
         }
     }
-
-    const jetkvm_storage_download_hooks_t storage_download_hooks = {
-        .listener = storage_download_listener,
-        .video_pause = storage_download_video_pause,
-    };
-    jetkvm_storage_download_set_hooks(&storage_download_hooks);
-    const jetkvm_storage_download_context_t storage_download_context = {
-        .start = storage_download_start,
-        .get_state = storage_download_get_state,
-    };
-    jetkvm_control_set_default_storage_download_context(
-        &storage_download_context);
 
     p4_device_set_ota_available(false);
     const jetkvm_ota_hooks_t ota_hooks = {

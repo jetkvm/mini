@@ -23,8 +23,9 @@ extern "C" {
  * use: it is written to <filename>.incomplete and renamed to <filename> only
  * after the last byte, so a partial file never carries the final name. A
  * failed download keeps the .incomplete prefix; the next download of the
- * same object continues from it with a Range request. A complete file of the
- * same size is reused without a transfer; one of another size is replaced.
+ * same object continues from it with a Range request. A cancelled download
+ * deletes the .incomplete file. A complete file of the same size is reused
+ * without a transfer; one of another size is replaced.
  */
 
 #define JETKVM_STORAGE_DOWNLOAD_ERROR_CAPACITY 128U
@@ -34,6 +35,7 @@ typedef enum {
     JETKVM_STORAGE_DOWNLOAD_DOWNLOADING,
     JETKVM_STORAGE_DOWNLOAD_DONE,
     JETKVM_STORAGE_DOWNLOAD_ERROR,
+    JETKVM_STORAGE_DOWNLOAD_CANCELLED,
 } jetkvm_storage_download_phase_t;
 
 typedef struct {
@@ -76,10 +78,23 @@ void jetkvm_storage_download_set_hooks(
  * `error`, when a download already runs (ESP_ERR_INVALID_STATE), an upload
  * holds the storage (ESP_ERR_INVALID_STATE), there is no mounted TF card
  * (ESP_ERR_NOT_FOUND) or the URL or filename is invalid
- * (ESP_ERR_INVALID_ARG). Everything later is reported through the state.
+ * (ESP_ERR_INVALID_ARG). A filename is invalid also when the name of its
+ * .incomplete file would not be a valid filename. Everything later is
+ * reported through the state.
  */
 esp_err_t jetkvm_storage_download_start(const char *url, const char *filename,
                                         char *error, size_t error_capacity);
+
+/**
+ * Ask the running download to stop. The task stops before its next read
+ * from the server (a stalled server: up to the 15 s read timeout), deletes
+ * the .incomplete file and ends in JETKVM_STORAGE_DOWNLOAD_CANCELLED. A
+ * cancel before the task holds the card also deletes an .incomplete file
+ * that a failed download of the same name left. A download that has already
+ * written its last byte ends as done. False when no download runs, or when
+ * the running one has already failed or finished and only cleans up.
+ */
+bool jetkvm_storage_download_cancel(void);
 
 /** Copy the state of the current or most recent download. */
 void jetkvm_storage_download_get_state(jetkvm_storage_download_state_t *state);
