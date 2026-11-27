@@ -13,13 +13,14 @@ void jetkvm_network_settings_defaults(jetkvm_network_settings_t *settings, const
 bool jetkvm_network_settings_fill_hostname(jetkvm_network_settings_t *settings, const char *device_id);
 /* The old factory hostname "esp32p4" becomes the default; true when changed. */
 bool jetkvm_network_settings_migrate_hostname(jetkvm_network_settings_t *settings, const char *device_id);
-/* Persisted blobs written before the time-sync fields, or before mdns_mode,
- * existed keep loading. */
+/* Persisted blobs written before the time-sync fields, before mdns_mode or
+ * before ipv6_mode existed keep loading. */
 #define JETKVM_NETWORK_SETTINGS_LEGACY_SIZE offsetof(jetkvm_network_settings_t, time_sync_custom)
 #define JETKVM_NETWORK_SETTINGS_TIME_SYNC_SIZE offsetof(jetkvm_network_settings_t, mdns_mode)
+#define JETKVM_NETWORK_SETTINGS_MDNS_SIZE offsetof(jetkvm_network_settings_t, ipv6_mode)
 bool jetkvm_network_settings_from_blob(const void *blob, size_t size, jetkvm_network_settings_t *settings);
-/* True when only time-sync fields or mdns_mode differ, so no interface
- * reconfiguration is needed. */
+/* True when only time-sync fields, mdns_mode or ipv6_mode differ, so IPv4
+ * needs no reconfiguration. */
 bool jetkvm_network_settings_connectivity_equal(const jetkvm_network_settings_t *a,
                                                 const jetkvm_network_settings_t *b);
 /*
@@ -32,6 +33,12 @@ bool jetkvm_network_settings_static_applies(const jetkvm_network_settings_t *set
                                             const char *static_ssid, const char *wifi_ssid);
 
 esp_err_t jetkvm_network_settings_init(esp_netif_t *netif);
+/* The interface takes an ipv6_mode other than "disabled": the Ethernet
+ * interface of a build with CONFIG_LWIP_IPV6_AUTOCONFIG. */
+bool jetkvm_network_settings_ipv6_supported(void);
+/* The link of the interface came up. lwIP drops the IPv6 addresses of an
+ * interface that goes down, so this applies ipv6_mode again. */
+void jetkvm_network_settings_link_up(void);
 /* `listener` gets the settings in effect each time a save changes them: after
  * the interface applied them (or rolled them back), and after a save of only
  * time-sync fields or mdns_mode. It runs with the settings lock held, so it

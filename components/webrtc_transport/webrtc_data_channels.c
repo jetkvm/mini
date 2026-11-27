@@ -1393,6 +1393,7 @@ int peer_on_data(esp_peer_data_frame_t *frame, void *arg)
          * RPC frame skips the network lock and the lwIP lease inspection. */
         control_context.snapshot_network = jetkvm_network_snapshot;
         control_context.get_network_settings = jetkvm_network_settings_get;
+        control_context.network_ipv6 = jetkvm_network_settings_ipv6_supported();
         control_context.get_wifi_settings = jetkvm_c5_wifi_get_settings;
         control_context.set_wifi_band = jetkvm_c5_wifi_set_band;
         control_context.scan_wifi_networks = jetkvm_c5_wifi_scan_networks;

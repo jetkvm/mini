@@ -315,8 +315,8 @@ static void test_mdns_mode(void)
     assert(jetkvm_network_settings_connectivity_equal(&a, &b));
 
     /* Blobs saved before mdns_mode load as auto; an unknown mode does not load. */
-    _Static_assert(sizeof(jetkvm_network_settings_t) == JETKVM_NETWORK_SETTINGS_TIME_SYNC_SIZE + 1,
-                   "mdns_mode is the last byte");
+    _Static_assert(JETKVM_NETWORK_SETTINGS_MDNS_SIZE == JETKVM_NETWORK_SETTINGS_TIME_SYNC_SIZE + 1,
+                   "mdns_mode is one byte after the time-sync fields");
     b.time_sync_custom = true;
     strcpy(b.time_sync_ntp_servers[0], "10.0.0.1");
     assert(jetkvm_network_settings_from_blob(&b, JETKVM_NETWORK_SETTINGS_TIME_SYNC_SIZE, &loaded));
@@ -333,6 +333,131 @@ static void test_mdns_mode(void)
     cJSON_ArrayForEach(field, cJSON_GetObjectItemCaseSensitive(reply, "result"))
         reported |= !strcmp(field->valuestring, "mdns");
     assert(reported);
+    cJSON_Delete(reply);
+}
+
+static bool listed(const cJSON *array, const char *name)
+{
+    const cJSON *item;
+    cJSON_ArrayForEach(item, array) if (!strcmp(item->valuestring, name)) return true;
+    return false;
+}
+/* ipv6_mode is a setting on an interface with IPv6: "disabled", "slaac" and
+ * "link_local" of upstream's modes. Without IPv6 it is a read-only "disabled". */
+static void test_ipv6_mode(void)
+{
+    jetkvm_control_context_t context = {
+        .get_network_settings = get, .set_network_settings = set, .network_ipv6 = true,
+    };
+    save_error = NULL;
+    jetkvm_network_settings_defaults(&saved, "e8f60a01b2cf");
+    assert(saved.ipv6_mode == JETKVM_IPV6_MODE_DISABLED);
+    cJSON *reply = rpc(&context, "getNetworkSettings", NULL);
+    cJSON *settings = cJSON_Duplicate(cJSON_GetObjectItemCaseSensitive(reply, "result"), true);
+    cJSON_Delete(reply);
+    assert(!strcmp(cJSON_GetObjectItemCaseSensitive(settings, "ipv6_mode")->valuestring, "disabled"));
+    assert(!listed(cJSON_GetObjectItemCaseSensitive(settings, "read_only_fields"), "ipv6_mode"));
+    /* The other fixed fields stay read-only. */
+    assert(listed(cJSON_GetObjectItemCaseSensitive(settings, "read_only_fields"), "lldp_mode"));
+
+    const struct { const char *name; uint8_t mode; } modes[] = {
+        {"slaac", JETKVM_IPV6_MODE_SLAAC}, {"link_local", JETKVM_IPV6_MODE_LINK_LOCAL},
+        {"disabled", JETKVM_IPV6_MODE_DISABLED},
+    };
+    for (size_t i = 0; i < sizeof(modes) / sizeof(modes[0]); ++i) {
+        replace(settings, "ipv6_mode", modes[i].name);
+        assert(submit(&context, settings) && saved.ipv6_mode == modes[i].mode);
+        reply = rpc(&context, "getNetworkSettings", NULL);
+        assert(!strcmp(cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(reply, "result"),
+                                                       "ipv6_mode")->valuestring, modes[i].name));
+        cJSON_Delete(reply);
+    }
+    /* A form that sends no mode keeps IPv6 off. */
+    replace(settings, "ipv6_mode", "slaac");
+    assert(submit(&context, settings));
+    cJSON_DeleteItemFromObjectCaseSensitive(settings, "ipv6_mode");
+    assert(submit(&context, settings) && saved.ipv6_mode == JETKVM_IPV6_MODE_DISABLED);
+
+    /* Upstream's other modes name the field; anything else is malformed. */
+    unsigned before = writes;
+    const char *data = NULL;
+    const char *const missing[] = {"static", "dhcpv6", "slaac_and_dhcpv6"};
+    for (size_t i = 0; i < sizeof(missing) / sizeof(missing[0]); ++i) {
+        replace(settings, "ipv6_mode", missing[i]);
+        assert(strstr(submit_error(&context, settings, &data), "not supported") && !strcmp(data, "ipv6_mode"));
+    }
+    replace(settings, "ipv6_mode", "on");
+    assert(!strcmp(submit_error(&context, settings, &data), "Invalid network settings"));
+    cJSON_DeleteItemFromObjectCaseSensitive(settings, "ipv6_mode");
+    cJSON_AddNumberToObject(settings, "ipv6_mode", 1);
+    assert(!submit(&context, settings));
+    assert(writes == before && saved.ipv6_mode == JETKVM_IPV6_MODE_DISABLED);
+
+    /* The UI shows the IPv6 setting for a device that reports "ipv6". */
+    reply = rpc(&context, "getDeviceCapabilities", NULL);
+    assert(listed(cJSON_GetObjectItemCaseSensitive(reply, "result"), "ipv6"));
+    cJSON_Delete(reply);
+
+    /* An interface without IPv6: read-only, "disabled" only, no capability,
+     * also when a mode is saved from a build that had it. */
+    context.network_ipv6 = false;
+    saved.ipv6_mode = JETKVM_IPV6_MODE_SLAAC;
+    reply = rpc(&context, "getNetworkSettings", NULL);
+    const cJSON *result = cJSON_GetObjectItemCaseSensitive(reply, "result");
+    assert(!strcmp(cJSON_GetObjectItemCaseSensitive(result, "ipv6_mode")->valuestring, "disabled"));
+    assert(listed(cJSON_GetObjectItemCaseSensitive(result, "read_only_fields"), "ipv6_mode"));
+    cJSON_Delete(reply);
+    saved.ipv6_mode = JETKVM_IPV6_MODE_DISABLED;
+    before = writes;
+    replace(settings, "ipv6_mode", "slaac");
+    assert(strstr(submit_error(&context, settings, &data), "not supported") && !strcmp(data, "ipv6_mode"));
+    replace(settings, "ipv6_mode", "disabled");
+    assert(submit(&context, settings) && writes == before + 1 && saved.ipv6_mode == JETKVM_IPV6_MODE_DISABLED);
+    reply = rpc(&context, "getDeviceCapabilities", NULL);
+    assert(!listed(cJSON_GetObjectItemCaseSensitive(reply, "result"), "ipv6"));
+    cJSON_Delete(reply);
+    cJSON_Delete(settings);
+
+    /* A change of ipv6_mode alone does not reconfigure IPv4. */
+    jetkvm_network_settings_t a, b, loaded;
+    jetkvm_network_settings_defaults(&a, "e8f60a01b2cf");
+    b = a;
+    b.ipv6_mode = JETKVM_IPV6_MODE_SLAAC;
+    assert(jetkvm_network_settings_connectivity_equal(&a, &b));
+
+    /* Blobs saved before ipv6_mode load as disabled; an unknown mode does not load. */
+    _Static_assert(sizeof(jetkvm_network_settings_t) == JETKVM_NETWORK_SETTINGS_MDNS_SIZE + 1,
+                   "ipv6_mode is the last byte");
+    b.mdns_mode = JETKVM_MDNS_MODE_IPV4_ONLY;
+    assert(jetkvm_network_settings_from_blob(&b, JETKVM_NETWORK_SETTINGS_MDNS_SIZE, &loaded));
+    assert(loaded.ipv6_mode == JETKVM_IPV6_MODE_DISABLED && loaded.mdns_mode == JETKVM_MDNS_MODE_IPV4_ONLY);
+    assert(jetkvm_network_settings_from_blob(&b, sizeof(b), &loaded) &&
+           loaded.ipv6_mode == JETKVM_IPV6_MODE_SLAAC);
+    b.ipv6_mode = JETKVM_IPV6_MODE_LINK_LOCAL + 1;
+    assert(!jetkvm_network_settings_from_blob(&b, sizeof(b), &loaded));
+
+    /* The state lists the link-local address and the routed addresses. */
+    context.network = (jetkvm_network_state_t){.up = true};
+    reply = rpc(&context, "getNetworkState", NULL);
+    result = cJSON_GetObjectItemCaseSensitive(reply, "result");
+    assert(cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(result, "ipv6_ready")));
+    assert(!cJSON_GetObjectItemCaseSensitive(result, "ipv6_link_local"));
+    assert(!cJSON_GetObjectItemCaseSensitive(result, "ipv6_addresses")->child);
+    cJSON_Delete(reply);
+    strcpy(context.network.ipv6_link_local, "fe80::32ed:a0ff:fe00:1");
+    strcpy(context.network.ipv6_addresses[0], "fd00:1::32ed:a0ff:fe00:1");
+    strcpy(context.network.ipv6_addresses[1], "2001:db8::32ed:a0ff:fe00:1");
+    reply = rpc(&context, "getNetworkState", NULL);
+    result = cJSON_GetObjectItemCaseSensitive(reply, "result");
+    assert(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(result, "ipv6_ready")));
+    assert(!strcmp(cJSON_GetObjectItemCaseSensitive(result, "ipv6_link_local")->valuestring,
+                   "fe80::32ed:a0ff:fe00:1"));
+    const cJSON *addresses = cJSON_GetObjectItemCaseSensitive(result, "ipv6_addresses");
+    assert(cJSON_GetArraySize(addresses) == 2);
+    assert(!strcmp(cJSON_GetObjectItemCaseSensitive(cJSON_GetArrayItem(addresses, 0), "address")->valuestring,
+                   "fd00:1::32ed:a0ff:fe00:1"));
+    assert(!strcmp(cJSON_GetObjectItemCaseSensitive(cJSON_GetArrayItem(addresses, 1), "address")->valuestring,
+                   "2001:db8::32ed:a0ff:fe00:1"));
     cJSON_Delete(reply);
 }
 
@@ -476,5 +601,6 @@ int main(void)
     test_default_hostname();
     test_time_sync_settings();
     test_mdns_mode();
-    puts("network validation, RPC round-trip, unsupported fields, time sync, mDNS mode and lease tests passed");
+    test_ipv6_mode();
+    puts("network validation, RPC round-trip, unsupported fields, time sync, mDNS mode, IPv6 mode and lease tests passed");
 }

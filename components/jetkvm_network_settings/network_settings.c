@@ -15,6 +15,7 @@
 #include "lwip/dns.h"
 #include "lwip/inet.h"
 #include "lwip/netif.h"
+#include "lwip/nd6.h"
 #include "lwip/tcpip.h"
 #include "nvs.h"
 #include "jetkvm_identity.h"
@@ -127,6 +128,60 @@ static void apply_dns(void *arg)
         dns_setserver(i, &dns);
     }
 }
+bool jetkvm_network_settings_ipv6_supported(void)
+{
+#if CONFIG_LWIP_IPV6_AUTOCONFIG
+    return esp_netif_get_handle_from_ifkey("ETH_DEF") != NULL;
+#else
+    return false;
+#endif
+}
+#if CONFIG_LWIP_IPV6_AUTOCONFIG
+typedef struct {
+    struct netif *netif;
+    uint8_t mode;
+} ipv6_request_t;
+/* TCP/IP context. Address 0 of an lwIP interface is its link-local address;
+ * the others come from router advertisements. */
+static void apply_ipv6_in_stack(void *arg)
+{
+    const ipv6_request_t *request = arg;
+    struct netif *netif = request->netif;
+    bool slaac = request->mode == JETKVM_IPV6_MODE_SLAAC;
+    netif_set_ip6_autoconfig_enabled(netif, slaac ? 1 : 0);
+    for (s8_t i = 0; i < LWIP_IPV6_NUM_ADDRESSES; ++i) {
+        bool wanted = i == 0 ? request->mode != JETKVM_IPV6_MODE_DISABLED : slaac;
+        if (!wanted && !ip6_addr_isinvalid(netif_ip6_addr_state(netif, i))) {
+            netif_ip6_addr_set_state(netif, i, IP6_ADDR_INVALID);
+        }
+    }
+    if (request->mode == JETKVM_IPV6_MODE_DISABLED || !netif_is_up(netif) || !netif_is_link_up(netif)) return;
+    if (ip6_addr_isinvalid(netif_ip6_addr_state(netif, 0))) netif_create_ip6_linklocal_address(netif, 1);
+    /* Ask the routers now; their next advertisement can be minutes away. */
+    if (slaac) nd6_restart_netif(netif);
+}
+#endif
+/* IPv6 on the interface as the mode says. IPv4 is not touched. */
+static esp_err_t apply_ipv6(esp_netif_t *netif, uint8_t mode)
+{
+#if CONFIG_LWIP_IPV6_AUTOCONFIG
+    if (!netif) return ESP_ERR_INVALID_STATE;
+    ipv6_request_t request = {.netif = esp_netif_get_netif_impl(netif), .mode = mode};
+    if (!request.netif) return ESP_ERR_INVALID_STATE;
+    return tcpip_callback_wait(apply_ipv6_in_stack, &request) == ERR_OK ? ESP_OK : ESP_FAIL;
+#else
+    (void)netif;
+    return mode == JETKVM_IPV6_MODE_DISABLED ? ESP_OK : ESP_ERR_NOT_SUPPORTED;
+#endif
+}
+void jetkvm_network_settings_link_up(void)
+{
+    if (!s_lock || !jetkvm_network_settings_ipv6_supported()) return;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    esp_err_t err = apply_ipv6(active_netif(), s_settings.ipv6_mode);
+    if (err != ESP_OK) ESP_LOGW(TAG, "IPv6 mode not applied at link up: %s", esp_err_to_name(err));
+    xSemaphoreGive(s_lock);
+}
 static esp_err_t apply(esp_netif_t *netif, const jetkvm_network_settings_t *requested)
 {
     if (!netif) return ESP_ERR_INVALID_STATE;
@@ -175,12 +230,22 @@ static void apply_worker(void *arg)
         if (s_apply_failed) ESP_LOGE(TAG, "Network rollback failed: save=%s apply=%s",
             esp_err_to_name(persisted), esp_err_to_name(restored));
     }
+    /* A save can change IPv4 and the IPv6 mode at once. A mode that the
+     * interface does not take goes back to the one in effect. */
+    if (s_settings.ipv6_mode != s_previous.ipv6_mode &&
+        apply_ipv6(active_netif(), s_settings.ipv6_mode) != ESP_OK) {
+        ESP_LOGW(TAG, "IPv6 mode not applied");
+        s_settings.ipv6_mode = s_previous.ipv6_mode;
+        (void)apply_ipv6(active_netif(), s_settings.ipv6_mode);
+        if (save(&s_settings) != ESP_OK) s_apply_failed = true;
+    }
     if (apply_time_sync(&s_settings) != ESP_OK && !s_apply_failed) {
         /* Same outcome as the time-sync-only path in _set: the interface keeps
          * its new settings, the servers go back to the ones that were running. */
         jetkvm_network_settings_t rollback = s_previous;
         memcpy(&rollback, &s_settings, JETKVM_NETWORK_SETTINGS_LEGACY_SIZE);
         rollback.mdns_mode = s_settings.mdns_mode;
+        rollback.ipv6_mode = s_settings.ipv6_mode;
         s_settings = rollback;
         s_apply_failed = save(&s_settings) != ESP_OK || apply_time_sync(&s_settings) != ESP_OK;
     }
@@ -308,6 +373,8 @@ const char *jetkvm_network_settings_set(const jetkvm_network_settings_t *request
     const jetkvm_network_settings_t *settings = &filled;
     const char *error = jetkvm_network_settings_validate(settings);
     if (error) return error;
+    if (settings->ipv6_mode != JETKVM_IPV6_MODE_DISABLED && !jetkvm_network_settings_ipv6_supported())
+        return "IPv6 is not supported on this Mini";
     if (!s_lock || !active_netif()) return "Network interface unavailable";
     xSemaphoreTake(s_lock, portMAX_DELAY);
     if (s_pending) error = "Network settings are still being applied";
@@ -317,11 +384,17 @@ const char *jetkvm_network_settings_set(const jetkvm_network_settings_t *request
          * stays as it is. Configure before persisting so a failed SNTP
          * restart is reported and the saved servers are the ones in effect. */
         bool time_sync = memcmp(&s_settings, settings, JETKVM_NETWORK_SETTINGS_TIME_SYNC_SIZE) != 0;
+        bool ipv6 = s_settings.ipv6_mode != settings->ipv6_mode;
         if (time_sync && apply_time_sync(settings) != ESP_OK) {
             (void)apply_time_sync(&s_settings);
             error = "Could not apply time sync servers";
+        } else if (ipv6 && apply_ipv6(active_netif(), settings->ipv6_mode) != ESP_OK) {
+            (void)apply_ipv6(active_netif(), s_settings.ipv6_mode);
+            if (time_sync) (void)apply_time_sync(&s_settings);
+            error = "Could not apply the IPv6 mode";
         } else if (save(settings) != ESP_OK) {
             if (time_sync) (void)apply_time_sync(&s_settings);
+            if (ipv6) (void)apply_ipv6(active_netif(), s_settings.ipv6_mode);
             error = "Could not save network settings";
         } else {
             s_settings = *settings;
@@ -471,6 +544,30 @@ void jetkvm_network_snapshot(jetkvm_network_state_t *state)
         lease_request_t request = {.netif = netif, .state = state};
         tcpip_callback_wait(inspect_lease, &request);
     }
+#if CONFIG_LWIP_IPV6
+    if (state->up) {
+        esp_ip6_addr_t addresses[LWIP_IPV6_NUM_ADDRESSES];
+        int count = esp_netif_get_all_preferred_ip6(netif, addresses);
+        size_t routed = 0;
+        for (int i = 0; i < count; ++i) {
+            char *text = NULL;
+            if (esp_netif_ip6_get_addr_type(&addresses[i]) == ESP_IP6_ADDR_IS_LINK_LOCAL) {
+                if (!state->ipv6_link_local[0]) text = state->ipv6_link_local;
+            } else if (routed < JETKVM_NETWORK_IPV6_ADDRESSES) {
+                text = state->ipv6_addresses[routed++];
+            }
+            /* Without the zone that lwIP keeps beside a link-local address. */
+            ip6_addr_t address = {0};
+            memcpy(address.addr, addresses[i].addr, sizeof(address.addr));
+            if (text && ip6addr_ntoa_r(&address, text, JETKVM_NETWORK_IPV6_CAPACITY)) {
+                /* lwIP writes upper-case digits; a URL and RFC 5952 use lower case. */
+                for (char *digit = text; *digit; ++digit) {
+                    if (*digit >= 'A' && *digit <= 'F') *digit = (char)(*digit - 'A' + 'a');
+                }
+            }
+        }
+    }
+#endif
 done:
     timestamp(time(NULL), state->last_updated);
     xSemaphoreGive(s_lock);
