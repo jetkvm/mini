@@ -53,6 +53,9 @@ jobs:
         with:
           fetch-depth: 0
       - name: Comment on the fixed issues
+        # A named shell runs with pipefail, so a failure of the script fails
+        # the step although tee succeeds.
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
