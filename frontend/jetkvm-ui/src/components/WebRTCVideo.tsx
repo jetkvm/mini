@@ -162,6 +162,7 @@ export default function WebRTCVideo({
   const liveDiagnosis = useDiagnosisStore(state => state.diagnosis);
   const sweepTitle = useDiagnosisStore(state => state.sweepTitle);
   const [restoringEdid, setRestoringEdid] = useState(false);
+  const restoreAttempt = useRef(0);
   const startEdidSweep = useEdidSweep();
   const sweepDiagnosis = useDiagnosisStore(state => state.sweepDiagnosis);
   const diagnosis: Diagnosis = sweepDiagnosis ?? liveDiagnosis;
@@ -877,13 +878,20 @@ export default function WebRTCVideo({
       return;
     }
     if (action === "restoreEdid") {
+      const attempt = ++restoreAttempt.current;
       setRestoringEdid(true);
-      const timeout = setTimeout(() => setRestoringEdid(false), RESTORE_TIMEOUT_MS);
+      const current = () => restoreAttempt.current === attempt;
+      const timeout = setTimeout(() => {
+        if (!current()) return;
+        restoreAttempt.current++;
+        setRestoringEdid(false);
+      }, RESTORE_TIMEOUT_MS);
       const finish = () => {
         clearTimeout(timeout);
         setRestoringEdid(false);
       };
       sendRpc("getEDIDPresets", {}, (presets: JsonRpcResponse) => {
+        if (!current()) return;
         const defaultEdid =
           "error" in presets ? undefined : (presets.result as { edid: string }[])[0]?.edid;
         if (!defaultEdid) {
@@ -892,6 +900,7 @@ export default function WebRTCVideo({
           return;
         }
         sendRpc("setEDID", { edid: defaultEdid }, (resp: JsonRpcResponse) => {
+          if (!current()) return;
           finish();
           if ("error" in resp) {
             notifications.error(m.diagnosis_edid_restore_failed());
