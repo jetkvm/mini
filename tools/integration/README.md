@@ -18,7 +18,7 @@ Builds this checkout, installs it on the Mini if it runs another build, then run
 
 ## Layout
 
-- `lib/` helpers: `mini.mjs` (connect, RPC, `until`), `host.mjs` (the bench's host), `keys.mjs`, `video.mjs`, `usb.mjs`, `servers.mjs` (stand-in update server, release bucket, MQTT broker), `cloud.mjs`, `erase.mjs`, and the OS Services helpers.
+- `lib/` helpers: `mini.mjs` (connect, RPC, `until`), `host.mjs` (the bench's host), `keys.mjs`, `video.mjs`, `usb.mjs`, `servers.mjs` (stand-in update server, release bucket, MQTT broker), `cloud.mjs`, `turn.mjs` (stand-in TURN server), `erase.mjs`, and the OS Services helpers.
 - `tests/` one file per subject, `<subject>.test.mjs`.
 - `fixtures/` static files served by stand-in servers.
 
