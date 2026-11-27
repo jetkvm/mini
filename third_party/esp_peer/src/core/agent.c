@@ -340,6 +340,7 @@ PRIVATE int agent_update_credential(agent_t *agent,stun_msg_t *recv_msg) {
 PRIVATE int agent_recv_while_parse(agent_t *agent,esp_peer_addr_t *dest,stun_msg_t *recv_msg) {
  int ret=jetkvm_ice_server_recv(&agent->stun_sock,dest,recv_msg->buf,sizeof(recv_msg->buf),false);
  if (ret<=0) {LOGE("%d Failed to receive request\n",agent->mode);return -1;}
+ recv_msg->size=ret;
  stun_parse_msg_buf(recv_msg);return agent_update_credential(agent,recv_msg);
 }
 
@@ -901,7 +902,9 @@ PRIVATE void agent_process_stun_request(agent_t *agent, esp_peer_addr_t *remote,
             if (!stun_msg->data) {
                 break;
             }
+            /* The parser keeps the data inside the message. */
             memmove(stun_msg->buf, stun_msg->data, stun_msg->data_size);
+            stun_msg->size = stun_msg->data_size;
             stun_msg->use_candidate = false;
             stun_parse_msg_buf(stun_msg);
             if (stun_msg->stunmethod != STUN_METHOD_BINDING) {
@@ -1072,9 +1075,17 @@ process_packet:
  }
  if (ret>0 && stun_probe(buf,ret)==0) {
   stun_msg_t stun_msg;
+  /* The socket takes datagrams from each sender, and a caller can give a
+   * buffer that is larger than a STUN message. Such a datagram is used up
+   * here: it is no message of this agent. */
+  if ((size_t)ret>sizeof(stun_msg.buf)) {
+   if (is_stun) *is_stun=true;
+   pthread_mutex_unlock(&agent->recv_mutex);return ret;
+  }
   memcpy(stun_msg.buf,buf,ret);stun_msg.size=ret;
   stun_parse_msg_buf(&stun_msg);
-  if (stun_msg.stunclass==STUN_CLASS_INDICATION && stun_msg.stunmethod==STUN_METHOD_DATA && stun_probe(stun_msg.data,stun_msg.data_size)) {
+  if (stun_msg.stunclass==STUN_CLASS_INDICATION && stun_msg.stunmethod==STUN_METHOD_DATA && stun_msg.data &&
+      stun_msg.data_size<=len && stun_probe(stun_msg.data,stun_msg.data_size)) {
    memcpy(buf,stun_msg.data,stun_msg.data_size);
    if (agent->use_stun_relay && agent->stun_state==ICE_CANDIDATE_STATE_SUCCEEDED) {
     agent->last_peer_binding_time=get_cur_time();agent->binding_not_response=0;

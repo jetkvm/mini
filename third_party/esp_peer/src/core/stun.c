@@ -78,18 +78,49 @@ void stun_get_mapped_address(char *value, uint8_t *mask, esp_peer_addr_t *addr)
     }
 }
 
+/* The number of value bytes that the parser and the validators read from
+ * an attribute of this type. */
+static size_t stun_attr_read_size(uint16_t type, const char *value, size_t attr_size)
+{
+    switch (type) {
+    case STUN_ATTR_TYPE_MAPPED_ADDRESS:
+    case STUN_ATTR_TYPE_XOR_PEER_ADDRESS:
+    case STUN_ATTR_TYPE_XOR_RELAYED_ADDRESS:
+    case STUN_ATTR_TYPE_XOR_MAPPED_ADDRESS:
+        return attr_size >= 2 && value[1] == 2 ? 20 : 8;
+    case STUN_ATTR_TYPE_MESSAGE_INTEGRITY:
+        return 20;
+    case STUN_ATTR_TYPE_ERROR_CODE:
+        return 4;
+    case STUN_ATTR_TYPE_LIFETIME:
+    case STUN_ATTR_TYPE_CHANNEL_NUM:
+        return 2;
+    default:
+        return 0;
+    }
+}
+
+/* Parses the msg->size bytes in msg->buf. The length field of the header
+ * and the length of each attribute come from the sender: the parser reads
+ * no byte after the received ones, and it stops at the first attribute
+ * that does not fit. */
 void stun_parse_msg_buf(stun_msg_t *msg)
 {
     stun_header_t *header = (stun_header_t *)msg->buf;
-    int length = ntohs(header->length) + sizeof(stun_header_t);
-    int pos = sizeof(stun_header_t);
+    size_t received = msg->size < sizeof(msg->buf) ? msg->size : sizeof(msg->buf);
+    size_t length = ntohs(header->length) + sizeof(stun_header_t);
+    size_t pos = sizeof(stun_header_t);
     uint8_t mask[16];
+    if (length > received) {
+        length = received;
+    }
+    msg->data = NULL;
+    msg->data_size = 0;
     msg->stunclass = ntohs(header->type);
     if ((msg->stunclass & STUN_CLASS_ERROR) == STUN_CLASS_ERROR) {
         msg->stunclass = STUN_CLASS_ERROR;
     } else if ((msg->stunclass & STUN_CLASS_INDICATION) == STUN_CLASS_INDICATION) {
         msg->stunclass = STUN_CLASS_INDICATION;
-        msg->data = NULL;
     } else if ((msg->stunclass & STUN_CLASS_RESPONSE) == STUN_CLASS_RESPONSE) {
         msg->stunclass = STUN_CLASS_RESPONSE;
     } else {
@@ -102,9 +133,13 @@ void stun_parse_msg_buf(stun_msg_t *msg)
     msg->username_size = 0;
     msg->realm_size = 0;
     msg->nonce_size = 0;
-    while (pos < length) {
+    while (pos + sizeof(stun_attr_t) <= length) {
         stun_attr_t *attr = (stun_attr_t *)(msg->buf + pos);
-        int attr_size = ntohs(attr->length);
+        size_t attr_size = ntohs(attr->length);
+        if (attr_size > length - pos - sizeof(stun_attr_t) ||
+            attr_size < stun_attr_read_size(ntohs(attr->type), attr->value, attr_size)) {
+            break;
+        }
         switch (ntohs(attr->type)) {
         case STUN_ATTR_TYPE_MAPPED_ADDRESS:
             memset(mask, 0, sizeof(mask));
@@ -136,7 +171,7 @@ void stun_parse_msg_buf(stun_msg_t *msg)
             break;
         case STUN_ATTR_TYPE_DATA:
             msg->data = (uint8_t *)attr->value;
-            msg->data_size = ntohs(attr->length);
+            msg->data_size = attr_size;
             break;
         case STUN_ATTR_TYPE_CHANNEL_NUM:
             msg->channel_num = ntohs(*(uint16_t *)attr->value);
@@ -286,7 +321,11 @@ int stun_probe(uint8_t *buf, size_t size)
 int stun_msg_is_valid(uint8_t *buf, size_t size, char *password)
 {
     stun_msg_t msg;
+    if (size < sizeof(stun_header_t) || size > sizeof(msg.buf)) {
+        return -1;
+    }
     memcpy(msg.buf, buf, size);
+    msg.size = size;
     stun_parse_msg_buf(&msg);
     stun_header_t *header = (stun_header_t *)msg.buf;
     if (msg.has_fingerprint) {
@@ -326,7 +365,11 @@ int stun_msg_is_valid_response(uint8_t *buf, size_t size, stun_credential_t cred
                                char *user, char *user_realm, char *password)
 {
     stun_msg_t msg;
+    if (size < sizeof(stun_header_t) || size > sizeof(msg.buf)) {
+        return -1;
+    }
     memcpy(msg.buf, buf, size);
+    msg.size = size;
     stun_parse_msg_buf(&msg);
     stun_header_t *header = (stun_header_t *)msg.buf;
     if (msg.has_fingerprint) {
