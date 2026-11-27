@@ -13,7 +13,8 @@
  * line, which ends in a colon. Of the breaks after a colon whose two lines
  * both fit `width`, it is the one with the smallest difference between the
  * drawn widths of the lines. Of two breaks with the same difference, the one
- * with the longer line first wins. 0 when no break makes both lines fit.
+ * with the longer line first wins. "::" stays whole, so that no second line
+ * starts with a colon. 0 when no break makes both lines fit.
  */
 static size_t even_break(const char *text, const lv_font_t *font, int32_t letter_space,
                          int32_t width)
@@ -22,7 +23,7 @@ static size_t even_break(const char *text, const lv_font_t *font, int32_t letter
     size_t best = 0;
     int32_t smallest = INT32_MAX;
     for (size_t first_length = 1; first_length < length; ++first_length) {
-        if (text[first_length - 1U] != ':') {
+        if (text[first_length - 1U] != ':' || text[first_length] == ':') {
             continue;
         }
         int32_t first = lv_text_get_width(text, (uint32_t)first_length, font, letter_space);

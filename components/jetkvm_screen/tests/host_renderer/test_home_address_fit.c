@@ -207,11 +207,12 @@ static const ipv6_break_t IPV6_BREAKS[] = {
     {"2001:db8:85a3:8d3a:1319:8a2e:3707:7348", "2001:db8:85a3:8d3a:", "1319:8a2e:3707:7348"},
     /* Short groups first: the break is after the fifth group. */
     {"2001:db8:1:2:200:5eff:fe00:5310", "2001:db8:1:2:200:", "5eff:fe00:5310"},
-    /* The break can be between the two colons of "::". */
-    {"2001:db8:85a3::8a2e:370:7348", "2001:db8:85a3:", ":8a2e:370:7348"},
+    /* "::" stays whole. A break between its two colons makes the lines more
+     * equal, and the second line would start with a colon. */
+    {"2001:db8:85a3::8a2e:370:7348", "2001:db8:85a3::", "8a2e:370:7348"},
     /* The breaks before and after "2222:" are equally uneven (see main()):
      * the longer line is the first one. */
-    {"1111:1111:1111:2222::1111:1111:1111", "1111:1111:1111:2222:", ":1111:1111:1111"},
+    {"1111:1111:1111:2222:1111:1111::1111", "1111:1111:1111:2222:", "1111:1111::1111"},
 };
 
 /* `report` prints the widths of the lines. */
@@ -301,9 +302,9 @@ int main(void)
     /* The tie of IPV6_BREAKS holds in the label's font. */
     const lv_font_t *ipv6_font =
         lv_obj_get_style_text_font(objects.home_info_ipv6_addr, LV_PART_MAIN);
-    if (text_width("1111:1111:1111:", ipv6_font) != text_width(":1111:1111:1111", ipv6_font)) {
+    if (text_width("1111:1111:1111:", ipv6_font) != text_width("1111:1111::1111", ipv6_font)) {
         ++s_failures;
-        fprintf(stderr, "\"1111:1111:1111:\" and \":1111:1111:1111\" differ in width in the "
+        fprintf(stderr, "\"1111:1111:1111:\" and \"1111:1111::1111\" differ in width in the "
                 "IPv6 font: the address with \"2222:\" between them has no tie\n");
     }
     /* Without this the checks above did not see the line beside the strip. */

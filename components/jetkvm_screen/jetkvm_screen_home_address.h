@@ -26,10 +26,10 @@ void jetkvm_screen_home_address_fit(void);
  * The IPv6 address of the home screen of a wired Mini, below the IPv4
  * address. An address that does not fit one line breaks after the colon
  * that makes its two lines most equal in drawn width; of two such colons,
- * the one with the longer line first. Four groups fit the narrowest line, so
- * every address has such a break. The two lines are the room of the
- * address's own line and of the MAC address line. So the MAC address is
- * shown only without an IPv6 address: with "" or NULL.
+ * the one with the longer line first. A "::" stays whole. Four groups fit
+ * the narrowest line, so every address has such a break. The two lines are
+ * the room of the address's own line and of the MAC address line. So the
+ * MAC address is shown only without an IPv6 address: with "" or NULL.
  */
 void jetkvm_screen_home_ipv6_set(const char *text);
 
