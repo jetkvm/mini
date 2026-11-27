@@ -21,6 +21,15 @@ void jetkvm_screen_home_address_set(const char *text);
 /* Selects the font again. Call after the width of the line changed. */
 void jetkvm_screen_home_address_fit(void);
 
+/*
+ * The IPv6 address of the home screen of a wired Mini, below the IPv4
+ * address. An address takes two lines of the narrowest line (it wraps after
+ * a colon, and four groups fit 194 px), which is the room of its own line
+ * and of the MAC address line. So the MAC address is shown only without an
+ * IPv6 address: with "" or NULL.
+ */
+void jetkvm_screen_home_ipv6_set(const char *text);
+
 #ifdef __cplusplus
 }
 #endif

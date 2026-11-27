@@ -27,6 +27,29 @@ void jetkvm_screen_home_address_fit(void)
     }
 }
 
+void jetkvm_screen_home_ipv6_set(const char *text)
+{
+    lv_obj_t *label = objects.home_info_ipv6_addr;
+    lv_obj_t *mac = objects.home_info_mac_addr;
+    if (label == NULL || mac == NULL) {
+        return;
+    }
+    bool shown = text != NULL && text[0] != '\0';
+    if (shown) {
+        /* The generated label is one line that ends in dots. */
+        lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+        lv_obj_set_height(label, LV_SIZE_CONTENT);
+        if (strcmp(lv_label_get_text(label), text) != 0) {
+            lv_label_set_text(label, text);
+        }
+        lv_obj_remove_flag(label, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(mac, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(label, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_remove_flag(mac, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 void jetkvm_screen_home_address_set(const char *text)
 {
     lv_obj_t *label = objects.home_info_ipv4_addr;

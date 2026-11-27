@@ -55,8 +55,8 @@ static const char *mdns_mode_name(uint8_t mode)
     return mode < MDNS_MODE_COUNT ? mdns_mode_names[mode] : "auto";
 }
 /* Returns NULL when parsed, otherwise "mdns_mode" for upstream's ipv6_only
- * (the Mini has no IPv6 address) or "" for malformed input. A missing mode
- * saves upstream's default, auto. */
+ * (the Mini's responder always answers on IPv4) or "" for malformed input. A
+ * missing mode saves upstream's default, auto. */
 static const char *parse_mdns_mode(const cJSON *settings, jetkvm_network_settings_t *parsed)
 {
     const cJSON *mode = cJSON_GetObjectItemCaseSensitive(settings, "mdns_mode");

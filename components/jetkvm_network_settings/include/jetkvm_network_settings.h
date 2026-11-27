@@ -36,6 +36,12 @@ esp_err_t jetkvm_network_settings_init(esp_netif_t *netif);
 /* The interface takes an ipv6_mode other than "disabled": the Ethernet
  * interface of a build with CONFIG_LWIP_IPV6_AUTOCONFIG. */
 bool jetkvm_network_settings_ipv6_supported(void);
+/* The interface has an IPv6 address that is not link-local and that it
+ * prefers: an address that a WebRTC session can offer to the browser. */
+bool jetkvm_network_ipv6_routed(void);
+/* The IPv6 address to show for the interface: such an address, else the
+ * link-local address, else "". */
+void jetkvm_network_ipv6_address(char *address, size_t capacity);
 /* The link of the interface came up. lwIP drops the IPv6 addresses of an
  * interface that goes down, so this applies ipv6_mode again. */
 void jetkvm_network_settings_link_up(void);

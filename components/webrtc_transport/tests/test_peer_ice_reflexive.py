@@ -54,13 +54,14 @@ typedef struct { uint8_t family; uint16_t port; union { uint8_t ipv4[4]; uint8_t
 #include "peer_ice_reflexive.c"
 static int additions, pairings;
 static bool exists, full;
+static const char *expected = "42000 1 UDP 1862270975 192.168.0.207 42000 typ host";
 void *jetkvm_ice_find_pair(void *a, const esp_peer_addr_t *s) {
     (void)a; (void)s; return exists ? &exists : NULL;
 }
 void jetkvm_ice_add_remote(void *a, char *s, char *end) {
     (void)a; ++additions;
     assert((size_t)(end-s)==strlen(s));
-    assert(strcmp(s,"42000 1 UDP 1862270975 192.168.0.207 42000 typ host")==0);
+    assert(strcmp(s,expected)==0);
     if (!full) exists=true;
 }
 void jetkvm_ice_pair_candidates(void *a) {(void)a; ++pairings;}
@@ -96,11 +97,22 @@ int main(void) {
         assert(!jetkvm_ice_authenticated_pair(NULL,&source,wire,size));
         assert(additions==2);
     }
-    fixture(wire);source.family=AF_INET6;
+    /* An IPv6 source is learned as an IPv6 host candidate. */
+    fixture(wire);exists=false;
+    esp_peer_addr_t source6={.family=AF_INET6,.port=42000,
+        .ipv6={0x20,0x01,0x0d,0xb8,0,0,0,0,0,0,0,0,0,0,0,7}};
+    expected="42000 1 UDP 1862270975 2001:db8::7 42000 typ host";
+    assert(jetkvm_ice_authenticated_pair(NULL,&source6,wire,sizeof(wire)));
+    assert(additions==3 && pairings==3);
+    /* No other address family, and no source without a port. */
+    exists=false;full=true;
+    source.family=AF_UNIX;
     assert(!jetkvm_ice_authenticated_pair(NULL,&source,wire,sizeof(wire)));
     source.family=AF_INET;source.port=0;
     assert(!jetkvm_ice_authenticated_pair(NULL,&source,wire,sizeof(wire)));
-    assert(additions==2);
+    source6.port=0;
+    assert(!jetkvm_ice_authenticated_pair(NULL,&source6,wire,sizeof(wire)));
+    assert(additions==3);
     puts("Authenticated ICE candidate admission, duplicates, malformed input and capacity: PASS");
 }
 ''')

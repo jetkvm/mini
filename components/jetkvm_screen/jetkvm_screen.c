@@ -997,8 +997,8 @@ static void apply_state(const jetkvm_screen_state_t *state)
                         state->wifi_rssi);
     } else {
         set_wifi_status(false, NULL, false, 0);
-        set_optional_label(objects.home_info_ipv6_addr, NULL, state->ipv6);
         set_label_text(objects.home_info_mac_addr, state->mac);
+        jetkvm_screen_home_ipv6_set(state->ipv6);
         lv_obj_set_style_text_color(objects.home_info_mac_addr,
                                     lv_color_hex(0xffffff), LV_PART_MAIN);
     }

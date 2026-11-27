@@ -98,6 +98,7 @@ export default function SettingsNetworkRoute() {
   const hasDomain = useCapability("domain");
   const hasMdns = useCapability("mdns");
   const hasIpv6 = useCapability("ipv6");
+  const hasIpv6Static = useCapability("ipv6_static");
   const hasWifi = useCapability("wifi");
   const setNetworkState = useNetworkStateStore(state => state.setNetworkState);
 
@@ -640,7 +641,9 @@ export default function SettingsNetworkRoute() {
                       options={[
                         { value: "disabled", label: m.network_ipv6_mode_disabled() },
                         { value: "slaac", label: m.network_ipv6_mode_slaac() },
-                        { value: "static", label: m.network_ipv6_mode_static() },
+                        ...(hasIpv6Static
+                          ? [{ value: "static", label: m.network_ipv6_mode_static() }]
+                          : []),
                         { value: "link_local", label: m.network_ipv6_mode_link_local() },
                       ]}
                       {...register("ipv6_mode")}

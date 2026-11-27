@@ -923,6 +923,7 @@ export type Capability =
   | "domain"
   | "mdns"
   | "ipv6"
+  | "ipv6_static" // the device takes a static IPv6 configuration (ipv6_mode "static")
   | "tls" // HTTPS listener with a selectable certificate
   | "local_loopback" // web UI can be limited to the loopback interface
   | "log_level" // default log level can be changed

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Lays out the home screen with LVGL on this machine, for both boards, and
-# checks that each IPv4 address stays inside its line, without the button
-# strip and with the strip at each edge (host_renderer/test_home_address_fit.c).
+# checks that each IPv4 address stays inside its line and each IPv6 address
+# on its two lines, without the button strip and with the strip at each edge
+# (host_renderer/test_home_address_fit.c).
 # Needs cmake, ninja and managed_components/lvgl__lvgl (idf.py reconfigure).
 set -euo pipefail
 

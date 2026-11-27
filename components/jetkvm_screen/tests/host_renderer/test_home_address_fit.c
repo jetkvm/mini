@@ -1,8 +1,8 @@
 /*
  * Every IPv4 address stays inside its line on the home screen: without the
- * button strip, and with the strip at each of the four canvas edges. The
- * check reads the laid-out LVGL objects of the production screens and of
- * the production button code.
+ * button strip, and with the strip at each of the four canvas edges. So does
+ * every IPv6 address on its two lines. The check reads the laid-out LVGL
+ * objects of the production screens and of the production button code.
  */
 #include <stdbool.h>
 #include <stdio.h>
@@ -87,6 +87,83 @@ static void check_layout(const char *layout, const char *widest, const char *wid
     check(layout, "192.168.123.123", LARGE);
 }
 
+/* The IPv6 address with the widest digit in each place: no address is wider. */
+static void widest_ipv6(const lv_font_t *font, char address[40])
+{
+    char widest = '0';
+    int32_t width = 0;
+    for (const char *digit = "0123456789abcdef"; *digit; ++digit) {
+        int32_t one = lv_text_get_width(digit, 1U, font, 0);
+        if (one > width) {
+            width = one;
+            widest = *digit;
+        }
+    }
+    char *out = address;
+    for (unsigned group = 0; group < 8U; ++group) {
+        if (group) *out++ = ':';
+        memset(out, widest, 4U);
+        out += 4;
+    }
+    *out = '\0';
+}
+
+static void ipv6_fault(const char *layout, const char *text, const char *fault)
+{
+    ++s_failures;
+    fprintf(stderr, "%s: %s %s\n", layout, text, fault);
+}
+
+/* An IPv6 address is drawn whole on at most two lines, inside its line and
+ * above the end of the address rows; the MAC address has that room only
+ * without an IPv6 address. */
+static void check_ipv6(const char *layout)
+{
+    lv_obj_t *label = objects.home_info_ipv6_addr;
+    lv_obj_t *mac = objects.home_info_mac_addr;
+    lv_obj_t *rows = lv_obj_get_parent(label);
+    const lv_font_t *font = lv_obj_get_style_text_font(label, LV_PART_MAIN);
+    char widest[40];
+    widest_ipv6(font, widest);
+    const char *const addresses[] = {widest, "2001:db8:85a3:8d3:1319:8a2e:370:7348", "fe80::1"};
+    lv_area_t box, line;
+    for (size_t i = 0; i < sizeof(addresses) / sizeof(addresses[0]); ++i) {
+        jetkvm_screen_home_ipv6_set(addresses[i]);
+        lv_obj_update_layout(objects.home_screen);
+        lv_obj_get_coords(label, &box);
+        lv_obj_get_content_coords(rows, &line);
+        /* What LVGL draws of the text in the label's width, wrapped. */
+        lv_point_t drawn;
+        lv_text_get_size(&drawn, addresses[i], font, 0,
+                         lv_obj_get_style_text_line_space(label, LV_PART_MAIN),
+                         lv_area_get_width(&box), LV_TEXT_FLAG_NONE);
+        int32_t two_lines = 2 * lv_font_get_line_height(font) +
+                            lv_obj_get_style_text_line_space(label, LV_PART_MAIN);
+        if (lv_obj_has_flag(label, LV_OBJ_FLAG_HIDDEN)) {
+            ipv6_fault(layout, addresses[i], "is not shown");
+        } else if (drawn.x > lv_area_get_width(&box) || drawn.y > lv_area_get_height(&box)) {
+            ipv6_fault(layout, addresses[i], "is not drawn whole in its label");
+        } else if (drawn.y > two_lines) {
+            ipv6_fault(layout, addresses[i], "takes more than two lines");
+        } else if (box.x1 < line.x1 || box.x2 > line.x2) {
+            ipv6_fault(layout, addresses[i], "crosses the end of its line");
+        } else if (box.y2 > line.y2) {
+            ipv6_fault(layout, addresses[i], "ends below the address rows");
+        } else if (!lv_obj_has_flag(mac, LV_OBJ_FLAG_HIDDEN)) {
+            ipv6_fault(layout, addresses[i], "is shown together with the MAC address, which has no room");
+        }
+    }
+    jetkvm_screen_home_ipv6_set("");
+    lv_obj_update_layout(objects.home_screen);
+    lv_obj_get_coords(mac, &box);
+    lv_obj_get_content_coords(rows, &line);
+    if (!lv_obj_has_flag(label, LV_OBJ_FLAG_HIDDEN)) {
+        ipv6_fault(layout, "no IPv6 address", "still shows the IPv6 line");
+    } else if (lv_obj_has_flag(mac, LV_OBJ_FLAG_HIDDEN) || box.y2 > line.y2) {
+        ipv6_fault(layout, "no IPv6 address", "does not show the MAC address in the address rows");
+    }
+}
+
 int main(void)
 {
     if (!host_ui_start()) {
@@ -101,6 +178,7 @@ int main(void)
 
     int32_t plain = line_width();
     check_layout("no strip", widest, widest_small);
+    check_ipv6("no strip");
 
     host_ui_start_buttons();
     int32_t narrowest = plain;
@@ -113,6 +191,9 @@ int main(void)
         jetkvm_screen_buttons_set_rotation(turns[i]);
         check_shown(layout, NULL);
         check_layout(layout, widest, widest_small);
+        /* Beside the widest IPv4 address in its font of this layout. */
+        jetkvm_screen_home_address_set(widest);
+        check_ipv6(layout);
         if (line_width() < narrowest) {
             narrowest = line_width();
         }

@@ -136,6 +136,55 @@ bool jetkvm_network_settings_ipv6_supported(void)
     return false;
 #endif
 }
+/* The IPv6 addresses that the interface prefers, as text: the link-local
+ * address and the others (those of the router advertisements). An address
+ * that is not there is "". */
+static void ipv6_addresses(esp_netif_t *netif, char link_local[JETKVM_NETWORK_IPV6_CAPACITY],
+                           char routed[JETKVM_NETWORK_IPV6_ADDRESSES][JETKVM_NETWORK_IPV6_CAPACITY])
+{
+    link_local[0] = '\0';
+    for (size_t i = 0; i < JETKVM_NETWORK_IPV6_ADDRESSES; ++i) routed[i][0] = '\0';
+#if CONFIG_LWIP_IPV6
+    if (!netif || !esp_netif_is_netif_up(netif)) return;
+    esp_ip6_addr_t addresses[LWIP_IPV6_NUM_ADDRESSES];
+    int count = esp_netif_get_all_preferred_ip6(netif, addresses);
+    size_t used = 0;
+    for (int i = 0; i < count; ++i) {
+        char *text = NULL;
+        if (esp_netif_ip6_get_addr_type(&addresses[i]) == ESP_IP6_ADDR_IS_LINK_LOCAL) {
+            if (!link_local[0]) text = link_local;
+        } else if (used < JETKVM_NETWORK_IPV6_ADDRESSES) {
+            text = routed[used++];
+        }
+        /* Without the zone that lwIP keeps beside a link-local address. */
+        ip6_addr_t address = {0};
+        memcpy(address.addr, addresses[i].addr, sizeof(address.addr));
+        if (text && ip6addr_ntoa_r(&address, text, JETKVM_NETWORK_IPV6_CAPACITY)) {
+            /* lwIP writes upper-case digits; a URL and RFC 5952 use lower case. */
+            for (char *digit = text; *digit; ++digit) {
+                if (*digit >= 'A' && *digit <= 'F') *digit = (char)(*digit - 'A' + 'a');
+            }
+        }
+    }
+#else
+    (void)netif;
+#endif
+}
+bool jetkvm_network_ipv6_routed(void)
+{
+    char link_local[JETKVM_NETWORK_IPV6_CAPACITY];
+    char routed[JETKVM_NETWORK_IPV6_ADDRESSES][JETKVM_NETWORK_IPV6_CAPACITY];
+    ipv6_addresses(active_netif(), link_local, routed);
+    return routed[0][0] != '\0';
+}
+void jetkvm_network_ipv6_address(char *address, size_t capacity)
+{
+    if (!address || !capacity) return;
+    char link_local[JETKVM_NETWORK_IPV6_CAPACITY];
+    char routed[JETKVM_NETWORK_IPV6_ADDRESSES][JETKVM_NETWORK_IPV6_CAPACITY];
+    ipv6_addresses(active_netif(), link_local, routed);
+    snprintf(address, capacity, "%s", routed[0][0] ? routed[0] : link_local);
+}
 #if CONFIG_LWIP_IPV6_AUTOCONFIG
 typedef struct {
     struct netif *netif;
@@ -544,30 +593,7 @@ void jetkvm_network_snapshot(jetkvm_network_state_t *state)
         lease_request_t request = {.netif = netif, .state = state};
         tcpip_callback_wait(inspect_lease, &request);
     }
-#if CONFIG_LWIP_IPV6
-    if (state->up) {
-        esp_ip6_addr_t addresses[LWIP_IPV6_NUM_ADDRESSES];
-        int count = esp_netif_get_all_preferred_ip6(netif, addresses);
-        size_t routed = 0;
-        for (int i = 0; i < count; ++i) {
-            char *text = NULL;
-            if (esp_netif_ip6_get_addr_type(&addresses[i]) == ESP_IP6_ADDR_IS_LINK_LOCAL) {
-                if (!state->ipv6_link_local[0]) text = state->ipv6_link_local;
-            } else if (routed < JETKVM_NETWORK_IPV6_ADDRESSES) {
-                text = state->ipv6_addresses[routed++];
-            }
-            /* Without the zone that lwIP keeps beside a link-local address. */
-            ip6_addr_t address = {0};
-            memcpy(address.addr, addresses[i].addr, sizeof(address.addr));
-            if (text && ip6addr_ntoa_r(&address, text, JETKVM_NETWORK_IPV6_CAPACITY)) {
-                /* lwIP writes upper-case digits; a URL and RFC 5952 use lower case. */
-                for (char *digit = text; *digit; ++digit) {
-                    if (*digit >= 'A' && *digit <= 'F') *digit = (char)(*digit - 'A' + 'a');
-                }
-            }
-        }
-    }
-#endif
+    ipv6_addresses(netif, state->ipv6_link_local, state->ipv6_addresses);
 done:
     timestamp(time(NULL), state->last_updated);
     xSemaphoreGive(s_lock);

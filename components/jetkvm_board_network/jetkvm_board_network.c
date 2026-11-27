@@ -343,7 +343,9 @@ static void screen_network_apply(jetkvm_screen_state_t *state)
     screen_copy_text(state->mac, sizeof(state->mac), runtime.mac);
     screen_copy_text(state->ipv4, sizeof(state->ipv4),
                      state->network_connected ? runtime.ipv4 : "");
+    /* "" unless the ipv6_mode setting gave the interface an address. */
     state->ipv6[0] = '\0';
+    if (state->network_connected) jetkvm_network_ipv6_address(state->ipv6, sizeof(state->ipv6));
 }
 
 static void screen_cloud_domain_from_url(char *destination, size_t capacity,

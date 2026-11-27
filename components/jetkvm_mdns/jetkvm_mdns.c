@@ -1,8 +1,11 @@
 #include "jetkvm_mdns.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdatomic.h>
 #include "esp_attr.h"
+#include "esp_event.h"
 #include "esp_log.h"
+#include "esp_netif.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "mdns.h"
@@ -33,8 +36,33 @@ static void hostname_changed(const char *hostname, void *arg)
     set_hostname(hostname);
 }
 
+/* espressif/mdns answers over IPv6, and with AAAA records, on an interface
+ * from the moment it gets an IPv6 address (its handler of IP_EVENT_GOT_IP6).
+ * "ipv4_only" turns that off again. This handler is registered after
+ * mdns_init(), so it runs after that one and its request is the later one in
+ * the responder's queue. */
+static atomic_bool s_ipv4_only;
+static void keep_ipv6_out(esp_netif_t *netif)
+{
+    if (netif) (void)mdns_netif_action(netif, MDNS_EVENT_DISABLE_IP6);
+}
+static void got_ipv6(void *arg, esp_event_base_t base, int32_t id, void *data)
+{
+    (void)arg; (void)base; (void)id;
+    if (data && atomic_load(&s_ipv4_only)) keep_ipv6_out(((const ip_event_got_ip6_t *)data)->esp_netif);
+}
+/* For the interfaces that have an IPv6 address already. */
+static void apply_families(bool ipv4_only)
+{
+    atomic_store(&s_ipv4_only, ipv4_only);
+    if (!ipv4_only) return;
+    keep_ipv6_out(esp_netif_get_handle_from_ifkey("ETH_DEF"));
+    keep_ipv6_out(esp_netif_get_handle_from_ifkey("WIFI_STA_DEF"));
+}
+
 static void stop_responder(void)
 {
+    (void)esp_event_handler_unregister(IP_EVENT, IP_EVENT_GOT_IP6, got_ipv6);
     mdns_free();
     set_hostname(NULL);
 }
@@ -60,6 +88,8 @@ static esp_err_t start_responder(const jetkvm_mdns_plan_t *plan)
     if (err == ESP_OK) err = mdns_service_add(plan->instance, JETKVM_MDNS_SERVICE_TYPE,
                                               JETKVM_MDNS_SERVICE_PROTO, plan->port,
                                               items, JETKVM_MDNS_TXT_COUNT);
+    if (err == ESP_OK) err = esp_event_handler_register(IP_EVENT, IP_EVENT_GOT_IP6, got_ipv6, NULL);
+    if (err == ESP_OK) apply_families(plan->ipv4_only);
     if (err != ESP_OK) stop_responder();
     return err;
 }
@@ -83,6 +113,7 @@ static esp_err_t update_responder(const jetkvm_mdns_plan_t *plan, unsigned chang
         err = mdns_service_txt_set(JETKVM_MDNS_SERVICE_TYPE, JETKVM_MDNS_SERVICE_PROTO,
                                    items, JETKVM_MDNS_TXT_COUNT);
     }
+    if (err == ESP_OK && (changes & JETKVM_MDNS_FAMILIES)) apply_families(plan->ipv4_only);
     return err;
 }
 
@@ -102,6 +133,11 @@ static void apply(void)
     }
     esp_err_t err = ESP_OK;
     if (changes & JETKVM_MDNS_START) {
+        err = start_responder(&wanted);
+    } else if ((changes & JETKVM_MDNS_FAMILIES) && !wanted.ipv4_only) {
+        /* IPv6 comes back as it came at first: a new responder takes the
+         * interfaces with the addresses that they have. */
+        stop_responder();
         err = start_responder(&wanted);
     } else if (update_responder(&wanted, changes) != ESP_OK) {
         /* Start over rather than leave a half-updated advertisement. */

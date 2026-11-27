@@ -144,6 +144,17 @@ static bool request_ipv4(httpd_req_t *req, bool peer,
     return false;
 }
 
+/* The client of the request has an IPv6 address that is not an IPv4-mapped one. */
+static bool request_peer_ipv6(httpd_req_t *req)
+{
+    struct sockaddr_storage endpoint = { 0 };
+    socklen_t endpoint_size = sizeof(endpoint);
+    webrtc_http_ipv4_t mapped;
+    return getpeername(httpd_req_to_sockfd(req), (struct sockaddr *)&endpoint,
+                       &endpoint_size) == 0 &&
+           endpoint.ss_family == AF_INET6 && !request_ipv4(req, true, &mapped);
+}
+
 static bool ethernet_ipv4(webrtc_http_ipv4_t *address)
 {
     if (address == NULL) {
@@ -218,6 +229,14 @@ static esp_err_t session_handler(httpd_req_t *req)
     bool have_device = request_ipv4(req, false, &device);
     if (!have_device) {
         have_device = ethernet_ipv4(&device);
+    }
+    /* A session of this path belongs to the IPv4 address of its client
+     * (webrtc_http_candidate_policy_authorize). A client at an IPv6 address
+     * would get a session without an owner; it uses the WebSocket signaling,
+     * where the socket is the session. */
+    if (request_peer_ipv6(req)) {
+        return send_status_text(req, "400 Bad Request",
+                                "HTTP signaling takes IPv4 clients only");
     }
     esp_err_t err = webrtc_transport_session_create(
         jetkvm_access_request_epoch(req), sender_playout_delay, &session_id, &generation);

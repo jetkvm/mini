@@ -1022,9 +1022,9 @@ typedef enum {
     JETKVM_IPV6_MODE_LINK_LOCAL = 2,
 } jetkvm_ipv6_mode_t;
 
-/* The mDNS responder setting (upstream mdns_mode). The Mini has no IPv6
- * address, so "auto" answers on IPv4 only, as "ipv4_only" does, and upstream's
- * "ipv6_only" is not supported. */
+/* The mDNS responder setting (upstream mdns_mode). "auto" answers on IPv4 and,
+ * on an interface with IPv6 addresses (ipv6_mode), on IPv6; "ipv4_only" keeps
+ * IPv6 out. Upstream's "ipv6_only" is not supported. */
 typedef enum {
     JETKVM_MDNS_MODE_AUTO = 0,
     JETKVM_MDNS_MODE_DISABLED = 1,

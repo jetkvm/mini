@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <arpa/inet.h>
 #include "esp_peer_types.h"
 #include "esp_log.h"
 
@@ -45,19 +46,20 @@ void *jetkvm_ice_authenticated_pair(void *agent, const esp_peer_addr_t *source,
                                   const uint8_t *wire, size_t size)
 {
     void *pair = jetkvm_ice_find_pair(agent, source);
-    if (pair || !source || !wire || source->family != AF_INET || !source->port)
+    if (pair || !source || !wire || !source->port ||
+        (source->family != AF_INET && source->family != AF_INET6))
         return pair;
 
     if (size < 20 || size > 1400) return NULL;
     uint32_t priority = request_priority(wire, size);
     if (!priority) return NULL;
 
+    char address[INET6_ADDRSTRLEN];
+    if (!inet_ntop(source->family, source->family == AF_INET ? (const void *)source->ipv4 :
+                   (const void *)source->ipv6, address, sizeof(address))) return NULL;
     char candidate[128];
-    int length = snprintf(candidate, sizeof(candidate),
-        "%u 1 UDP %lu %u.%u.%u.%u %u typ host",
-        (unsigned)source->port, (unsigned long)priority,
-        source->ipv4[0], source->ipv4[1], source->ipv4[2], source->ipv4[3],
-        (unsigned)source->port);
+    int length = snprintf(candidate, sizeof(candidate), "%u 1 UDP %lu %s %u typ host",
+        (unsigned)source->port, (unsigned long)priority, address, (unsigned)source->port);
     if (length <= 0 || (size_t)length >= sizeof(candidate)) return NULL;
     /* This SDK has no prflx type, and a remote candidate that is not a relay
      * candidate pairs only with the local candidate of its own type. Store
@@ -67,8 +69,7 @@ void *jetkvm_ice_authenticated_pair(void *agent, const esp_peer_addr_t *source,
     jetkvm_ice_add_remote(agent, candidate, candidate + length);
     jetkvm_ice_pair_candidates(agent);
     pair = jetkvm_ice_find_pair(agent, source);
-    if (pair) ESP_LOGI("webrtc_ice", "authenticated peer-reflexive candidate %u.%u.%u.%u:%u",
-        source->ipv4[0], source->ipv4[1], source->ipv4[2], source->ipv4[3],
-        (unsigned)source->port);
+    if (pair) ESP_LOGI("webrtc_ice", "authenticated peer-reflexive candidate %s port %u",
+        address, (unsigned)source->port);
     return pair;
 }

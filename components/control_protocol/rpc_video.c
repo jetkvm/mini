@@ -53,7 +53,8 @@ static bool add_capability(cJSON *list, bool present, const char *name)
  * "mdns": the network settings carry mdns_mode, so the UI shows the mDNS
  * setting.
  * "ipv6": the interface takes an ipv6_mode other than "disabled", so the UI
- * shows the IPv6 setting.
+ * shows the IPv6 setting. The Mini does not report "ipv6_static", so the UI
+ * leaves the "static" mode out.
  * "storage_download": the build registered a download into the TF card that
  * starts and cancels (startStorageDownload, cancelStorageDownload), so the
  * mount page shows "Download from URL". */
