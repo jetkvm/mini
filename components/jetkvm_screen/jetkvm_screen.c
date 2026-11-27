@@ -1627,7 +1627,7 @@ esp_err_t jetkvm_screen_update(const jetkvm_screen_state_t *state)
     uint32_t connection_state = (state->active_sessions << 2) |
         ((uint32_t)state->hdmi_connected << 1) | state->network_connected;
     if (__atomic_exchange_n(&previous_connection_state, connection_state, __ATOMIC_ACQ_REL) != connection_state)
-        local_display_wake();
+        local_display_notice();
     jetkvm_screen_state_t normalized;
     normalize_state(&normalized, state);
     /* Direct preview bypasses the LVGL task, so publish this one overlay bit

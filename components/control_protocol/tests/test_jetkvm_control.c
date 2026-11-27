@@ -1452,6 +1452,113 @@ static void test_local_display(void)
     display_test_fail = true;
     display_test_error("setDisplayRotation", "{\"params\":{\"rotation\":\"180\"}}", -32603);
     assert(display_test_rotation == 90);
+    /* A display without the schedule callbacks has no schedule. */
+    display_test_error("getDisplaySchedule", "null", -32603);
+    display_test_error("getDisplayScheduleTimezones", "null", -32603);
+    display_test_error("setDisplaySchedule",
+        "{\"params\":{\"dim\":{\"enabled\":false,\"start\":\"20:00\",\"end\":\"23:00\"},\"off\":{\"enabled\":true,\"start\":\"22:00\",\"end\":\"06:00\"},\"timezone\":\"UTC\"}}", -32603);
+    display_test_fail = false;
+    jetkvm_control_set_default_local_display_context(NULL);
+}
+
+static jetkvm_display_schedule_t schedule_test_value = {
+    .dim = {.start_minute = 20 * 60 + 5, .end_minute = 23 * 60},
+    .off = {.enabled = true, .start_minute = 22 * 60, .end_minute = 6 * 60}, .timezone = "Europe/Stockholm"};
+static unsigned schedule_test_writes;
+static bool schedule_test_get(jetkvm_display_schedule_t *schedule, void *ctx)
+{ (void)ctx; *schedule = schedule_test_value; return true; }
+static const char *schedule_test_set(const jetkvm_display_schedule_t *schedule, void *ctx)
+{
+    (void)ctx; ++schedule_test_writes;
+    if (strcmp(schedule->timezone, "Europe/Stockholm") && strcmp(schedule->timezone, "UTC") &&
+        (schedule->dim.enabled || schedule->off.enabled || schedule->timezone[0])) return "Unknown time zone";
+    schedule_test_value = *schedule; return NULL;
+}
+static bool schedule_test_timezone(size_t index, const char **name, void *ctx)
+{
+    static const char *const names[] = {"Europe/Stockholm", "UTC"};
+    (void)ctx; *name = index < 2U ? names[index] : NULL; return true;
+}
+/* A setDisplaySchedule request with the two windows and the zone as JSON text. */
+static const char *schedule_request(const char *dim, const char *off, const char *timezone)
+{
+    static char request[512];
+    snprintf(request, sizeof(request),
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"setDisplaySchedule\",\"params\":{\"params\":{\"dim\":%s,\"off\":%s,\"timezone\":%s}}}",
+        dim, off, timezone);
+    return request;
+}
+static void schedule_test_refused(const char *dim, const char *off, const char *timezone)
+{
+    char output[1024]; size_t written;
+    const char *request = schedule_request(dim, off, timezone);
+    assert(jetkvm_control_handle_rpc((const uint8_t *)request, strlen(request), output, sizeof(output), &written) == JETKVM_CONTROL_RESPONSE_READY);
+    assert(strstr(output, "\"code\":-32602"));
+}
+static void test_display_schedule(void)
+{
+    jetkvm_local_display_context_t display = {
+        .get_schedule = schedule_test_get, .set_schedule = schedule_test_set,
+        .schedule_timezone = schedule_test_timezone,
+    };
+    jetkvm_control_set_default_local_display_context(&display);
+    expect_rpc("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getDeviceCapabilities\"}",
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":[\"display_schedule\"]}");
+    expect_rpc("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getDisplaySchedule\"}",
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"dim\":{\"enabled\":false,\"start\":\"20:05\",\"end\":\"23:00\"},"
+        "\"off\":{\"enabled\":true,\"start\":\"22:00\",\"end\":\"06:00\"},\"timezone\":\"Europe/Stockholm\"}}");
+    expect_rpc("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getDisplayScheduleTimezones\"}",
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":[\"Europe/Stockholm\",\"UTC\"]}");
+    const char *const dim = "{\"enabled\":true,\"start\":\"23:59\",\"end\":\"00:00\"}";
+    const char *const off = "{\"enabled\":false,\"start\":\"01:30\",\"end\":\"05:45\"}";
+    expect_rpc(schedule_request(dim, off, "\"UTC\""), "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":null}");
+    /* Each window keeps its own switch and times. */
+    assert(schedule_test_writes == 1 && schedule_test_value.dim.enabled && !schedule_test_value.off.enabled &&
+           schedule_test_value.dim.start_minute == 1439 && schedule_test_value.dim.end_minute == 0 &&
+           schedule_test_value.off.start_minute == 90 && schedule_test_value.off.end_minute == 345 &&
+           !strcmp(schedule_test_value.timezone, "UTC"));
+    expect_rpc("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getDisplaySchedule\"}",
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"dim\":{\"enabled\":true,\"start\":\"23:59\",\"end\":\"00:00\"},"
+        "\"off\":{\"enabled\":false,\"start\":\"01:30\",\"end\":\"05:45\"},\"timezone\":\"UTC\"}}");
+    const char *const bad_windows[] = {
+        "null", "{}", "\"22:00-06:00\"",
+        "{\"enabled\":1,\"start\":\"22:00\",\"end\":\"06:00\"}",
+        "{\"enabled\":true,\"start\":\"24:00\",\"end\":\"06:00\"}",
+        "{\"enabled\":true,\"start\":\"22:60\",\"end\":\"06:00\"}",
+        "{\"enabled\":true,\"start\":\"22:00\",\"end\":\"6:00\"}",
+        "{\"enabled\":true,\"start\":\"22:00\",\"end\":\"06-00\"}",
+        "{\"enabled\":true,\"start\":1320,\"end\":\"06:00\"}",
+        "{\"enabled\":true,\"start\":\"22:00\"}",
+        "{\"enabled\":true,\"start\":\"22:00\",\"end\":\"06:00\",\"extra\":1}",
+        /* A window from a time to the same time is no window, also when it is off. */
+        "{\"enabled\":true,\"start\":\"22:00\",\"end\":\"22:00\"}",
+        "{\"enabled\":false,\"start\":\"22:00\",\"end\":\"22:00\"}",
+    };
+    for (size_t i = 0; i < sizeof(bad_windows)/sizeof(bad_windows[0]); ++i) {
+        schedule_test_refused(bad_windows[i], off, "\"UTC\"");
+        schedule_test_refused(dim, bad_windows[i], "\"UTC\"");
+    }
+    /* A window that is on needs a zone; either window counts. */
+    const char *const on = "{\"enabled\":true,\"start\":\"22:00\",\"end\":\"06:00\"}";
+    schedule_test_refused(on, off, "\"\"");
+    schedule_test_refused(off, on, "\"\"");
+    schedule_test_refused(dim, off, "7");
+    schedule_test_refused(dim, off, "\"0123456789012345678901234567890123456789012345678901234567890123\"");
+    display_test_error("setDisplaySchedule", "{}", -32602);
+    display_test_error("setDisplaySchedule",
+        "{\"dim\":{\"enabled\":false,\"start\":\"20:00\",\"end\":\"23:00\"},\"off\":{\"enabled\":false,\"start\":\"22:00\",\"end\":\"06:00\"},\"timezone\":\"\"}", -32602);
+    display_test_error("setDisplaySchedule",
+        "{\"params\":{\"dim\":{\"enabled\":false,\"start\":\"20:00\",\"end\":\"23:00\"},\"off\":{\"enabled\":false,\"start\":\"22:00\",\"end\":\"06:00\"}}}", -32602);
+    assert(schedule_test_writes == 1);
+    /* With both windows off, the schedule may have no time zone. */
+    expect_rpc(schedule_request(off, off, "\"\""), "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":null}");
+    assert(schedule_test_writes == 2 && !schedule_test_value.timezone[0]);
+    /* The display, not the protocol, knows the zone names. */
+    display_test_error("setDisplaySchedule",
+        "{\"params\":{\"dim\":{\"enabled\":true,\"start\":\"20:00\",\"end\":\"23:00\"},\"off\":{\"enabled\":false,\"start\":\"22:00\",\"end\":\"06:00\"},\"timezone\":\"Europe/Atlantis\"}}", -32603);
+    assert(schedule_test_writes == 3 && !schedule_test_value.timezone[0]);
+    display_test_error("getDisplaySchedule", "{\"x\":1}", -32602);
+    display_test_error("getDisplayScheduleTimezones", "{\"x\":1}", -32602);
     jetkvm_control_set_default_local_display_context(NULL);
 }
 
@@ -3763,6 +3870,7 @@ int main(void)
     jetkvm_control_set_default_keyboard_layout_context(NULL);
 
     test_local_display();
+    test_display_schedule();
     puts("JetKVM control protocol vectors: OK");
     return 0;
 }

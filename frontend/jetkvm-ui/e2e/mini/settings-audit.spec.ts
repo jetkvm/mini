@@ -53,6 +53,8 @@ const REQUIRED_RPCS: Record<string, string[]> = {
     "getBacklightSettings",
     "getDeviceID",
     "getDisplayRotation",
+    "getDisplaySchedule",
+    "getDisplayScheduleTimezones",
     "getUsbConfig",
     "getUsbDevices",
     "getVideoSleepMode",

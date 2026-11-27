@@ -28,6 +28,7 @@ export function registerResetCleanup(): void {
         ["getNetworkSettings", "setNetworkSettings", "settings"],
         ["getBacklightSettings", "setBacklightSettings", "params"],
         ["getDisplayRotation", "setDisplayRotation", "params"],
+        ["getDisplaySchedule", "setDisplaySchedule", "params"],
         ["getVideoCodecPreference", "setVideoCodecPreference", "codec"],
         ["getStreamQualityFactor", "setStreamQualityFactor", "factor"],
         ["getKeyboardLayout", "setKeyboardLayout", "layout"],
