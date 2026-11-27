@@ -7,8 +7,8 @@ import { localLoginPath, sessionExpiredLoginPath } from "@/api";
 import { isOnDevice } from "@/main";
 import { useRTCStore, useUiStore } from "@hooks/stores";
 import { useDeviceUiNavigation } from "@hooks/useAppNavigation";
-import { m } from "@localizations/messages.js";
 import { isLinuxDesktop } from "@/utils";
+import { useDiagnosisStore } from "@/diagnosis/store";
 
 import type { SignalingHook } from "./types";
 
@@ -67,9 +67,6 @@ export const useWebSocketSignaling: SignalingHook = ({
   const { setPeerConnection, setPeerConnectionState, setMediaStream } =
     useRTCStore();
   const setRebootState = useUiStore(state => state.setRebootState);
-
-  const [connectionFailed, setConnectionFailed] = useState(false);
-  const [loadingMessage, setLoadingMessage] = useState(m.connecting_to_device());
 
   // A device can report a takeover on the signaling socket: an
   // "other-session-connected" message, or close code 4001 when the message is
@@ -151,9 +148,6 @@ export const useWebSocketSignaling: SignalingHook = ({
   const cleanupAndStopReconnecting = useCallback(
     function cleanupAndStopReconnecting() {
       console.log("Closing peer connection");
-
-      setConnectionFailed(true);
-      connectionFailedRef.current = true;
       retirePeer();
     },
     [retirePeer],
@@ -176,47 +170,34 @@ export const useWebSocketSignaling: SignalingHook = ({
         `[Websocket] ${reason}, retry ${connectionRetriesRef.current} of ${CONNECTION_RETRIES}`,
       );
       retirePeer("connecting");
-      setLoadingMessage(m.connecting_to_device());
       const socket = getSignalingSocketRef.current?.();
       if (socket && socket.readyState !== WebSocket.CLOSED) socket.close(4002, "Connection retry");
     },
     [cleanupAndStopReconnecting, retirePeer],
   );
 
-  // We need to track connectionFailed in a ref to avoid stale closure issues
-  // This is necessary because syncRemoteSessionDescription is a callback that captures
-  // the connectionFailed value at creation time, but we need the latest value
-  // when the function is actually called. Without this ref, the function would use
-  // a stale value of connectionFailed in some conditions.
-  //
-  // We still need the state variable for UI rendering, so we sync the ref with the state.
-  // This pattern is a workaround for what useEvent hook would solve more elegantly
-  // (which would give us a callback that always has access to latest state without re-creation).
-  const connectionFailedRef = useRef(false);
-  useEffect(() => {
-    connectionFailedRef.current = connectionFailed;
-  }, [connectionFailed]);
-
   const setRemoteSessionDescription = useCallback(
     async function setRemoteSessionDescription(
       pc: RTCPeerConnection,
       remoteDescription: RTCSessionDescriptionInit,
     ) {
-      setLoadingMessage(m.setting_remote_description());
-
       try {
         await pc.setRemoteDescription(new RTCSessionDescription(remoteDescription));
         if (!isCurrentPeer(pc)) return;
+        useDiagnosisStore.getState().setAnswerState("accepted");
+        useDiagnosisStore.getState().addKvmCandidates((remoteDescription.sdp ?? "").split("\n"));
         console.log(
           "[setRemoteSessionDescription] Remote description set successfully to: " +
             remoteDescription.sdp,
         );
-        setLoadingMessage(m.establishing_secure_connection());
       } catch (error) {
         // A peer closed while this was pending has been replaced; the
         // rejection must not stop reconnecting for its replacement.
         if (!isCurrentPeer(pc)) return;
         console.error("[setRemoteSessionDescription] Failed to set remote description:", error);
+        if (connectionRetriesRef.current >= CONNECTION_RETRIES) {
+          useDiagnosisStore.getState().setAnswerState("rejected");
+        }
         retryConnection("The answer could not be set");
         return;
       }
@@ -242,7 +223,6 @@ export const useWebSocketSignaling: SignalingHook = ({
           console.log("[setRemoteSessionDescription] Remote description set");
           clearInterval(checkInterval);
           connectionRetriesRef.current = 0;
-          setLoadingMessage(m.connection_established());
         } else if (attempts >= 10) {
           console.warn(
             "[setRemoteSessionDescription] Failed to establish connection after 10 attempts",
@@ -303,7 +283,7 @@ export const useWebSocketSignaling: SignalingHook = ({
 
   const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
 
-  const { sendMessage, getWebSocket } = useWebSocket(
+  const { sendMessage, getWebSocket, readyState } = useWebSocket(
     isOnDevice
       ? `${wsProtocol}//${window.location.host}/webrtc/signaling/client`
       : `${CLOUD_API.replace("http", "ws")}/webrtc/signaling/client?id=${deviceId}`,
@@ -414,6 +394,7 @@ export const useWebSocketSignaling: SignalingHook = ({
         } else if (parsedMessage.type === "new-ice-candidate") {
           console.debug("[Websocket] Received new-ice-candidate");
           const candidate = parsedMessage.data;
+          useDiagnosisStore.getState().addKvmCandidates([candidate?.candidate ?? ""]);
           void peerConnection.addIceCandidate(candidate).catch(error => {
             if (isCurrentPeer(peerConnection)) {
               console.warn("[Websocket] Failed to add ICE candidate", error);
@@ -456,9 +437,8 @@ export const useWebSocketSignaling: SignalingHook = ({
     console.debug("[setupPeerConnection] Setting up peer connection");
     if (sessionSupersededRef.current) return;
     retirePeer();
+    useDiagnosisStore.getState().sessionStarted();
     makingOffer.current = false;
-    setConnectionFailed(false);
-    setLoadingMessage(m.connecting_to_device());
 
     // Drop the previous PC's MediaStream — its tracks are ended and
     // would sit ahead of the new live tracks, breaking playback.
@@ -467,14 +447,12 @@ export const useWebSocketSignaling: SignalingHook = ({
     let pc: RTCPeerConnection;
     try {
       console.debug("[setupPeerConnection] Creating peer connection");
-      setLoadingMessage(m.creating_peer_connection());
       pc = new RTCPeerConnection({
         ...(iceServers ? { iceServers } : {}),
       });
 
       setPeerConnectionState(pc.connectionState);
       console.debug("[setupPeerConnection] Peer connection created", pc);
-      setLoadingMessage(m.setting_up_connection_to_device());
     } catch (e) {
       console.error(`[setupPeerConnection] Error creating peer connection: ${String(e)}`);
       cleanupAndStopReconnecting();
@@ -541,10 +519,8 @@ export const useWebSocketSignaling: SignalingHook = ({
       if (!isCurrentPeer(pc)) return;
       if (pc.iceGatheringState === "complete") {
         console.debug("ICE Gathering completed");
-        setLoadingMessage(m.ice_gathering_completed());
       } else if (pc.iceGatheringState === "gathering") {
         console.debug("ICE Gathering Started");
-        setLoadingMessage(m.gathering_ice_candidates());
       }
     };
 
@@ -581,5 +557,5 @@ export const useWebSocketSignaling: SignalingHook = ({
     await setupPeerConnection();
   }, [setupPeerConnection, setPeerConnectionState]);
 
-  return { connect, loadingMessage, connectionFailed };
+  return { connect, socketOpen: readyState === WebSocket.OPEN };
 };
