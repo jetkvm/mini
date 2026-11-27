@@ -3,3 +3,4 @@
 #include <stdint.h>
 bool jetkvm_access_lock_epoch(uint32_t epoch);
 void jetkvm_access_unlock(void);
+void jetkvm_access_note_activity(void);

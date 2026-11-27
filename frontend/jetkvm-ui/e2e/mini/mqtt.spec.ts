@@ -22,6 +22,7 @@ const SETTING_KEYS = [
   "tls_insecure",
   "enable_ha_discovery",
   "enable_actions",
+  "enable_keyboard_macros",
   "debounce_ms",
 ] as const;
 type MqttSettings = Record<(typeof SETTING_KEYS)[number], unknown>;

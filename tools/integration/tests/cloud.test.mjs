@@ -4,6 +4,8 @@ import { after, test } from 'node:test';
 import { adoption, cloudKeysUrl, standInCloud } from '../lib/cloud.mjs';
 import { keyboard } from '../lib/keys.mjs';
 import { connect, until } from '../lib/mini.mjs';
+import { turnRelay } from '../lib/turn.mjs';
+import { pageRpc } from '../../combined_load/runner/page.mjs';
 
 // The update server that a Mini uses outside a test (JETKVM_OTA_DEFAULT_API_URL).
 const UPDATE_SERVER = 'https://api.jetkvm.com';
@@ -177,4 +179,73 @@ test('the open cloud socket takes less than 4 KiB of internal RAM', { timeout: 1
   const cost = await freeInternal() - connected;
   t.diagnostic(`the cloud socket takes ${cost} B of internal RAM`);
   assert.ok(cost < 4 * 1024, `the cloud socket takes ${cost} B`);
+});
+
+// A browser on a network that lets no direct connection through has relay
+// candidates only: addresses on a TURN server, which the cloud gives a login
+// for to the browser and not to the Mini. The Mini has its own addresses
+// only, and no packet of the browser reaches the Mini before the Mini has
+// sent one to the browser's relay address, as behind a NAT. The relay of this
+// test holds the browser's packets back in the same way.
+test('a cloud session connects to a browser that has relay candidates only', { timeout: 240_000, skip }, async t => {
+  const { mini, adopt } = await miniAtCloud(t);
+  await adopt();
+  const turn = await turnRelay(mini, { peerFirst: true });
+  t.after(() => turn.close());
+  const { version } = (await mini.status()).firmware;
+  // The first page must be gone, so that a connected peer is the page below.
+  await mini.leave();
+  const page = await mini.page.context().browser().newPage();
+  // The browser can be closed already when this runs.
+  t.after(() => page.close().catch(() => undefined));
+  await page.addInitScript(server => {
+    const Original = window.RTCPeerConnection;
+    window.__peers = [];
+    window.RTCPeerConnection = class extends Original {
+      constructor(configuration, ...rest) {
+        super({ ...configuration, iceServers: [server], iceTransportPolicy: 'relay' }, ...rest);
+        window.__peers.push(this);
+      }
+    };
+  }, turn.iceServer);
+  // The page's signaling goes to the cloud, which passes it to the Mini's
+  // cloud socket with the address of the STUN server.
+  const candidates = [];
+  let offers = 0;
+  await page.routeWebSocket(/\/webrtc\/signaling\/client/, socket => {
+    const session = cloud.session(message => socket.send(JSON.stringify(message)));
+    socket.onClose(() => session.close());
+    socket.onMessage(text => {
+      if (text === 'ping') return socket.send('pong');
+      const { type, data } = JSON.parse(text);
+      if (type === 'offer') {
+        const { sdp } = JSON.parse(Buffer.from(data.sd, 'base64').toString());
+        candidates.push(...sdp.split(/\r?\n/).filter(line => line.startsWith('a=candidate:')));
+        offers++;
+        session.offer(data.sd, [turn.stunUrl]);
+      } else if (type === 'new-ice-candidate') {
+        if (data?.candidate) candidates.push(data.candidate);
+        session.candidate(data);
+      }
+    });
+    socket.send(JSON.stringify({ type: 'device-metadata', data: { deviceVersion: version, deviceSku: null } }));
+  });
+  await until(() => page.goto(mini.url, { waitUntil: 'domcontentloaded', timeout: 10_000 }), () => true, 60);
+  await until(() => offers, count => count > 0, 30);
+  const offeredAt = Date.now();
+
+  // A session with a direct pair takes a second or two.
+  const connected = await until(
+    () => page.evaluate(() => (window.__peers ?? []).map(peer => peer.connectionState)),
+    states => states.includes('connected'), 30).catch(() => null);
+  const relayed = turn.counts();
+  t.diagnostic(`${connected ? `connected ${Date.now() - offeredAt} ms after the offer` : 'not connected'}; offers: ${offers}; ` +
+    `the page's candidates: ${candidates.length}; the relay passed ${relayed.toPeers} packets to the Mini ` +
+    `and ${relayed.fromPeers} from it, and held ${relayed.held} back; the Mini sent to a relay address from ${relayed.peers.join(', ') || 'no address'}`);
+  assert.ok(candidates.length > 0, 'the page signaled a candidate');
+  assert.deepEqual(candidates.filter(candidate => !/ typ relay /.test(candidate)), [], 'the page signaled relay candidates only');
+  assert.ok(connected, 'the page with relay candidates only did not connect in 30 s');
+  assert.equal((await stats(mini)).peerConnected, true);
+  // The Mini's JSON-RPC answers over the relay.
+  assert.equal(typeof await pageRpc(page)('getDeviceID'), 'string');
 });

@@ -721,6 +721,14 @@ typedef struct {
 void webrtc_transport_set_cloud_link_source(
     bool (*source)(webrtc_transport_cloud_link_t *link));
 
+/**
+ * `listener` gets the port of the HTTPS listener each time the TLS setting
+ * was applied: 0 when no HTTPS listener runs (TLS disabled, or its start
+ * failed). It runs on the TLS service worker. Register it before
+ * webrtc_transport_start(), which applies the saved TLS setting.
+ */
+void webrtc_transport_set_https_listener(void (*listener)(uint16_t port));
+
 /* The hardware H.264 encoder's times for the frames it encoded from HDMI
  * capture, since boot. A frame counts when the encoder made an access unit
  * of it, also when the transport then refused the unit; a failed encode does

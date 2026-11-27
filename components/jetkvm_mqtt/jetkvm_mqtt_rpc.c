@@ -37,6 +37,7 @@ static void mqtt_native_to_control(
     control->tls_insecure = native->tls_insecure;
     control->enable_ha_discovery = native->enable_ha_discovery;
     control->enable_actions = native->enable_actions;
+    control->enable_keyboard_macros = native->enable_keyboard_macros;
     control->debounce_ms = native->debounce_ms;
 }
 
@@ -56,6 +57,7 @@ static void mqtt_control_to_native(
     native->tls_insecure = control->tls_insecure;
     native->enable_ha_discovery = control->enable_ha_discovery;
     native->enable_actions = control->enable_actions;
+    native->enable_keyboard_macros = control->enable_keyboard_macros;
     native->debounce_ms = control->debounce_ms;
 }
 

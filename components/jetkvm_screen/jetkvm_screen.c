@@ -28,6 +28,7 @@
 
 #include "jetkvm_screen_buttons.h"
 #include "jetkvm_screen_fit.h"
+#include "jetkvm_screen_home_address.h"
 #include "jetkvm_screen_orientation.h"
 #include "jetkvm_screen_regulatory.h"
 #include "jetkvm_screen_usb_debugging.h"
@@ -990,8 +991,7 @@ static void apply_state(const jetkvm_screen_state_t *state)
     set_var_app_version(state->app_version);
     set_var_system_version(state->system_version);
 
-    set_label_text(objects.home_info_ipv4_addr,
-                   state->ipv4[0] != '\0' ? state->ipv4 : "0.0.0.0");
+    jetkvm_screen_home_address_set(state->ipv4[0] != '\0' ? state->ipv4 : "0.0.0.0");
     if (state->wifi_connection) {
         set_wifi_status(true, state->wifi_ssid, state->wifi_signal_valid,
                         state->wifi_rssi);

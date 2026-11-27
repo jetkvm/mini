@@ -12,7 +12,7 @@
 extern "C" {
 #endif
 
-#define P4_DEVICE_CAPABILITIES_JSON_CAPACITY 1024U
+#define P4_DEVICE_CAPABILITIES_JSON_CAPACITY 1280U
 
 /** `sku` is the hardware SKU (JETKVM_DEVICE_SKU); the welcome page picks its
  *  device photo from it before setup. */

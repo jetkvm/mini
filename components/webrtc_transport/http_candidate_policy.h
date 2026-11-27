@@ -71,7 +71,9 @@ webrtc_http_owner_result_t webrtc_http_candidate_policy_authorize(
 
 /*
  * Validates a browser host candidate and replaces only its address token with
- * the session's kernel-observed HTTP peer IPv4.  The input need not be NUL
+ * the session's kernel-observed HTTP peer IPv4.  When the policy has no
+ * rewrite (see webrtc_http_candidate_policy_begin()), only a candidate that
+ * already carries that IPv4 is admitted.  The input need not be NUL
  * terminated; output is always NUL terminated on success.
  */
 webrtc_http_candidate_result_t webrtc_http_candidate_policy_rewrite(

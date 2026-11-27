@@ -330,11 +330,19 @@ per_mode_video = {
     + h264_db_bytes(1280, 800),
     "1280x1024p30": capture_720_count * capture_capacity
     + h264_db_bytes(1280, 1024),
+    "1440x900p30": capture_720_count * capture_capacity
+    + h264_db_bytes(1440, 900),
+    "1680x1050p30": capture_720_count * capture_capacity
+    + h264_db_bytes(1680, 1050),
+    "640x480p60": capture_720_count * capture_capacity
+    + h264_db_bytes(640, 480),
+    "800x600p60": capture_720_count * capture_capacity
+    + h264_db_bytes(800, 600),
 }
 per_mode_worst_name = max(per_mode_video, key=per_mode_video.get)
 per_mode_worst = per_mode_video[per_mode_worst_name]
-assert per_mode_worst_name == "1280x1024p30"
-assert per_mode_worst == 20_628_496
+assert per_mode_worst_name == "1680x1050p30"
+assert per_mode_worst == 21_323_536
 
 # The fixed pool: six slots of the largest direct-capture frame and the
 # 1920x1080 DB, allocated at boot and never freed. Every mode above fits in
@@ -343,6 +351,7 @@ assert pool_slots == capture_720_count == 6
 assert pool_slot_bytes == capture_capacity
 video_pool = pool_slots * pool_slot_bytes + db_1080
 assert video_pool == 21_795_856
+assert per_mode_worst <= video_pool
 for mode_bytes in per_mode_video.values():
     assert mode_bytes <= video_pool
 assert video_pool - video_720 == db_1080 - db_720 == 1_751_040
@@ -648,7 +657,7 @@ assert 0 <= unclassified_psram < 128 * KIB
 
 # The cold baseline was measured at 720p60, whose video core is smaller than
 # the pool by the DB difference, and smaller than the per-mode worst case
-# (1280x1024p30) before the pool. Project both from the same measurement.
+# (1680x1050p30) before the pool. Project both from the same measurement.
 pool_cold_general = effective_cold_general - (video_pool - video_720)
 pool_worst_general = (
     pool_cold_general
@@ -661,7 +670,7 @@ assert pool_worst_general >= psram_admission_floor
 pool_margin = pool_worst_general - psram_admission_floor
 per_mode_margin = per_mode_worst_general - psram_admission_floor
 assert pool_margin == 807_428
-assert per_mode_margin == 1_974_788
+assert per_mode_margin == 1_279_748
 # Production attaches no RTC shared pool; without it the pool keeps 2.9 MB.
 pool_margin_production = pool_margin + rtc_shared
 assert pool_margin_production == 2_904_580

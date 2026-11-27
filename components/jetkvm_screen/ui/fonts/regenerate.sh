@@ -1,13 +1,20 @@
 #!/usr/bin/env bash
 # Writes the display's LVGL fonts from the Inter TTF files in inter/:
-# ui_font_font_book*.c from Inter Regular, ui_font_font_bold30.c and
-# ../../assets/font_bold20.c from Inter Bold. Needs Node.js; npx fetches
-# lv_font_conv 1.5.2.
+# ui_font_font_book*.c from Inter Regular, ui_font_font_bold30.c,
+# ../../assets/font_bold20.c and ../../assets/font_home_address_small.c from
+# Inter Bold. Needs Node.js; npx fetches lv_font_conv 1.5.2.
 #
 # Inter is wider and taller than the font the UI was laid out for, so each
 # font is generated smaller than its name: book16 is Inter at 15 px. bold30 is
 # 24 px, so that every IPv4 address fits the 216 px content width of the home
 # screen. The names stay, since the generated screens refer to them.
+#
+# Beside the button strip the address line of the home screen has 194 px,
+# where a wide address does not fit in bold30. home_address_small is Inter
+# Bold at 21 px, in which every IPv4 address fits 194 px, with the digits
+# and the dot only. It has the line height and the base line of bold30, so the
+# address keeps its row and its base line in either font
+# (jetkvm_screen_home_address.c).
 #
 # lv_font_conv sets line_height from the tallest glyph, '|', which makes lines
 # 1-4 px taller than the layout expects. Each font gets the line height of the
@@ -20,8 +27,9 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 
 convert() {
     local font="$1" size="$2" output="$3" line_height="$4" base_line="$5"
+    local range="${6:-32-127}"
     npx -y lv_font_conv@1.5.2 --bpp 4 --size "$size" --no-compress \
-        --font "$font" --range 32-127 --format lvgl -o "$output"
+        --font "$font" --range "$range" --format lvgl -o "$output"
     sed -i -e "s/^\( *\.line_height = \)[0-9]*,/\1$line_height,/" \
         -e "s/^\( *\.base_line = \)[0-9]*,/\1$base_line,/" "$output"
 }
@@ -35,6 +43,9 @@ convert inter/Inter-Bold.ttf 24 ui_font_font_bold30.c 31 5
 # ui_font_font_bold20.
 convert inter/Inter-Bold.ttf 19 ui_font_font_bold20.c 21 4
 mv ui_font_font_bold20.c ../../assets/font_bold20.c
+# The dot and the digits.
+convert inter/Inter-Bold.ttf 21 ui_font_home_address_small.c 31 5 46,48-57
+mv ui_font_home_address_small.c ../../assets/font_home_address_small.c
 
 # The files in this folder keep the include block of the generated UI, which
 # finds lvgl.h without LV_LVGL_H_INCLUDE_SIMPLE (the host renderer).

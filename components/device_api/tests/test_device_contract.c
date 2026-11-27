@@ -101,7 +101,7 @@ int main(void)
     assert(!json_bool(access, "localAuth"));
     assert(!json_bool(access, "cloudDeregister"));
     cJSON *modes = cJSON_GetObjectItem(video, "modes");
-    assert(cJSON_GetArraySize(modes) == 6);
+    assert(cJSON_GetArraySize(modes) == 10);
     cJSON *mode_1080 = cJSON_GetArrayItem(modes, 0);
     cJSON *mode_720_30 = cJSON_GetArrayItem(modes, 1);
     cJSON *mode_720_60 = cJSON_GetArrayItem(modes, 2);
@@ -114,12 +114,14 @@ int main(void)
     assert(cJSON_GetObjectItem(mode_720_60, "width")->valueint == 1280);
     assert(cJSON_GetObjectItem(mode_720_60, "height")->valueint == 720);
     assert(cJSON_GetObjectItem(mode_720_60, "fps")->valueint == 60);
-    const int lower_modes[][2] = {{1024, 768}, {1280, 800}, {1280, 1024}};
-    for (int i = 0; i < 3; ++i) {
+    const int other_modes[][3] = {{1024, 768, 30}, {1280, 800, 30}, {1280, 1024, 30},
+                                  {1440, 900, 30}, {1680, 1050, 30},
+                                  {640, 480, 60},  {800, 600, 60}};
+    for (int i = 0; i < 7; ++i) {
         cJSON *mode = cJSON_GetArrayItem(modes, i + 3);
-        assert(cJSON_GetObjectItem(mode, "width")->valueint == lower_modes[i][0]);
-        assert(cJSON_GetObjectItem(mode, "height")->valueint == lower_modes[i][1]);
-        assert(cJSON_GetObjectItem(mode, "fps")->valueint == 30);
+        assert(cJSON_GetObjectItem(mode, "width")->valueint == other_modes[i][0]);
+        assert(cJSON_GetObjectItem(mode, "height")->valueint == other_modes[i][1]);
+        assert(cJSON_GetObjectItem(mode, "fps")->valueint == other_modes[i][2]);
     }
     const char *disabled[] = {
         "hid", "keyboardLayout", "hidMacros", "paste", "mouseJiggler",

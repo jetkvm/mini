@@ -43,6 +43,8 @@ int agent_get_remote_ice(agent_handle_t agent, const char **ufrag, const char **
 int agent_select_candidate_pair(agent_handle_t agent);
 bool agent_connectivity_check(agent_handle_t agent);
 int agent_get_paired(agent_handle_t agent, esp_peer_addr_t *addr);
+/* Signaled candidates and candidates learned from authenticated Binding Requests. */
+int agent_get_remote_candidate_count(agent_handle_t agent);
 int agent_get_ice_selected_summary(agent_handle_t agent, agent_ice_selected_summary_t *out);
 bool agent_is_tcp_connected(agent_handle_t agent);
 bool agent_is_relay_connection(agent_handle_t agent);

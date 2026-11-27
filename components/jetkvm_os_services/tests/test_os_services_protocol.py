@@ -802,7 +802,8 @@ class ProtocolTest(unittest.TestCase):
         config = json.loads([p for s, k, p in got if (s, k) == (SESSION, CONFIG)][0])
         self.assertEqual(config, {"terminal_enabled": True, "files_enabled": False,
                                   "capture_display": "HDMI-A-1",
-                                  "display_mode_by_sender": True})
+                                  "display_mode_by_sender": True,
+                                  "clipboard_primary": True})
         self.assertIn((CLIPBOARD, 7, b"\x00"), got)
 
     def test_registrations_answered_as_specified(self):

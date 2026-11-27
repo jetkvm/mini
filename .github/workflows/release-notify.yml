@@ -1,0 +1,67 @@
+# Comment on each issue that a release fixes, right after tools/release_r2.sh
+# uploads the release and pushes the release/<version> tag. A merged pull
+# request closes its issues, but only this comment tells the reporter which
+# release has the fix. tools/release_notify.sh describes which issues get a
+# comment and what it says.
+#
+# A tag push runs the workflow of the tagged commit, so a release built from a
+# commit without this file posts nothing. Run the workflow by hand for such a
+# release; that run uses the script of the branch it is started from.
+name: release-notify
+
+on:
+  push:
+    tags:
+      - "release/*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version with a pushed release/<version> tag, for example 0.5.23-dev202611281200
+        required: true
+        type: string
+      dry_run:
+        description: Print the comments and post none
+        type: boolean
+        default: true
+
+permissions: {}
+
+# One run per version; a second run for a version waits and then finds the
+# comments of the first. A tag push names the version as release/<version>,
+# and a run by hand can name it with or without release/, so the group takes
+# the form with it.
+concurrency:
+  group: >-
+    release-notify-${{ github.event_name != 'workflow_dispatch' && github.ref_name
+    || startsWith(inputs.version, 'release/') && inputs.version
+    || format('release/{0}', inputs.version) }}
+  cancel-in-progress: false
+
+jobs:
+  notify:
+    name: Notify the issues fixed in ${{ github.event.inputs.version || github.ref_name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+    steps:
+      # The script compares the release tags, so it needs the whole history
+      # and every tag.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Comment on the fixed issues
+        # A named shell runs with pipefail, so a failure of the script fails
+        # the step although tee succeeds.
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ github.event.inputs.version || github.ref_name }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          args=()
+          if [[ "$DRY_RUN" == true ]]; then args+=(--dry-run); fi
+          tools/release_notify.sh "${args[@]}" "$VERSION" | tee -a "$GITHUB_STEP_SUMMARY"

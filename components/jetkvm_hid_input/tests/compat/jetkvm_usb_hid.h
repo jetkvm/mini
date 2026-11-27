@@ -41,6 +41,7 @@ typedef struct {
     char serial_number[JETKVM_USB_HID_DESCRIPTOR_STRING_CAPACITY];
     char manufacturer[JETKVM_USB_HID_DESCRIPTOR_STRING_CAPACITY];
     char product[JETKVM_USB_HID_DESCRIPTOR_STRING_CAPACITY];
+    char configuration[JETKVM_USB_HID_DESCRIPTOR_STRING_CAPACITY];
     bool absolute_mouse;
     bool relative_mouse;
     bool keyboard;

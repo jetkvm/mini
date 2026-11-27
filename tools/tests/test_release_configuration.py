@@ -354,9 +354,11 @@ class ReleaseSignatureTests(unittest.TestCase):
                               env=self.env, capture_output=True, text=True, timeout=60)
 
     def key(self, name, subkey=False):
-        """A throwaway Ed25519 key: (primary fingerprint, signing subkey fingerprint or None). GnuPG makes it
-        with a clock that is one hour behind, so a subkey that a test adds has a later creation time, which
-        GnuPG keeps in whole seconds."""
+        """A throwaway Ed25519 key: (primary fingerprint, signing subkey fingerprint or None). GnuPG makes the
+        primary key with a clock that is one hour behind and the subkey with a clock that is half an hour
+        behind, so a subkey that a test adds has a later creation time, which GnuPG keeps in whole seconds.
+        GnuPG's faked clock runs on from the time it is given, so the primary key can be a second or more
+        later than that time; GnuPG refuses a subkey that is older than its primary key."""
         made = ('--faked-system-time', str(int(time.time()) - 3600))
         generated = self.gpg(*made, '--quick-gen-key', f'release test {name}', 'ed25519',
                              'cert' if subkey else 'sign', 'never')
@@ -365,7 +367,7 @@ class ReleaseSignatureTests(unittest.TestCase):
         primary = re.findall(r'^fpr:+([0-9A-F]{40}):', listed, re.M)[0]
         if not subkey:
             return primary, None
-        return primary, self.add_subkey(primary, 'ed25519', *made)
+        return primary, self.add_subkey(primary, 'ed25519', '--faked-system-time', str(int(time.time()) - 1800))
 
     def newer_subkey(self, algorithm):
         """Adds a signing subkey to the release key, with the present time, and returns its fingerprint."""

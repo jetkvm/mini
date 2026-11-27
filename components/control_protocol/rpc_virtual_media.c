@@ -558,18 +558,32 @@ bool rpc_start_storage_file_upload(
     return true;
 }
 
+typedef enum {
+    DOWNLOAD_CALLBACK_START,
+    DOWNLOAD_CALLBACK_GET_STATE,
+    DOWNLOAD_CALLBACK_CANCEL,
+} download_callback_t;
+
 /* Per callback: the peer task's context replaces only start (with a refusal
- * while the media worker is busy) and still reads the default state. */
+ * while the media worker is busy), and still reads the default state and
+ * cancels through the default. */
 static const jetkvm_storage_download_context_t *storage_download_context(
-    const jetkvm_control_context_t *context, bool start)
+    const jetkvm_control_context_t *context, download_callback_t callback)
 {
-    if (context && (start ? context->storage_download.start != NULL :
-                            context->storage_download.get_state != NULL)) {
+    if (context &&
+        ((callback == DOWNLOAD_CALLBACK_START &&
+          context->storage_download.start != NULL) ||
+         (callback == DOWNLOAD_CALLBACK_GET_STATE &&
+          context->storage_download.get_state != NULL) ||
+         (callback == DOWNLOAD_CALLBACK_CANCEL &&
+          context->storage_download.cancel != NULL))) {
         return &context->storage_download;
     }
     return &s_default_storage_download;
 }
 
+/* The Mini's own names (state), as the OS Services installer and the
+ * device tests read them. */
 static const char *storage_download_phase_name(
     jetkvm_control_storage_download_phase_t phase)
 {
@@ -580,12 +594,24 @@ static const char *storage_download_phase_name(
         return "done";
     case JETKVM_CONTROL_STORAGE_DOWNLOAD_ERROR:
         return "error";
+    case JETKVM_CONTROL_STORAGE_DOWNLOAD_CANCELLED:
+        return "cancelled";
     case JETKVM_CONTROL_STORAGE_DOWNLOAD_IDLE:
     default:
         return "idle";
     }
 }
 
+/* Upstream's names (status), as the mount page reads them. */
+static const char *storage_download_status_name(
+    jetkvm_control_storage_download_phase_t phase)
+{
+    return phase == JETKVM_CONTROL_STORAGE_DOWNLOAD_ERROR ?
+               "failed" : storage_download_phase_name(phase);
+}
+
+/* Both sets of names: state, bytes and total (the Mini's), and status,
+ * received and size (upstream's). */
 static cJSON *storage_download_state_json(
     const jetkvm_control_storage_download_state_t *state)
 {
@@ -598,7 +624,11 @@ static cJSON *storage_download_state_json(
         !cJSON_AddNumberToObject(object, "total", (double)state->total) ||
         !cJSON_AddBoolToObject(object, "reused", state->reused) ||
         !cJSON_AddBoolToObject(object, "videoPaused", state->video_paused) ||
-        !cJSON_AddStringToObject(object, "error", state->error)) {
+        !cJSON_AddStringToObject(object, "error", state->error) ||
+        !cJSON_AddStringToObject(object, "status",
+                                 storage_download_status_name(state->phase)) ||
+        !cJSON_AddNumberToObject(object, "received", (double)state->bytes) ||
+        !cJSON_AddNumberToObject(object, "size", (double)state->total)) {
         cJSON_Delete(object);
         return NULL;
     }
@@ -649,9 +679,12 @@ bool rpc_test_tf_card_out(const jetkvm_control_context_t *context,
 }
 #endif
 
-bool rpc_download_to_storage(const jetkvm_control_context_t *context,
-                             const cJSON *params,
-                             rpc_dispatch_result_t *dispatch)
+/* downloadToStorage answers null; startStorageDownload answers the state
+ * after the start, as upstream does. */
+static bool start_storage_download(const jetkvm_control_context_t *context,
+                                   const cJSON *params,
+                                   rpc_dispatch_result_t *dispatch,
+                                   bool answer_state)
 {
     const cJSON *url = cJSON_IsObject(params) ?
         cJSON_GetObjectItemCaseSensitive(params, "url") : NULL;
@@ -668,7 +701,7 @@ bool rpc_download_to_storage(const jetkvm_control_context_t *context,
         return true;
     }
     const jetkvm_storage_download_context_t *download =
-        storage_download_context(context, true);
+        storage_download_context(context, DOWNLOAD_CALLBACK_START);
     if (!download->start) {
         return set_virtual_media_error(
             dispatch, JETKVM_VIRTUAL_MEDIA_CHANGE_UNAVAILABLE,
@@ -684,6 +717,53 @@ bool rpc_download_to_storage(const jetkvm_control_context_t *context,
             dispatch->error_storage : "failed to start the download";
         return true;
     }
+    if (!answer_state) {
+        dispatch->result = cJSON_CreateNull();
+        return dispatch->result != NULL;
+    }
+    const jetkvm_storage_download_context_t *source =
+        storage_download_context(context, DOWNLOAD_CALLBACK_GET_STATE);
+    jetkvm_control_storage_download_state_t state = {0};
+    if (source->get_state && !source->get_state(&state, source->ctx)) {
+        return set_virtual_media_error(
+            dispatch, JETKVM_VIRTUAL_MEDIA_CHANGE_UNAVAILABLE,
+            "failed to read the download state");
+    }
+    dispatch->result = storage_download_state_json(&state);
+    return dispatch->result != NULL;
+}
+
+bool rpc_download_to_storage(const jetkvm_control_context_t *context,
+                             const cJSON *params,
+                             rpc_dispatch_result_t *dispatch)
+{
+    return start_storage_download(context, params, dispatch, false);
+}
+
+bool rpc_start_storage_download(const jetkvm_control_context_t *context,
+                                const cJSON *params,
+                                rpc_dispatch_result_t *dispatch)
+{
+    return start_storage_download(context, params, dispatch, true);
+}
+
+/* Answers null at once, also when no download runs, as upstream does. The
+ * end of the download comes as a storageDownloadState event. */
+bool rpc_cancel_storage_download(const jetkvm_control_context_t *context,
+                                 const cJSON *params,
+                                 rpc_dispatch_result_t *dispatch)
+{
+    if (!require_no_rpc_params(params, dispatch)) {
+        return true;
+    }
+    const jetkvm_storage_download_context_t *download =
+        storage_download_context(context, DOWNLOAD_CALLBACK_CANCEL);
+    if (!download->cancel) {
+        return set_virtual_media_error(
+            dispatch, JETKVM_VIRTUAL_MEDIA_CHANGE_UNAVAILABLE,
+            "failed to cancel the download");
+    }
+    download->cancel(download->ctx);
     dispatch->result = cJSON_CreateNull();
     return dispatch->result != NULL;
 }
@@ -696,7 +776,7 @@ bool rpc_get_storage_download_state(const jetkvm_control_context_t *context,
         return true;
     }
     const jetkvm_storage_download_context_t *download =
-        storage_download_context(context, false);
+        storage_download_context(context, DOWNLOAD_CALLBACK_GET_STATE);
     jetkvm_control_storage_download_state_t state = {0};
     if (download->get_state && !download->get_state(&state, download->ctx)) {
         return set_virtual_media_error(

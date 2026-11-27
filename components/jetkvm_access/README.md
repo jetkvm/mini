@@ -6,7 +6,7 @@ This component owns local authentication: onboarding, the password, the session 
 
 - Onboarding: `GET /device/status`, and `POST /device/setup` with `localAuthMode` set to `"password"` (plus `password`) or `"noPassword"`.
 - Session: `POST` and `PUT /auth/password-local`, `DELETE /auth/local-password`, `POST /auth/login-local`, `POST /auth/logout`.
-- RPCs, through `control_protocol`: `getTLSState`, `setTLSState`, `setExtraHostnames`.
+- RPCs, through `control_protocol`: `getTLSState`, `setTLSState`, `setExtraHostnames`, `getLocalAuthSessionTimeout`, `setLocalAuthSessionTimeout`.
 - HTTP servers call `jetkvm_access_attach()` and `jetkvm_access_register()`; handlers call `jetkvm_access_check_request()`.
 
 ## Behavior
@@ -15,7 +15,8 @@ This component owns local authentication: onboarding, the password, the session 
 - Passwords use PBKDF2-HMAC-SHA256 with 200,000 iterations on the ESP32-P4 SHA engine. The derivation releases the shared SHA/AES lock after at most 32 HMACs.
 - The `authToken` cookie lasts seven days, with `HttpOnly` and `SameSite=Strict` but not `Secure`, as upstream, so HTTP login still works after TLS is disabled.
 - Login, password change and logout advance the local authority epoch, invalidating old requests, WebSockets, queued HID input and uploads. Cloud sessions have their own authority.
-- Before setup and in no-password mode, requests must carry a `Host` that is the connected address, the hostname (optionally `.local`), a Tailscale name, or one of up to 8 extra names. Others get 421, which blocks DNS rebinding.
+- Session timeout (upstream jetkvm/kvm#1788): with a password, a login that has no activity for 1 to 1440 minutes expires. 0 (the default) turns the timeout off. The value is in NVS (`jk_access/idle_minutes`). Activity is a protected HTTP request other than signaling, HID input other than the keepalive of a held key, and an RPC call that changes state (not `get*`, `list*`, `check*`, `is*` or `ping`) of a local session. At expiry the epoch advances, which ends the local session; its signaling socket closes with code 4003. A request with the expired cookie gets 401 with `"code":"session_expired"` and a cleared cookie. The poll of an open signaling socket and every protected request check for expiry.
+- Before setup and in no-password mode, requests must carry a `Host` that is the connected address, the hostname (optionally `.local`), a Tailscale name, or one of up to 8 extra names. Others get 421, which blocks DNS rebinding. The 421 answer says how to add a name: a `GET` or `HEAD` whose `Accept` has `text/html` gets a short help page, and every other request gets `{"error":"Unknown host","hint":"..."}`. Both texts are constants. They have no address, no name of the device and nothing from the request, because a page under a foreign name can read them; they refer to the IP address on the screen of the device.
 - HTTP and HTTPS serve the same routes. If HTTPS fails to start, authenticated HTTP stays up. A failed TLS change restores the previous configuration. The private key is never returned.
 
 ## Constraints
