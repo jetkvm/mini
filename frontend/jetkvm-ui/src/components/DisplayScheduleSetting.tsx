@@ -34,11 +34,15 @@ export function DisplayScheduleSetting() {
   }, []);
 
   useEffect(() => {
+    // The read runs again when the RPC channel changes. A write that starts
+    // while a read is on its way is newer than the answer to the read.
+    const read = writes.current;
     send("getDisplaySchedule", {}, (resp: JsonRpcResponse) => {
       if ("error" in resp) {
         console.error("Failed to get display schedule:", resp.error);
         return;
       }
+      if (read !== writes.current) return;
       stored.current = resp.result as DisplaySchedule;
       show(stored.current);
     });
