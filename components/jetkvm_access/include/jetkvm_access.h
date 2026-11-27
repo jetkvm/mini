@@ -69,9 +69,10 @@ bool jetkvm_access_epoch_expired(uint32_t epoch);
  * the device does not answer on its local network addresses. A factory reset
  * turns it off, as it erases every setting. */
 bool jetkvm_access_get_tailscale_only(void);
-/* Returns NULL, or why the value was not stored. Turning it on also closes
- * the open connections that the rule does not admit. The caller decides who
- * may turn it on. */
+/* Returns NULL, or why the value was not stored. It is not turned on while
+ * the device has no Tailscale address. Turning it on also closes the open
+ * connections that the rule does not admit. The caller decides who may turn
+ * it on. */
 const char *jetkvm_access_set_tailscale_only(bool enabled);
 /* `address` fills the 4 bytes of the device's Tailscale IPv4 address and
  * returns true, or returns false while the device has none. Without a

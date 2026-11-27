@@ -131,14 +131,29 @@ void host_ui_tap(unsigned button)
     set_button(button, false);
 }
 
-void host_ui_hold(unsigned button, uint32_t milliseconds)
+void host_ui_press(unsigned button)
 {
     set_button(button, true);
+}
+
+void host_ui_keep(uint32_t milliseconds)
+{
     for (uint32_t held = 0; held < milliseconds; held += 10) {
         lv_tick_inc(10);
         (void)jetkvm_screen_buttons_poll(false);
     }
+}
+
+void host_ui_release(unsigned button)
+{
     set_button(button, false);
+}
+
+void host_ui_hold(unsigned button, uint32_t milliseconds)
+{
+    host_ui_press(button);
+    host_ui_keep(milliseconds);
+    host_ui_release(button);
 }
 
 /* The width that LVGL gives `letter` before `next` (0 at the end of the text). */

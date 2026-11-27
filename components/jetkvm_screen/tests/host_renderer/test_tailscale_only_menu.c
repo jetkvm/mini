@@ -141,6 +141,29 @@ int main(void)
     expect(s_calls == 1 && strcmp(s_method, "reboot") == 0,
            "the hold on the first entry is not Reboot Device after the entry went");
 
+    /* The entry goes while the button is held on it (another session turned
+     * the setting off): the hold must not go on as a hold on Reboot Device,
+     * which takes its place, and the release is not a tap. */
+    set(true);
+    open_advanced();
+    s_calls = 0;
+    host_ui_press(BUTTON_DOWN);
+    host_ui_keep(JETKVM_SCREEN_BUTTON_ACCEPT_HOLD_MS / 2U);
+    set(false);
+    host_ui_keep(JETKVM_SCREEN_BUTTON_ACCEPT_HOLD_MS + 300U);
+    host_ui_release(BUTTON_DOWN);
+    expect(s_calls == 0, "a hold that began on the entry acted on the entry that took its place");
+    expect(focused(objects.menu_btn_advanced_reboot), "the release of that hold moved the highlight");
+    /* The same when the entry appears under a hold on Reboot Device. */
+    host_ui_press(BUTTON_DOWN);
+    host_ui_keep(JETKVM_SCREEN_BUTTON_ACCEPT_HOLD_MS / 2U);
+    set(true);
+    host_ui_keep(JETKVM_SCREEN_BUTTON_ACCEPT_HOLD_MS + 300U);
+    host_ui_release(BUTTON_DOWN);
+    expect(s_calls == 0, "a hold that began on Reboot Device acted on the entry that appeared");
+    expect(focused(entry), "the highlight is not on the entry that appeared");
+    set(false);
+
     if (s_failures != 0) {
         fprintf(stderr, "Tailscale Only menu: %d failures\n", s_failures);
         return 1;

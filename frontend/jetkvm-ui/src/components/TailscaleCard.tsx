@@ -118,13 +118,20 @@ export default function TailscaleCard() {
       configPending.current = true;
       configCalls.current++;
       setIsSaving(true);
-      send(method, params, resp => {
+      void send(method, params, resp => {
         configPending.current = false;
         setIsSaving(false);
         if ("error" in resp) notifications.error(errorText(resp));
         else onDone?.();
         refreshStatus();
         refreshOnlyAccess();
+      }).then(sent => {
+        // A call that was not sent gets no answer: the RPC channel was
+        // closed. Unlock the controls; the status is read again when the
+        // channel is back.
+        if (sent) return;
+        configPending.current = false;
+        setIsSaving(false);
       });
     },
     [refreshStatus, refreshOnlyAccess, send],

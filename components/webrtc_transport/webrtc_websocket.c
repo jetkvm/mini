@@ -36,10 +36,12 @@ typedef enum {
     WS_CLOSE_SEND_FAILURE, /* an outbound signaling frame could not be sent */
     WS_CLOSE_PEER,         /* the browser (or HTTPD on a protocol error) closed the socket */
     WS_CLOSE_EXPIRED,      /* the local login expired after inactivity */
+    WS_CLOSE_NOT_ADMITTED, /* "Web interface through Tailscale only" turned on */
     WS_CLOSE_COUNT,
 } ws_close_reason_t;
 static const char *const s_close_names[WS_CLOSE_COUNT] = {
     "idle", "epoch", "rebuild", "superseded", "send-failure", "peer", "expired",
+    "tailscale-only",
 };
 
 typedef struct websocket_listener websocket_listener_t;
@@ -221,6 +223,14 @@ static void poll_client(void *arg)
     (void)jetkvm_access_expire_idle();
     if (!jetkvm_access_epoch_valid(client->access_epoch)) {
         close_revoked_client(client);
+        goto done;
+    }
+    /* The Host check admitted this connection once, at the upgrade. A socket
+     * from the local network that is open when "Web interface through
+     * Tailscale only" turns on ends here, with its session. */
+    if (!jetkvm_access_admits_socket(client->fd)) {
+        note_close(client, WS_CLOSE_NOT_ADMITTED);
+        close_client(client);
         goto done;
     }
     if (esp_timer_get_time() - client->last_receive_us > WS_IDLE_TIMEOUT_US) {
@@ -445,7 +455,8 @@ static esp_err_t websocket_handler(httpd_req_t *req)
     }
     websocket_client_t *client = req->sess_ctx;
     if (!client || client != owner->client ||
-        !jetkvm_access_epoch_valid(client->access_epoch)) return ESP_FAIL;
+        !jetkvm_access_epoch_valid(client->access_epoch) ||
+        !jetkvm_access_admits_socket(client->fd)) return ESP_FAIL;
     httpd_ws_frame_t frame = {0};
     esp_err_t err = httpd_ws_recv_frame(req, &frame, 0);
     if (err != ESP_OK) return err;

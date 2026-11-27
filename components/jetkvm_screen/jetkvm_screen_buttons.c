@@ -687,6 +687,13 @@ void jetkvm_screen_buttons_set_tailscale_only(bool shown)
     }
     s_tailscale_only = shown;
     if (strip != NULL) {
+        /* The entries moved under a held button. That hold must not act on
+         * the entry that took its place, such as Reboot Device, and its
+         * release is not a tap. */
+        if (pressed >= 0) {
+            press_used = true;
+            lv_obj_add_flag(track, LV_OBJ_FLAG_HIDDEN);
+        }
         changed(NULL);
     }
 }

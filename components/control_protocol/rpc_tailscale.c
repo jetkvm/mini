@@ -197,9 +197,19 @@ bool rpc_set_tailscale_only_access(const jetkvm_control_context_t *context, cons
     /* Turning it on needs a Tailscale path that works now: the session that
      * asks must have come through it. Turning it off is the way back, so
      * any session may do that. */
-    if (cJSON_IsTrue(enabled) && !(context && context->session_through_tailscale))
-        return set_invalid_hid_params(dispatch,
-            "Open the web interface through Tailscale to turn this on");
+    if (cJSON_IsTrue(enabled)) {
+        if (!(context && context->session_through_tailscale))
+            return set_invalid_hid_params(dispatch,
+                "Open the web interface through Tailscale to turn this on");
+        /* The session came through Tailscale when it opened. A call that
+         * disabled Tailscale since then is in effect at once, before the
+         * tunnel of this session ends. */
+        const jetkvm_tailscale_context_t *ts = tailscale_context(context);
+        jetkvm_tailscale_status_t status = {0};
+        if (!ts->get_status || !ts->get_status(&status, ts->ctx) || !status.enabled ||
+            !status.running || !status.ipv4[0])
+            return set_invalid_hid_params(dispatch, "Tailscale is not connected");
+    }
     const char *error = s_default_tailscale_only.set(cJSON_IsTrue(enabled), s_default_tailscale_only.ctx);
     if (error) return set_hid_unavailable(dispatch, error);
     return only_access_result(context, dispatch);

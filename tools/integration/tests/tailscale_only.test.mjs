@@ -68,14 +68,22 @@ test('turned on through Tailscale, the Mini answers on its Tailscale address onl
   t.after(async () => {
     try {
       if (address) {
-        // The rig must answer on its local address again: try on new
-        // sessions through Tailscale until the setting is off.
+        // The Mini must have the setting off and answer on its local address
+        // again, whatever the test did. Any session turns it off: a new one
+        // through Tailscale, or one from the local network when a failure
+        // left that open although the setting is on.
         await until(async () => {
-          if (await localAnswer(mini.url) === 200) return true;
           await tunnel?.page.close().catch(() => undefined);
-          tunnel = await openTunnel();
-          await tunnel.rpc('setTailscaleOnlyAccess', { enabled: false });
-          return await localAnswer(mini.url) === 200;
+          tunnel = null;
+          let rpc = mini.rpc;
+          if (await localAnswer(mini.url) === 200) {
+            await mini.open();
+          } else {
+            tunnel = await openTunnel();
+            rpc = tunnel.rpc;
+          }
+          const now = await rpc('setTailscaleOnlyAccess', { enabled: false });
+          return now.enabled === false && await localAnswer(mini.url) === 200;
         }, Boolean, 240);
       }
       await tunnel?.page.close().catch(() => undefined);
@@ -91,8 +99,9 @@ test('turned on through Tailscale, the Mini answers on its Tailscale address onl
   let joined = await status(mini);
   if (KEY_FILE) {
     await cleanState(mini);
-    joined = await join(mini);
+    // Before the join, so that a join that fails halfway is cleaned too.
     joinedHere = true;
+    joined = await join(mini);
   } else if (!(joined.running && joined.self?.online && tailnetAddress(joined) &&
                await tailnetPath(tailnetAddress(joined)) !== null)) {
     t.skip('the Mini is not on a tailnet of this machine, and JETKVM_TAILSCALE_AUTH_KEY_FILE is not set');

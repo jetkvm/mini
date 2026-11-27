@@ -1329,12 +1329,16 @@ void app_main(void)
     if (ret == ESP_OK) {
         jetkvm_tailscale_fill_control_context(&s_tailscale_context);
         jetkvm_control_set_default_tailscale_context(&s_tailscale_context);
-        jetkvm_access_set_tailscale_address(tailscale_address);
-        jetkvm_control_set_default_tailscale_only_context(&(jetkvm_tailscale_only_context_t){
-            .get = tailscale_only_get, .set = tailscale_only_set});
     } else {
         ESP_LOGW(TAG, "Tailscale unavailable: %s", esp_err_to_name(ret));
     }
+    /* Also when Tailscale did not start: a stored "Web interface through
+     * Tailscale only" must stay readable, and the screen's entry must be
+     * able to turn it off. Without Tailscale there is no address, so the
+     * setting cannot be turned on. */
+    jetkvm_access_set_tailscale_address(tailscale_address);
+    jetkvm_control_set_default_tailscale_only_context(&(jetkvm_tailscale_only_context_t){
+        .get = tailscale_only_get, .set = tailscale_only_set});
     webrtc_transport_set_video_encode_source(jetkvm_video_get_encode_stats);
     webrtc_transport_set_hdmi_receiver_source(
         jetkvm_video_get_hdmi_receiver_stats);

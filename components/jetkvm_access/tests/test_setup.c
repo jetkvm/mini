@@ -223,7 +223,7 @@ static int test_getpeername(int fd, struct sockaddr *peer, socklen_t *size) {
 static const char *server_ip = "192.0.2.10";
 /* The listener's other open connections, by the address each arrived on;
  * the socket of a request (1) arrived on server_ip. closed_sockets has the
- * ones that the device asked HTTPD to close. */
+ * ones that the device shut down. */
 #define OPEN_SOCKETS 8
 static const char *socket_ips[OPEN_SOCKETS];
 static bool closed_sockets[OPEN_SOCKETS];
@@ -243,8 +243,13 @@ static esp_err_t httpd_get_client_list(void *server, size_t *count, int *sockets
     for (int fd = 0; fd < OPEN_SOCKETS; ++fd) if (socket_ips[fd]) { assert(open < *count); sockets[open++] = fd; }
     *count = open; return 0;
 }
-static esp_err_t httpd_sess_trigger_close(void *server, int fd) {
-    (void)server; assert(fd >= 0 && fd < OPEN_SOCKETS); closed_sockets[fd] = true; return 0;
+static int test_shutdown(int fd, int how) {
+    assert(how == SHUT_RDWR && fd >= 0 && fd < OPEN_SOCKETS); closed_sockets[fd] = true; return 0;
+}
+#define shutdown test_shutdown
+/* HTTPD runs queued work on its own task; here it runs at once. */
+static esp_err_t httpd_queue_work(void *server, void (*work)(void *), void *argument) {
+    assert(server == (void *)1); work(argument); return 0;
 }
 /* The Mini's Tailscale address, or NULL while it has none. */
 static const char *tailscale_ip;
@@ -743,6 +748,11 @@ int main(void) {
     fail_save = true;
     assert(jetkvm_access_set_tailscale_only(true) && !jetkvm_access_get_tailscale_only());
     fail_save = false;
+    /* Nor is it turned on while the Mini has no Tailscale address: the
+     * rule would admit no connection at all. */
+    tailscale_ip = NULL;
+    assert(jetkvm_access_set_tailscale_only(true) && !jetkvm_access_get_tailscale_only());
+    tailscale_ip = "100.101.102.103";
     for (int fd = 0; fd < OPEN_SOCKETS; ++fd) assert(!closed_sockets[fd]);
     assert(!jetkvm_access_set_tailscale_only(true) && jetkvm_access_get_tailscale_only());
     assert(closed_sockets[LAN] && closed_sockets[LAN_V6] && closed_sockets[OTHER_TAILNET_HOST] &&
@@ -750,18 +760,19 @@ int main(void) {
     assert(!jetkvm_access_admits_socket(LAN) && !jetkvm_access_admits_socket(LAN_V6) &&
            !jetkvm_access_admits_socket(OTHER_TAILNET_HOST) &&
            jetkvm_access_admits_socket(TAILSCALE) && jetkvm_access_admits_socket(TAILSCALE_MAPPED));
-    /* A request on a local connection that stayed open gets no answer. One
-     * that keeps its connection is closed through HTTPD; one with a body
-     * closes by its handler result. */
+    /* A request on a local connection that stayed open gets no answer, and
+     * its connection is shut down: a request without a body, one with a
+     * body, and the upgrade of the signaling socket. */
     memset(closed_sockets, 0, sizeof(closed_sockets));
-    assert(request("/device", HTTP_GET, "", NULL, NULL) == 200 && !response[0] &&
-           last_result == ESP_OK && closed_sockets[REQUEST]);
+    assert(request("/device", HTTP_GET, "", NULL, NULL) == 200 && !response[0] && closed_sockets[REQUEST]);
     closed_sockets[REQUEST] = false;
     assert(request("/auth/login-local", HTTP_POST, "{\"password\":\"12345678\"}", NULL, NULL) == 200 &&
-           !response[0] && last_result != ESP_OK && !closed_sockets[REQUEST]);
+           !response[0] && last_result != ESP_OK && closed_sockets[REQUEST]);
+    closed_sockets[REQUEST] = false;
     httpd_req_t local_socket = {.handle = (void *)1, .uri = "/webrtc/signaling/client",
         .method = HTTP_GET, .origin = "http://192.0.2.10"};
-    assert(jetkvm_access_check_request(&local_socket, true) != ESP_OK && !response[0]);
+    assert(jetkvm_access_check_request(&local_socket, true) != ESP_OK && !response[0] &&
+           closed_sockets[REQUEST]);
     /* The same requests through Tailscale are answered, by address and by name. */
     memset(closed_sockets, 0, sizeof(closed_sockets));
     server_ip = "100.101.102.103"; host_header = "100.101.102.103";
