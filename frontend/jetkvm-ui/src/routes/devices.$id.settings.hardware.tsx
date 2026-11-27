@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { BacklightSettings, useCapability, useSettingsStore } from "@hooks/stores";
 import { JsonRpcResponse, useJsonRpc } from "@hooks/useJsonRpc";
 import { Checkbox } from "@components/Checkbox";
+import { DisplayScheduleSetting } from "@components/DisplayScheduleSetting";
 import { SelectMenuBasic } from "@components/SelectMenuBasic";
 import { SettingsItem } from "@components/SettingsItem";
 import { SettingsPageHeader } from "@components/SettingsPageheader";
@@ -26,6 +27,7 @@ export default function SettingsHardwareRoute() {
   const settings = useSettingsStore();
   const { setDisplayRotation } = useSettingsStore();
   const displayButtons = useCapability("display_buttons");
+  const displaySchedule = useCapability("display_schedule");
   const [powerSavingEnabled, setPowerSavingEnabled] = useState(false);
   // A stored quarter turn also selects the four-entry menu, so a reload shows
   // it before the device's capabilities arrive.
@@ -227,6 +229,7 @@ export default function SettingsHardwareRoute() {
             </SettingsItem>
           </NestedSettingsGroup>
         )}
+        {displaySchedule && <DisplayScheduleSetting />}
         <p className="text-xs text-slate-600 dark:text-slate-400">
           {displayButtons
             ? m.hardware_display_wake_up_note_buttons()

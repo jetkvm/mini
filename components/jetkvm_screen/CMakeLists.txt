@@ -42,7 +42,8 @@ idf_component_register(
     REQUIRES jetkvm_board_config lvgl
     PRIV_REQUIRES esp_driver_gpio esp_driver_ledc esp_driver_ppa esp_driver_spi esp_lcd esp_timer
                   jetkvm_memory_policy control_protocol nvs_flash
-                  jetkvm_factory_reset jetkvm_usb_debugging esp_system)
+                  jetkvm_factory_reset jetkvm_usb_debugging esp_system
+                  jetkvm_time_sync jetkvm_timezone)
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE LV_LVGL_H_INCLUDE_SIMPLE=1)
 

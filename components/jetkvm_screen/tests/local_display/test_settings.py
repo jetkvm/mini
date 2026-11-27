@@ -10,6 +10,8 @@ prefix=r'''
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
+#include "jetkvm_timezone.h"
 typedef int esp_err_t,nvs_handle_t,portMUX_TYPE;
 #define portMUX_INITIALIZER_UNLOCKED 0
 #define portENTER_CRITICAL(p) ((void)(p))
@@ -27,19 +29,30 @@ typedef void *SemaphoreHandle_t;
 #define pdTRUE 1
 #define ESP_LOGW(tag,...) ((void)(tag))
 typedef struct { uint32_t max_brightness,dim_after,off_after; } jetkvm_backlight_settings_t;
+#define JETKVM_CONTROL_DISPLAY_SCHEDULE_TIMEZONE_CAPACITY 64U
+#define LOCAL_DISPLAY_QUIET_PRESS_SECONDS 30U
+typedef struct { bool enabled,dim;uint16_t start_minute,end_minute;char timezone[64]; } jetkvm_display_schedule_t;
 typedef struct {
  bool (*get_backlight)(jetkvm_backlight_settings_t *,void *);
  const char *(*set_backlight)(const jetkvm_backlight_settings_t *,void *);
  bool (*get_rotation)(uint16_t *,void *);
  const char *(*set_rotation)(uint16_t,void *);
+ bool (*get_schedule)(jetkvm_display_schedule_t *,void *);
+ const char *(*set_schedule)(const jetkvm_display_schedule_t *,void *);
+ bool (*schedule_timezone)(size_t,const char **,void *);
  void *ctx;
 } jetkvm_local_display_context_t;
 typedef struct { int (*rotation)(uint16_t);int (*brightness)(uint32_t);int (*active)(bool); } local_display_driver_t;
 typedef struct { bool ready,active,dark;uint16_t rotation;uint32_t brightness;int error; } local_display_state_t;
 static jetkvm_local_display_context_t registered;
-static bool held,has_saved,save_fails;
+static bool held,has_saved,save_fails,has_schedule,clock_set;
 static uint32_t saved[5];
-static int64_t now;
+/* The stored quiet hours, and the size that the store gives for them. */
+static uint8_t saved_schedule[72];
+static size_t saved_schedule_size=sizeof(saved_schedule);
+static int64_t now,wall;
+static bool jetkvm_time_sync_ready(void) { return clock_set; }
+#define time(p) ((time_t)wall)
 static int rotation_calls,brightness_calls,rotation_fail_at,brightness_fail_at,active_calls,active_fail_at;
 static uint16_t physical_rotation;
 static uint32_t physical_brightness;
@@ -52,10 +65,18 @@ static int64_t esp_timer_get_time(void) { return now; }
 static int nvs_open(const char *ns,int mode,int *h) { (void)mode;assert(!strcmp(ns,"jk_display"));*h=1;return 0; }
 static void nvs_close(int h) { assert(h==1); }
 static int nvs_get_blob(int h,const char *key,void *p,size_t *n) {
+ if(!strcmp(key,"schedule")) {
+  assert(h==1&&*n==sizeof(saved_schedule));if(!has_schedule)return ESP_ERR_NVS_NOT_FOUND;
+  memcpy(p,saved_schedule,*n);*n=saved_schedule_size;return 0;
+ }
  assert(h==1&&!strcmp(key,"settings")&&*n==sizeof(saved));if(!has_saved)return ESP_ERR_NVS_NOT_FOUND;
  memcpy(p,saved,*n);return 0;
 }
 static int nvs_set_blob(int h,const char *key,const void *p,size_t n) {
+ if(!strcmp(key,"schedule")) {
+  assert(h==1&&n==sizeof(saved_schedule));if(save_fails)return 1;
+  memcpy(saved_schedule,p,n);has_schedule=true;return 0;
+ }
  assert(h==1&&!strcmp(key,"settings")&&n==sizeof(saved));if(save_fails)return 1;
  memcpy(saved,p,n);has_saved=true;return 0;
 }
@@ -136,7 +157,13 @@ int main(void) {
  puts("Display settings: dim/off/wake and dark state, never, inactive display, persistence and hardware/store rollback: PASS");
 }
 '''
+schedule_main=(Path(__file__).parent/'schedule_main.c').read_text()
+timezone=root/'components/jetkvm_timezone'
 with tempfile.TemporaryDirectory() as directory:
- p=Path(directory);(p/'test.c').write_text(prefix+source+main)
- subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',str(p/'test.c'),'-o',str(p/'test')],check=True)
- subprocess.run([str(p/'test')],check=True)
+ p=Path(directory)
+ for name,body in (('test',main),('schedule',schedule_main)):
+  (p/f'{name}.c').write_text(prefix+source+body)
+  subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',
+                  f'-I{timezone}/include',f'-I{timezone}',str(p/f'{name}.c'),str(timezone/'jetkvm_timezone.c'),
+                  '-o',str(p/name)],check=True)
+  subprocess.run([str(p/name)],check=True)

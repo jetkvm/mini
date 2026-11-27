@@ -1049,11 +1049,29 @@ typedef struct {
 typedef struct {
     uint32_t max_brightness, dim_after, off_after;
 } jetkvm_backlight_settings_t;
+#define JETKVM_CONTROL_DISPLAY_SCHEDULE_TIMEZONE_CAPACITY 64U
+/* The quiet hours of the local display: between start and end, minutes of the
+ * local day (0..1439) in the time zone, the display is dimmed or off. An end
+ * before the start is on the next day. */
+typedef struct {
+    bool enabled;
+    /* Dim to half the set brightness; otherwise off. */
+    bool dim;
+    uint16_t start_minute, end_minute;
+    char timezone[JETKVM_CONTROL_DISPLAY_SCHEDULE_TIMEZONE_CAPACITY];
+} jetkvm_display_schedule_t;
 typedef struct {
     bool (*get_backlight)(jetkvm_backlight_settings_t *settings, void *ctx);
     const char *(*set_backlight)(const jetkvm_backlight_settings_t *settings, void *ctx);
     bool (*get_rotation)(uint16_t *rotation, void *ctx);
     const char *(*set_rotation)(uint16_t rotation, void *ctx);
+    /* The three schedule callbacks together add the "display_schedule"
+     * capability. set returns NULL, or the reason it stored nothing.
+     * timezone gives the names that set takes, in order: it sets *name to
+     * NULL from the count on, and returns false when it has no list. */
+    bool (*get_schedule)(jetkvm_display_schedule_t *schedule, void *ctx);
+    const char *(*set_schedule)(const jetkvm_display_schedule_t *schedule, void *ctx);
+    bool (*schedule_timezone)(size_t index, const char **name, void *ctx);
     /* Side buttons drive the local display and wake it. */
     bool buttons;
     void *ctx;

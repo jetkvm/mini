@@ -928,7 +928,8 @@ export type Capability =
   | "display_buttons" // side buttons wake the local display
   | "usb_debugging" // the USB debugging switch (the Mini's USB Serial/JTAG port)
   | "extra_hostnames" // other host names the web server answers to (getExtraHostnames)
-  | "storage_download"; // device downloads an image from a URL into its storage
+  | "storage_download" // device downloads an image from a URL into its storage
+  | "display_schedule"; // the local display dims or turns off between two times of day
 
 export const useDeviceStore = create<DeviceState>(set => ({
   appVersion: null,
