@@ -1,16 +1,20 @@
-// The quiet hours of the local display (getDisplaySchedule): between start
-// and end, "HH:MM" in the time zone, the display is dimmed or off. A schedule
-// that was never turned on has no time zone ("").
-export interface DisplaySchedule {
+// The local display by time of day (getDisplaySchedule): in the dim window it
+// is at half brightness, and in the off window it is off. A window is from
+// start to end, "HH:MM", each day. Both windows are in one time zone; a
+// schedule whose windows were never turned on has none ("").
+export interface DisplayWindow {
   enabled: boolean;
-  action: "off" | "dim";
   start: string;
   end: string;
+}
+
+export interface DisplaySchedule {
+  dim: DisplayWindow;
+  off: DisplayWindow;
   timezone: string;
 }
 
-// The values of the schedule menu.
-export type DisplayScheduleMenu = "never" | "dim" | "off";
+export type DisplayWindowName = "dim" | "off";
 
 const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
 
@@ -19,22 +23,19 @@ export function isTimeOfDay(value: string): boolean {
   return TIME.test(value);
 }
 
-export function menuOfSchedule(schedule: DisplaySchedule): DisplayScheduleMenu {
-  return schedule.enabled ? schedule.action : "never";
-}
-
-// The schedule to store when the menu changes to a value. A schedule
-// without a time zone is turned on for the first time: it takes the browser's
-// zone when the device has that zone, and UTC otherwise.
-export function scheduleForMenu(
+// The schedule to store when one window changes. A schedule without a time
+// zone gets one when a window is turned on: the browser's zone when the
+// device has that zone, and UTC otherwise. A zone that is set stays.
+export function scheduleWithWindow(
   schedule: DisplaySchedule,
-  value: string,
+  name: DisplayWindowName,
+  change: Partial<DisplayWindow>,
   timezones: readonly string[],
   browserTimezone: string,
 ): DisplaySchedule {
-  if (value !== "dim" && value !== "off") return { ...schedule, enabled: false };
-  const first = timezones.includes(browserTimezone) ? browserTimezone : "UTC";
-  return { ...schedule, enabled: true, action: value, timezone: schedule.timezone || first };
+  const next = { ...schedule, [name]: { ...schedule[name], ...change } };
+  if (next.timezone || !(next.dim.enabled || next.off.enabled)) return next;
+  return { ...next, timezone: timezones.includes(browserTimezone) ? browserTimezone : "UTC" };
 }
 
 // What a setting's writes need from the page.

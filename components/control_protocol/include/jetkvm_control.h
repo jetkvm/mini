@@ -1050,15 +1050,18 @@ typedef struct {
     uint32_t max_brightness, dim_after, off_after;
 } jetkvm_backlight_settings_t;
 #define JETKVM_CONTROL_DISPLAY_SCHEDULE_TIMEZONE_CAPACITY 64U
-/* The quiet hours of the local display: between start and end, minutes of the
- * local day (0..1439) in the time zone, the display is dimmed or off. An end
- * before the start is on the next day. A schedule that was never turned on
- * has no time zone (""); one that is on has a zone. */
+/* A time window of each day: from start to before end, minutes of the local
+ * day (0..1439), not equal. An end before the start is on the next day. */
 typedef struct {
     bool enabled;
-    /* Dim to half the set brightness; otherwise off. */
-    bool dim;
     uint16_t start_minute, end_minute;
+} jetkvm_display_window_t;
+/* The local display by time of day: in the dim window it is at half its set
+ * brightness, and in the off window it is off. Both are in one time zone. A
+ * schedule whose windows were never turned on has no time zone (""); one with
+ * a window that is on has a zone. */
+typedef struct {
+    jetkvm_display_window_t dim, off;
     char timezone[JETKVM_CONTROL_DISPLAY_SCHEDULE_TIMEZONE_CAPACITY];
 } jetkvm_display_schedule_t;
 typedef struct {

@@ -3,7 +3,12 @@ import { useEffect, useState } from "react";
 import { BacklightSettings, useCapability, useSettingsStore } from "@hooks/stores";
 import { JsonRpcResponse, useJsonRpc } from "@hooks/useJsonRpc";
 import { Checkbox } from "@components/Checkbox";
-import { DisplayScheduleSetting } from "@components/DisplayScheduleSetting";
+import {
+  DisplayRuleGroup,
+  DisplayScheduleTimezone,
+  DisplayWindowSetting,
+  useDisplaySchedule,
+} from "@components/DisplayScheduleSetting";
 import { SelectMenuBasic } from "@components/SelectMenuBasic";
 import { SettingsItem } from "@components/SettingsItem";
 import { SettingsPageHeader } from "@components/SettingsPageheader";
@@ -27,7 +32,10 @@ export default function SettingsHardwareRoute() {
   const settings = useSettingsStore();
   const { setDisplayRotation } = useSettingsStore();
   const displayButtons = useCapability("display_buttons");
+  // A device with the capability dims or turns off its display also between
+  // two times of day; its rows are grouped by what happens to the display.
   const displaySchedule = useCapability("display_schedule");
+  const schedule = useDisplaySchedule(displaySchedule);
   const [powerSavingEnabled, setPowerSavingEnabled] = useState(false);
   // A stored quarter turn also selects the four-entry menu, so a reload shows
   // it before the device's capabilities arrive.
@@ -140,6 +148,44 @@ export default function SettingsHardwareRoute() {
     });
   }, [send, setDisplayRotation]);
 
+  // The two idle timers. A device with the display_schedule capability shows
+  // them as "After inactivity" in the group of their action.
+  const dimAfterMenu = (
+    <SelectMenuBasic
+      size="SM"
+      label=""
+      value={backlightSettings.dim_after.toString()}
+      options={[
+        { value: "0", label: m.hardware_time_never() },
+        { value: "60", label: m.hardware_time_1_minute() },
+        { value: "300", label: m.hardware_time_5_minutes() },
+        { value: "600", label: m.hardware_time_10_minutes() },
+        { value: "1800", label: m.hardware_time_30_minutes() },
+        { value: "3600", label: m.hardware_time_1_hour() },
+      ]}
+      onChange={e => {
+        handleBacklightDimAfterChange(Number.parseInt(e.target.value));
+      }}
+    />
+  );
+  const offAfterMenu = (
+    <SelectMenuBasic
+      size="SM"
+      label=""
+      value={backlightSettings.off_after.toString()}
+      options={[
+        { value: "0", label: m.hardware_time_never() },
+        { value: "300", label: m.hardware_time_5_minutes() },
+        { value: "600", label: m.hardware_time_10_minutes() },
+        { value: "1800", label: m.hardware_time_30_minutes() },
+        { value: "3600", label: m.hardware_time_1_hour() },
+      ]}
+      onChange={e => {
+        handleBacklightOffAfterChange(Number.parseInt(e.target.value));
+      }}
+    />
+  );
+
   return (
     <div className="space-y-4">
       <SettingsPageHeader title={m.hardware_title()} description={m.hardware_page_description()} />
@@ -184,56 +230,61 @@ export default function SettingsHardwareRoute() {
             }}
           />
         </SettingsItem>
-        {backlightSettings.max_brightness != 0 && (
-          <NestedSettingsGroup>
-            <SettingsItem
-              title={m.hardware_dim_display_after_title()}
-              description={m.hardware_dim_display_after_description()}
-            >
-              <SelectMenuBasic
-                size="SM"
-                label=""
-                value={backlightSettings.dim_after.toString()}
-                options={[
-                  { value: "0", label: m.hardware_time_never() },
-                  { value: "60", label: m.hardware_time_1_minute() },
-                  { value: "300", label: m.hardware_time_5_minutes() },
-                  { value: "600", label: m.hardware_time_10_minutes() },
-                  { value: "1800", label: m.hardware_time_30_minutes() },
-                  { value: "3600", label: m.hardware_time_1_hour() },
-                ]}
-                onChange={e => {
-                  handleBacklightDimAfterChange(Number.parseInt(e.target.value));
-                }}
-              />
-            </SettingsItem>
-            <SettingsItem
-              title={m.hardware_turn_off_display_after_title()}
-              description={m.hardware_turn_off_display_after_description()}
-            >
-              <SelectMenuBasic
-                size="SM"
-                label=""
-                value={backlightSettings.off_after.toString()}
-                options={[
-                  { value: "0", label: m.hardware_time_never() },
-                  { value: "300", label: m.hardware_time_5_minutes() },
-                  { value: "600", label: m.hardware_time_10_minutes() },
-                  { value: "1800", label: m.hardware_time_30_minutes() },
-                  { value: "3600", label: m.hardware_time_1_hour() },
-                ]}
-                onChange={e => {
-                  handleBacklightOffAfterChange(Number.parseInt(e.target.value));
-                }}
-              />
-            </SettingsItem>
-          </NestedSettingsGroup>
-        )}
-        {displaySchedule && <DisplayScheduleSetting />}
+        {backlightSettings.max_brightness != 0 &&
+          (displaySchedule ? (
+            <NestedSettingsGroup>
+              <DisplayRuleGroup title={m.hardware_display_schedule_dim_title()}>
+                <SettingsItem
+                  size="SM"
+                  title={m.hardware_display_schedule_inactivity_title()}
+                  description={m.hardware_dim_display_after_description()}
+                >
+                  {dimAfterMenu}
+                </SettingsItem>
+                <DisplayWindowSetting
+                  name="dim"
+                  description={m.hardware_display_schedule_dim_between_description()}
+                  state={schedule}
+                />
+              </DisplayRuleGroup>
+              <DisplayRuleGroup title={m.hardware_display_schedule_off_title()}>
+                <SettingsItem
+                  size="SM"
+                  title={m.hardware_display_schedule_inactivity_title()}
+                  description={m.hardware_turn_off_display_after_description()}
+                >
+                  {offAfterMenu}
+                </SettingsItem>
+                <DisplayWindowSetting
+                  name="off"
+                  description={m.hardware_display_schedule_off_between_description()}
+                  state={schedule}
+                />
+              </DisplayRuleGroup>
+              <DisplayScheduleTimezone state={schedule} />
+            </NestedSettingsGroup>
+          ) : (
+            <NestedSettingsGroup>
+              <SettingsItem
+                title={m.hardware_dim_display_after_title()}
+                description={m.hardware_dim_display_after_description()}
+              >
+                {dimAfterMenu}
+              </SettingsItem>
+              <SettingsItem
+                title={m.hardware_turn_off_display_after_title()}
+                description={m.hardware_turn_off_display_after_description()}
+              >
+                {offAfterMenu}
+              </SettingsItem>
+            </NestedSettingsGroup>
+          ))}
         <p className="text-xs text-slate-600 dark:text-slate-400">
-          {displayButtons
-            ? m.hardware_display_wake_up_note_buttons()
-            : m.hardware_display_wake_up_note()}
+          {displaySchedule
+            ? m.hardware_display_schedule_note()
+            : displayButtons
+              ? m.hardware_display_wake_up_note_buttons()
+              : m.hardware_display_wake_up_note()}
         </p>
       </div>
 

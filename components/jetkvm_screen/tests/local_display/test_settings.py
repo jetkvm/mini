@@ -30,8 +30,9 @@ typedef void *SemaphoreHandle_t;
 #define ESP_LOGW(tag,...) ((void)(tag))
 typedef struct { uint32_t max_brightness,dim_after,off_after; } jetkvm_backlight_settings_t;
 #define JETKVM_CONTROL_DISPLAY_SCHEDULE_TIMEZONE_CAPACITY 64U
-#define LOCAL_DISPLAY_QUIET_PRESS_SECONDS 30U
-typedef struct { bool enabled,dim;uint16_t start_minute,end_minute;char timezone[64]; } jetkvm_display_schedule_t;
+#define LOCAL_DISPLAY_WINDOW_PRESS_SECONDS 30U
+typedef struct { bool enabled;uint16_t start_minute,end_minute; } jetkvm_display_window_t;
+typedef struct { jetkvm_display_window_t dim,off;char timezone[64]; } jetkvm_display_schedule_t;
 typedef struct {
  bool (*get_backlight)(jetkvm_backlight_settings_t *,void *);
  const char *(*set_backlight)(const jetkvm_backlight_settings_t *,void *);
@@ -47,8 +48,8 @@ typedef struct { bool ready,active,dark;uint16_t rotation;uint32_t brightness;in
 static jetkvm_local_display_context_t registered;
 static bool held,has_saved,save_fails,has_schedule,clock_set;
 static uint32_t saved[5];
-/* The stored quiet hours, and the size that the store gives for them. */
-static uint8_t saved_schedule[72];
+/* The stored schedule, and the size of what the store has for it. */
+static uint8_t saved_schedule[76];
 static size_t saved_schedule_size=sizeof(saved_schedule);
 static int64_t now,wall;
 static bool jetkvm_time_sync_ready(void) { return clock_set; }
@@ -67,7 +68,8 @@ static void nvs_close(int h) { assert(h==1); }
 static int nvs_get_blob(int h,const char *key,void *p,size_t *n) {
  if(!strcmp(key,"schedule")) {
   assert(h==1&&*n==sizeof(saved_schedule));if(!has_schedule)return ESP_ERR_NVS_NOT_FOUND;
-  memcpy(p,saved_schedule,*n);*n=saved_schedule_size;return 0;
+  /* As NVS does: a shorter stored value is given with its own size. */
+  assert(saved_schedule_size<=*n);memcpy(p,saved_schedule,saved_schedule_size);*n=saved_schedule_size;return 0;
  }
  assert(h==1&&!strcmp(key,"settings")&&*n==sizeof(saved));if(!has_saved)return ESP_ERR_NVS_NOT_FOUND;
  memcpy(p,saved,*n);return 0;
@@ -75,7 +77,7 @@ static int nvs_get_blob(int h,const char *key,void *p,size_t *n) {
 static int nvs_set_blob(int h,const char *key,const void *p,size_t n) {
  if(!strcmp(key,"schedule")) {
   assert(h==1&&n==sizeof(saved_schedule));if(save_fails)return 1;
-  memcpy(saved_schedule,p,n);has_schedule=true;return 0;
+  memcpy(saved_schedule,p,n);saved_schedule_size=n;has_schedule=true;return 0;
  }
  assert(h==1&&!strcmp(key,"settings")&&n==sizeof(saved));if(save_fails)return 1;
  memcpy(saved,p,n);has_saved=true;return 0;

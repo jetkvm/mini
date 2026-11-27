@@ -15,24 +15,26 @@ typedef struct {
     uint32_t version, rotation;
     jetkvm_backlight_settings_t backlight;
 } display_record_t;
-/* The quiet hours have their own NVS key, so that a firmware without them
- * still reads the "settings" record. */
+/* The schedule has its own NVS key, so that a firmware without it still reads
+ * the "settings" record. Version 1 was one window with an action, from builds
+ * before the first release of the schedule; it is read as no window. */
 typedef struct {
-    uint8_t version, enabled, dim, reserved;
-    uint16_t start_minute, end_minute;
+    uint8_t version, dim_enabled, off_enabled, reserved;
+    uint16_t dim_start, dim_end, off_start, off_end;
     char timezone[JETKVM_CONTROL_DISPLAY_SCHEDULE_TIMEZONE_CAPACITY];
 } schedule_record_t;
-_Static_assert(sizeof(schedule_record_t) == 8U + JETKVM_CONTROL_DISPLAY_SCHEDULE_TIMEZONE_CAPACITY,
+_Static_assert(sizeof(schedule_record_t) == 12U + JETKVM_CONTROL_DISPLAY_SCHEDULE_TIMEZONE_CAPACITY,
                "the stored schedule has no padding");
 /* Never turned on: no time zone yet. */
 static const jetkvm_display_schedule_t s_default_schedule = {
-    .start_minute = 22U * 60U, .end_minute = 6U * 60U};
+    .dim = {.start_minute = 20U * 60U, .end_minute = 23U * 60U},
+    .off = {.start_minute = 22U * 60U, .end_minute = 6U * 60U}};
 static display_record_t s_config;
 static jetkvm_display_schedule_t s_schedule;
-/* The rule of s_schedule.timezone, and the quiet state of one minute. */
+/* The rule of s_schedule.timezone, and the windows that one minute is in. */
 static const char *s_schedule_rule;
-static int64_t s_quiet_minute = -1;
-static bool s_quiet;
+static int64_t s_window_minute = -1;
+static bool s_in_dim, s_in_off;
 static local_display_driver_t s_driver;
 static local_display_state_t s_state;
 static local_display_state_t s_published_state;
@@ -48,25 +50,27 @@ uint32_t local_display_brightness(const jetkvm_backlight_settings_t *settings, u
     return settings->max_brightness;
 }
 
-bool local_display_quiet(const jetkvm_display_schedule_t *schedule, const char *rule, int64_t utc_seconds)
+bool local_display_in_window(const jetkvm_display_window_t *window, const char *rule, int64_t utc_seconds)
 {
     uint16_t minute;
-    if (!schedule->enabled || !jetkvm_timezone_minute_of_day(rule, utc_seconds, &minute)) return false;
-    return schedule->start_minute < schedule->end_minute
-        ? minute >= schedule->start_minute && minute < schedule->end_minute
-        : minute >= schedule->start_minute || minute < schedule->end_minute;
+    if (!window->enabled || !jetkvm_timezone_minute_of_day(rule, utc_seconds, &minute)) return false;
+    return window->start_minute < window->end_minute
+        ? minute >= window->start_minute && minute < window->end_minute
+        : minute >= window->start_minute || minute < window->end_minute;
 }
 
 uint32_t local_display_scheduled_brightness(const jetkvm_backlight_settings_t *settings,
-                                            const jetkvm_display_schedule_t *schedule, bool quiet,
+                                            bool in_dim_window, bool in_off_window,
                                             uint64_t idle_seconds, uint64_t press_idle_seconds)
 {
     uint32_t value = local_display_brightness(settings, idle_seconds);
-    if (!quiet) return value;
+    if (!in_dim_window && !in_off_window) return value;
     uint32_t lit = settings->dim_after ? settings->dim_after :
-                   settings->off_after ? settings->off_after : LOCAL_DISPLAY_QUIET_PRESS_SECONDS;
+                   settings->off_after ? settings->off_after : LOCAL_DISPLAY_WINDOW_PRESS_SECONDS;
     if (press_idle_seconds < lit) return value;
-    uint32_t limit = schedule->dim ? settings->max_brightness / 2 : 0;
+    /* The darkest rule wins: the off window, then the dim window, then what
+     * the idle timers give. */
+    uint32_t limit = in_off_window ? 0 : settings->max_brightness / 2;
     return value < limit ? value : limit;
 }
 
@@ -100,15 +104,20 @@ static esp_err_t save_blob(const char *key, const void *record, size_t size)
 }
 static esp_err_t save(const display_record_t *record)
 { return save_blob("settings", record, sizeof(*record)); }
+static bool window_valid(const jetkvm_display_window_t *window)
+{
+    return window->start_minute <= 1439U && window->end_minute <= 1439U &&
+        window->start_minute != window->end_minute;
+}
 /* True for a schedule that can be stored and used, with the rule of its
- * zone. A schedule that is off may have no zone, and then has no rule. */
+ * zone. A schedule with both windows off may have no zone, and then has no
+ * rule. */
 static bool schedule_valid(const jetkvm_display_schedule_t *schedule, const char **rule)
 {
     *rule = NULL;
-    if (schedule->start_minute > 1439U || schedule->end_minute > 1439U ||
-        schedule->start_minute == schedule->end_minute ||
+    if (!window_valid(&schedule->dim) || !window_valid(&schedule->off) ||
         !memchr(schedule->timezone, '\0', sizeof(schedule->timezone))) return false;
-    if (schedule->timezone[0] == '\0') return !schedule->enabled;
+    if (schedule->timezone[0] == '\0') return !schedule->dim.enabled && !schedule->off.enabled;
     *rule = jetkvm_timezone_rule(schedule->timezone);
     return *rule != NULL;
 }
@@ -205,20 +214,22 @@ static const char *set_schedule(const jetkvm_display_schedule_t *schedule, void 
     if (!schedule) return "Display schedule unavailable";
     const char *rule;
     if (!schedule_valid(schedule, &rule))
-        return "Unknown time zone, or start and end are not two times of the day";
-    schedule_record_t record = {.version = 1, .enabled = schedule->enabled, .dim = schedule->dim,
-        .start_minute = schedule->start_minute, .end_minute = schedule->end_minute};
+        return "Unknown time zone, or a start and end that are not two times of the day";
+    schedule_record_t record = {.version = 2,
+        .dim_enabled = schedule->dim.enabled, .off_enabled = schedule->off.enabled,
+        .dim_start = schedule->dim.start_minute, .dim_end = schedule->dim.end_minute,
+        .off_start = schedule->off.start_minute, .off_end = schedule->off.end_minute};
     /* The record is all zero after the name, so equal schedules store equal
      * bytes. schedule_valid() found the name's end inside the field. */
     memcpy(record.timezone, schedule->timezone, strlen(schedule->timezone));
     if (!lock()) return "Local display unavailable or busy";
     esp_err_t error = save_blob("schedule", &record, sizeof(record));
     if (error == ESP_OK) {
-        s_schedule = (jetkvm_display_schedule_t){.enabled = schedule->enabled, .dim = schedule->dim,
-            .start_minute = schedule->start_minute, .end_minute = schedule->end_minute};
+        s_schedule.dim = schedule->dim;
+        s_schedule.off = schedule->off;
         memcpy(s_schedule.timezone, record.timezone, sizeof(s_schedule.timezone));
         s_schedule_rule = rule;
-        s_quiet_minute = -1;
+        s_window_minute = -1;
     }
     unlock(); return error == ESP_OK ? NULL : "Could not save the display schedule";
 }
@@ -254,7 +265,7 @@ esp_err_t local_display_settings_init(uint16_t rotation, const local_display_dri
         else if (error != ESP_ERR_NVS_NOT_FOUND) ESP_LOGW(TAG, "Invalid saved display settings; using defaults");
     } else if (error != ESP_ERR_NVS_NOT_FOUND) ESP_LOGW(TAG, "Display settings unavailable; using defaults");
     s_schedule = s_default_schedule;
-    s_quiet_minute = -1;
+    s_window_minute = -1;
     s_pressed = false;
     error = restore_settings ? nvs_open("jk_display", NVS_READONLY, &handle) : ESP_ERR_NVS_NOT_FOUND;
     if (error == ESP_OK) {
@@ -262,13 +273,15 @@ esp_err_t local_display_settings_init(uint16_t rotation, const local_display_dri
         size_t size = sizeof(saved);
         error = nvs_get_blob(handle, "schedule", &saved, &size);
         nvs_close(handle);
-        jetkvm_display_schedule_t schedule = {.enabled = saved.enabled == 1U, .dim = saved.dim == 1U,
-            .start_minute = saved.start_minute, .end_minute = saved.end_minute};
+        jetkvm_display_schedule_t schedule = {
+            .dim = {saved.dim_enabled == 1U, saved.dim_start, saved.dim_end},
+            .off = {saved.off_enabled == 1U, saved.off_start, saved.off_end}};
         memcpy(schedule.timezone, saved.timezone, sizeof(schedule.timezone));
         const char *rule;
-        if (error == ESP_OK && size == sizeof(saved) && saved.version == 1U && saved.enabled <= 1U &&
-            saved.dim <= 1U && schedule_valid(&schedule, &rule)) s_schedule = schedule;
-        else if (error != ESP_ERR_NVS_NOT_FOUND) ESP_LOGW(TAG, "Invalid saved display schedule; it is off");
+        if (error == ESP_OK && size == sizeof(saved) && saved.version == 2U && saved.dim_enabled <= 1U &&
+            saved.off_enabled <= 1U && schedule_valid(&schedule, &rule)) s_schedule = schedule;
+        else if (error != ESP_ERR_NVS_NOT_FOUND)
+            ESP_LOGW(TAG, "Saved display schedule is not usable; no window is set");
     }
     (void)schedule_valid(&s_schedule, &s_schedule_rule);
     const jetkvm_local_display_context_t context = {
@@ -321,30 +334,34 @@ void local_display_wake(void)
 { __atomic_store_n(&s_wake, true, __ATOMIC_RELEASE); }
 void local_display_notice(void)
 { __atomic_store_n(&s_notice, true, __ATOMIC_RELEASE); }
-/* The schedule does nothing until the clock has the network time. The local
+/* The windows do nothing until the clock has the network time. The local
  * time of a minute is found once. */
-static bool quiet_now(void)
+static void windows_now(bool *in_dim, bool *in_off)
 {
-    if (!s_schedule.enabled || !jetkvm_time_sync_ready()) return false;
+    *in_dim = *in_off = false;
+    if ((!s_schedule.dim.enabled && !s_schedule.off.enabled) || !jetkvm_time_sync_ready()) return;
     int64_t utc = (int64_t)time(NULL);
-    if (utc / 60 != s_quiet_minute) {
-        s_quiet_minute = utc / 60;
-        s_quiet = local_display_quiet(&s_schedule, s_schedule_rule, utc);
+    if (utc / 60 != s_window_minute) {
+        s_window_minute = utc / 60;
+        s_in_dim = local_display_in_window(&s_schedule.dim, s_schedule_rule, utc);
+        s_in_off = local_display_in_window(&s_schedule.off, s_schedule_rule, utc);
     }
-    return s_quiet;
+    *in_dim = s_in_dim;
+    *in_off = s_in_off;
 }
 void local_display_tick(void)
 {
     if (!s_mutex || xSemaphoreTake(s_mutex, 0) != pdTRUE) return;
     int64_t now = esp_timer_get_time();
     if (__atomic_exchange_n(&s_wake, false, __ATOMIC_ACQ_REL)) pressed(now);
-    bool quiet = quiet_now();
-    if (__atomic_exchange_n(&s_notice, false, __ATOMIC_ACQ_REL) && !quiet) s_woke_us = now;
+    bool in_dim, in_off;
+    windows_now(&in_dim, &in_off);
+    if (__atomic_exchange_n(&s_notice, false, __ATOMIC_ACQ_REL) && !in_dim && !in_off) s_woke_us = now;
     if (s_state.ready && s_state.active) {
         uint64_t idle = now > s_woke_us ? (uint64_t)(now - s_woke_us) / 1000000 : 0;
         uint64_t press_idle = !s_pressed ? UINT64_MAX :
             now > s_pressed_us ? (uint64_t)(now - s_pressed_us) / 1000000 : 0;
-        uint32_t value = local_display_scheduled_brightness(&s_config.backlight, &s_schedule, quiet,
+        uint32_t value = local_display_scheduled_brightness(&s_config.backlight, in_dim, in_off,
                                                             idle, press_idle);
         if (value != s_state.brightness) (void)brightness(value);
     }

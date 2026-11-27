@@ -55,9 +55,9 @@ static bool add_capability(cJSON *list, bool present, const char *name)
  * "storage_download": the build registered a download into the TF card that
  * starts and cancels (startStorageDownload, cancelStorageDownload), so the
  * mount page shows "Download from URL".
- * "display_schedule": the local display takes quiet hours by time of day
- * (getDisplaySchedule, setDisplaySchedule, getDisplayScheduleTimezones), so
- * the UI shows that setting. */
+ * "display_schedule": the local display takes a dim window and an off window
+ * by time of day (getDisplaySchedule, setDisplaySchedule,
+ * getDisplayScheduleTimezones), so the UI shows those settings. */
 static cJSON *device_capabilities_json(const jetkvm_control_context_t *context)
 {
     cJSON *result = cJSON_CreateArray();
