@@ -55,6 +55,9 @@ static bool add_capability(cJSON *list, bool present, const char *name)
  * "storage_download": the build registered a download into the TF card that
  * starts and cancels (startStorageDownload, cancelStorageDownload), so the
  * mount page shows "Download from URL".
+ * "display_schedule": the local display takes a dim window and an off window
+ * by time of day (getDisplaySchedule, setDisplaySchedule,
+ * getDisplayScheduleTimezones), so the UI shows those settings.
  * "tailscale_only": the web server can answer on the Tailscale address only
  * (getTailscaleOnlyAccess, setTailscaleOnlyAccess), so the Tailscale page
  * shows that setting. */
@@ -86,6 +89,10 @@ static cJSON *device_capabilities_json(const jetkvm_control_context_t *context)
         !add_capability(result, s_default_storage_download.start &&
                                     s_default_storage_download.cancel,
                         "storage_download") ||
+        !add_capability(result, s_default_local_display.get_schedule &&
+                                    s_default_local_display.set_schedule &&
+                                    s_default_local_display.schedule_timezone,
+                        "display_schedule") ||
         !add_capability(result, s_default_tailscale_only.get && s_default_tailscale_only.set,
                         "tailscale_only")) {
         cJSON_Delete(result);

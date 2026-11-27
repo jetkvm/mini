@@ -13,6 +13,7 @@ Build:
 - `patches/`: adapts the esp_peer archive.
 - `web_app/`: packs the built UI into the firmware.
 - `edid/`: generates the EDID presets header.
+- `timezones/`: generates the time zone table of the display schedule from tzdata.
 
 Release:
 

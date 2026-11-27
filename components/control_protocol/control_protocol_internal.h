@@ -38,6 +38,9 @@ bool rpc_get_backlight_settings(const jetkvm_control_context_t *, const cJSON *,
 bool rpc_set_backlight_settings(const jetkvm_control_context_t *, const cJSON *, rpc_dispatch_result_t *);
 bool rpc_get_display_rotation(const jetkvm_control_context_t *, const cJSON *, rpc_dispatch_result_t *);
 bool rpc_set_display_rotation(const jetkvm_control_context_t *, const cJSON *, rpc_dispatch_result_t *);
+bool rpc_get_display_schedule(const jetkvm_control_context_t *, const cJSON *, rpc_dispatch_result_t *);
+bool rpc_set_display_schedule(const jetkvm_control_context_t *, const cJSON *, rpc_dispatch_result_t *);
+bool rpc_get_display_schedule_timezones(const jetkvm_control_context_t *, const cJSON *, rpc_dispatch_result_t *);
 extern jetkvm_keyboard_layout_context_t s_default_keyboard_layout;
 extern jetkvm_edid_context_t s_default_edid;
 extern jetkvm_host_display_idle_context_t s_default_host_display_idle;

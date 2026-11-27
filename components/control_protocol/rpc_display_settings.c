@@ -6,6 +6,7 @@
 #include "control_protocol_internal.h"
 
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 const jetkvm_edid_context_t *edid_context(
@@ -478,4 +479,112 @@ bool rpc_set_display_rotation(const jetkvm_control_context_t *context,
     const jetkvm_local_display_context_t *display = &s_default_local_display;
     return display_result(dispatch, display->set_rotation ?
         display->set_rotation(degrees, display->ctx) : "Local display unavailable");
+}
+
+/* "HH:MM", 00:00 to 23:59, as a minute of the day. */
+static bool minute_of_day(const cJSON *item, uint16_t *minute)
+{
+    const char *text = cJSON_IsString(item) ? item->valuestring : NULL;
+    if (!text || strlen(text) != 5U || text[2] != ':') return false;
+    for (size_t i = 0; i < 5U; ++i) {
+        if (i != 2U && (text[i] < '0' || text[i] > '9')) return false;
+    }
+    unsigned hour = (unsigned)(text[0] - '0') * 10U + (unsigned)(text[1] - '0');
+    unsigned minutes = (unsigned)(text[3] - '0') * 10U + (unsigned)(text[4] - '0');
+    if (hour > 23U || minutes > 59U) return false;
+    *minute = (uint16_t)(hour * 60U + minutes);
+    return true;
+}
+
+static bool add_window(cJSON *result, const char *name, const jetkvm_display_window_t *window)
+{
+    char start[16], end[16];
+    snprintf(start, sizeof(start), "%02u:%02u", window->start_minute / 60U, window->start_minute % 60U);
+    snprintf(end, sizeof(end), "%02u:%02u", window->end_minute / 60U, window->end_minute % 60U);
+    cJSON *item = cJSON_AddObjectToObject(result, name);
+    return item && cJSON_AddBoolToObject(item, "enabled", window->enabled) &&
+           cJSON_AddStringToObject(item, "start", start) && cJSON_AddStringToObject(item, "end", end);
+}
+
+/* {"enabled": boolean, "start": "HH:MM", "end": "HH:MM"}, the times not equal. */
+static bool read_window(const cJSON *item, jetkvm_display_window_t *window)
+{
+    const cJSON *enabled = cJSON_GetObjectItemCaseSensitive(item, "enabled");
+    if (!cJSON_IsObject(item) || cJSON_GetArraySize(item) != 3 || !cJSON_IsBool(enabled) ||
+        !minute_of_day(cJSON_GetObjectItemCaseSensitive(item, "start"), &window->start_minute) ||
+        !minute_of_day(cJSON_GetObjectItemCaseSensitive(item, "end"), &window->end_minute) ||
+        window->start_minute == window->end_minute) return false;
+    window->enabled = cJSON_IsTrue(enabled);
+    return true;
+}
+
+bool rpc_get_display_schedule(const jetkvm_control_context_t *context,
+    const cJSON *params, rpc_dispatch_result_t *dispatch)
+{
+    (void)context;
+    if (!require_no_rpc_params(params, dispatch)) return true;
+    jetkvm_display_schedule_t schedule;
+    const jetkvm_local_display_context_t *display = &s_default_local_display;
+    if (!display->get_schedule || !display->get_schedule(&schedule, display->ctx) ||
+        !memchr(schedule.timezone, '\0', sizeof(schedule.timezone)) ||
+        schedule.dim.start_minute > 1439U || schedule.dim.end_minute > 1439U ||
+        schedule.off.start_minute > 1439U || schedule.off.end_minute > 1439U)
+        return display_result(dispatch, "Display schedule unavailable");
+    cJSON *result = cJSON_CreateObject();
+    if (!result || !add_window(result, "dim", &schedule.dim) || !add_window(result, "off", &schedule.off) ||
+        !cJSON_AddStringToObject(result, "timezone", schedule.timezone)) {
+        cJSON_Delete(result);
+        return false;
+    }
+    dispatch->result = result;
+    return true;
+}
+
+bool rpc_set_display_schedule(const jetkvm_control_context_t *context,
+    const cJSON *params, rpc_dispatch_result_t *dispatch)
+{
+    (void)context;
+    const cJSON *value = display_params(params);
+    jetkvm_display_schedule_t schedule = {0};
+    if (!value || cJSON_GetArraySize(value) != 3 ||
+        !read_window(cJSON_GetObjectItemCaseSensitive(value, "dim"), &schedule.dim) ||
+        !read_window(cJSON_GetObjectItemCaseSensitive(value, "off"), &schedule.off) ||
+        !copy_json_string(cJSON_GetObjectItemCaseSensitive(value, "timezone"), schedule.timezone,
+                          sizeof(schedule.timezone), true) ||
+        ((schedule.dim.enabled || schedule.off.enabled) && schedule.timezone[0] == '\0')) {
+        dispatch->error_code = -32602;
+        dispatch->error_message = "Invalid params";
+        dispatch->error_data = "params requires dim and off, each with enabled (boolean) and start and end "
+                               "(\"HH:MM\", not equal), and timezone (\"\" only when neither is enabled)";
+        return true;
+    }
+    const jetkvm_local_display_context_t *display = &s_default_local_display;
+    return display_result(dispatch, display->set_schedule ?
+        display->set_schedule(&schedule, display->ctx) : "Display schedule unavailable");
+}
+
+bool rpc_get_display_schedule_timezones(const jetkvm_control_context_t *context,
+    const cJSON *params, rpc_dispatch_result_t *dispatch)
+{
+    (void)context;
+    if (!require_no_rpc_params(params, dispatch)) return true;
+    const jetkvm_local_display_context_t *display = &s_default_local_display;
+    cJSON *result = cJSON_CreateArray();
+    if (!result) return false;
+    for (size_t index = 0U; ; ++index) {
+        const char *name = NULL;
+        if (!display->schedule_timezone || !display->schedule_timezone(index, &name, display->ctx)) {
+            cJSON_Delete(result);
+            return display_result(dispatch, "Display schedule unavailable");
+        }
+        if (!name) break;
+        cJSON *item = cJSON_CreateString(name);
+        if (!item || !cJSON_AddItemToArray(result, item)) {
+            cJSON_Delete(item);
+            cJSON_Delete(result);
+            return false;
+        }
+    }
+    dispatch->result = result;
+    return true;
 }
