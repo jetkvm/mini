@@ -16,6 +16,9 @@ The history, oldest first, with the issues that each pull request closes:
 A side branch from Initial has "Hotfix (#20)", closes 8, with the tag
 release/1.0.0-dev202612010000: the newest date, but in no other tag's history.
 
+GH_FAIL names a gh call, for example "pr view 12", that fails as a server
+error does.
+
 gh keeps the comments in a JSON file, so a test reads what was posted.
 """
 import json
@@ -32,6 +35,7 @@ CLOSES = {
     "12": [(REPO, 6), ("other/repo", 99)],
     "13": [(REPO, 7)],
     "15": [(REPO, 5)],
+    "16": [(REPO, 9)],
     "20": [(REPO, 8)],
 }
 GH = r'''#!/usr/bin/env python3
@@ -40,11 +44,13 @@ state_file = os.environ["GH_STATE"]
 state = json.load(open(state_file))
 args = sys.argv[1:]
 number = args[2]
+if " ".join(args[:3]) == os.environ.get("GH_FAIL"):
+    sys.exit("HTTP 502: Bad Gateway (https://api.github.com/graphql)")
 assert args[3:5] == ["--repo", state["repo"]], args
 if args[:2] == ["pr", "view"]:
     assert args[5:] == ["--json", "closingIssuesReferences"], args
     if number not in state["closes"]:
-        sys.exit("no pull requests found")
+        sys.exit(f"GraphQL: Could not resolve to a PullRequest with the number of {number}. (repository.pullRequest)")
     print(json.dumps({"closingIssuesReferences": [
         {"number": issue, "repository": {"name": repo.split("/")[1], "owner": {"login": repo.split("/")[0]}}}
         for repo, issue in state["closes"][number]]}))
@@ -95,9 +101,12 @@ class ReleaseNotifyTest(unittest.TestCase):
         if tag:
             self.git("tag", tag)
 
+    def run_script(self, *args, fail=""):
+        return subprocess.run(["bash", str(SCRIPT), *args], cwd=self.repo, env={**self.env, "GH_FAIL": fail},
+                              capture_output=True, text=True, timeout=30)
+
     def notify(self, *args):
-        result = subprocess.run(["bash", str(SCRIPT), *args], cwd=self.repo, env=self.env,
-                                capture_output=True, text=True, timeout=30)
+        result = self.run_script(*args)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return result.stdout
 
@@ -153,10 +162,45 @@ class ReleaseNotifyTest(unittest.TestCase):
 
     def test_unknown_version_fails(self):
         for version in ("1.0.2", "v1.0.1", "1.0.1-rc1"):
-            result = subprocess.run(["bash", str(SCRIPT), version], cwd=self.repo, env=self.env,
-                                    capture_output=True, text=True, timeout=30)
-            self.assertEqual(result.returncode, 2, version)
+            self.assertEqual(self.run_script(version).returncode, 2, version)
         self.assertEqual(self.comments(), {})
+
+    def test_two_dev_releases_of_one_commit_comment_once(self):
+        first, second = "1.0.2-dev202611030000", "1.0.2-dev202611040000"
+        for order in ((first, second), (second, first)):
+            with self.subTest(order=order):
+                self.state.write_text(json.dumps({"repo": REPO, "closes": CLOSES, "comments": {}}))
+                self.git("checkout", "-q", "-B", "twice", "main")
+                self.commit("Fix D (#16)", f"release/{first}")
+                self.git("tag", f"release/{second}")
+                for version in order:
+                    self.notify(version)
+                comments = self.comments()
+                self.assertEqual(list(comments), ["9"])
+                self.assertEqual(len(comments["9"]), 1)
+                self.assertIn(f"dev release [`{first}`]", comments["9"][0])
+                self.git("tag", "-d", f"release/{first}", f"release/{second}")
+
+    def test_stable_release_with_a_dev_release_of_its_commit_gets_both_comments(self):
+        self.git("tag", "release/1.0.1-dev202611050000", "release/1.0.1")
+        self.notify("1.0.1-dev202611050000")
+        # Since release/1.0.1-dev202611020000: only "Fix A again (#15)".
+        self.assertEqual(list(self.comments()), ["5"])
+        self.notify("1.0.1")
+        self.assertEqual([len(found) for found in self.comments().values()], [2, 1, 1])
+
+    def test_pull_request_that_cannot_be_read_stops_the_run_before_a_comment(self):
+        result = self.run_script("1.0.1", fail="pr view 13")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("HTTP 502", result.stderr)
+        self.assertEqual(self.comments(), {})
+
+    def test_comments_that_cannot_be_read_post_no_second_comment(self):
+        self.notify("1.0.1-dev202611020000")
+        before = self.comments()
+        result = self.run_script("1.0.1-dev202611020000", fail="issue view 7")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(self.comments(), before)
 
 
 if __name__ == "__main__":

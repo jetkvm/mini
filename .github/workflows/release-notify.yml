@@ -27,9 +27,14 @@ on:
 permissions: {}
 
 # One run per version; a second run for a version waits and then finds the
-# comments of the first.
+# comments of the first. A tag push names the version as release/<version>,
+# and a run by hand can name it with or without release/, so the group takes
+# the form with it.
 concurrency:
-  group: release-notify-${{ github.event.inputs.version || github.ref_name }}
+  group: >-
+    release-notify-${{ github.event_name != 'workflow_dispatch' && github.ref_name
+    || startsWith(inputs.version, 'release/') && inputs.version
+    || format('release/{0}', inputs.version) }}
   cancel-in-progress: false
 
 jobs:
