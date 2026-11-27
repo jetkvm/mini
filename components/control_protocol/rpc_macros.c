@@ -352,6 +352,79 @@ bool rpc_set_keyboard_macros(
     return dispatch->result != NULL;
 }
 
+/* The bytes of `value` without leading and trailing white space, in `output`.
+ * False when they do not fit. */
+static bool copy_trimmed(const char *value, char *output, size_t capacity)
+{
+    size_t begin = 0U;
+    size_t end = strlen(value);
+    while (begin < end && strchr(" \t\r\n\v\f", value[begin]) != NULL) {
+        begin++;
+    }
+    while (end > begin && strchr(" \t\r\n\v\f", value[end - 1U]) != NULL) {
+        end--;
+    }
+    if (end - begin >= capacity) {
+        return false;
+    }
+    memcpy(output, value + begin, end - begin);
+    output[end - begin] = '\0';
+    return true;
+}
+
+bool rpc_run_keyboard_macro(
+    const jetkvm_control_context_t *context, const cJSON *params,
+    rpc_dispatch_result_t *dispatch)
+{
+    const cJSON *name = rpc_param(params, "macro");
+    if (!cJSON_IsObject(params) || !cJSON_IsString(name) ||
+        name->valuestring == NULL) {
+        return set_invalid_hid_params(dispatch, "macro must be a string");
+    }
+    if (!context->keyboard_macros.get || !context->keyboard_macros.run) {
+        return set_hid_unavailable(dispatch, "Keyboard macros unavailable");
+    }
+    jetkvm_control_keyboard_macro_list_t *list = calloc(1U, sizeof(*list));
+    if (list == NULL) {
+        return false;
+    }
+    if (!context->keyboard_macros.get(list, context->keyboard_macros.ctx) ||
+        !keyboard_macro_list_valid(list)) {
+        free(list);
+        return set_hid_unavailable(dispatch, "Keyboard macros unavailable");
+    }
+    char wanted[JETKVM_CONTROL_KEYBOARD_MACRO_NAME_CAPACITY];
+    int index = copy_trimmed(name->valuestring, wanted, sizeof(wanted)) ?
+                    jetkvm_control_keyboard_macro_find(list, wanted) : -1;
+    jetkvm_hidrpc_macro_step_t steps[JETKVM_CONTROL_KEYBOARD_MACRO_MAX_HID_STEPS];
+    size_t step_count = 0U;
+    bool converted = index >= 0 &&
+        jetkvm_control_keyboard_macro_hid_steps(
+            &list->macros[index], steps, &step_count);
+    free(list);
+    if (index < 0) {
+        (void)snprintf(dispatch->error_storage,
+                       sizeof(dispatch->error_storage),
+                       "unknown keyboard macro: %s", name->valuestring);
+        dispatch->error_code = -32603;
+        dispatch->error_message = "Internal error";
+        dispatch->error_data = dispatch->error_storage;
+        return true;
+    }
+    if (!converted) {
+        return set_hid_unavailable(dispatch, "invalid keyboard macro");
+    }
+    /* A macro without keys or modifiers types nothing. */
+    if (step_count > 0U &&
+        context->keyboard_macros.run(steps, step_count,
+                                     context->keyboard_macros.ctx) !=
+            JETKVM_KEYBOARD_MACRO_RUN_ACCEPTED) {
+        return set_hid_unavailable(dispatch, "keyboard unavailable");
+    }
+    dispatch->result = cJSON_CreateNull();
+    return dispatch->result != NULL;
+}
+
 bool rpc_get_jiggler_state(
     const jetkvm_control_context_t *context, const cJSON *params,
     rpc_dispatch_result_t *dispatch)

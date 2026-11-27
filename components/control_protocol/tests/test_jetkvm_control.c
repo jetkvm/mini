@@ -13,7 +13,7 @@
 
 static void expect_rpc(const char *request, const char *expected)
 {
-    char output[256];
+    char output[512];
     size_t output_size = 0;
     assert(jetkvm_control_handle_rpc(
         (const uint8_t *)request, strlen(request), output, sizeof(output),
@@ -549,6 +549,11 @@ typedef struct {
     jetkvm_jiggler_config_change_result_t config_change_result;
     unsigned get_macros_calls;
     unsigned set_macros_calls;
+    unsigned run_macro_calls;
+    jetkvm_keyboard_macro_run_result_t run_macro_result;
+    size_t run_step_count;
+    jetkvm_hidrpc_macro_step_t run_steps[
+        JETKVM_CONTROL_KEYBOARD_MACRO_MAX_HID_STEPS];
     unsigned get_jiggler_state_calls;
     unsigned set_jiggler_state_calls;
     unsigned get_jiggler_config_calls;
@@ -710,6 +715,27 @@ static bool set_keyboard_macros(
     }
     observed->macros = *list;
     return true;
+}
+
+/* Records the steps that runKeyboardMacro hands over; no HID runs. */
+static jetkvm_keyboard_macro_run_result_t run_keyboard_macro(
+    const jetkvm_hidrpc_macro_step_t *steps, size_t step_count, void *ctx)
+{
+    observed_hid_profiles_t *observed = ctx;
+    observed->run_macro_calls++;
+    assert(step_count <= JETKVM_CONTROL_KEYBOARD_MACRO_MAX_HID_STEPS);
+    observed->run_step_count = step_count;
+    memcpy(observed->run_steps, steps, step_count * sizeof(steps[0]));
+    return observed->run_macro_result;
+}
+
+static void expect_hid_step(const jetkvm_hidrpc_macro_step_t *step,
+                            uint8_t modifier, const uint8_t keys[6],
+                            uint16_t delay_ms)
+{
+    assert(step->modifier == modifier);
+    assert(memcmp(step->keys, keys, 6U) == 0);
+    assert(step->delay_ms == delay_ms);
 }
 
 static bool get_jiggler_state(bool *enabled, void *ctx)
@@ -1232,6 +1258,80 @@ static void test_extra_hostnames_contract(void)
     jetkvm_control_set_default_extra_hostnames_context(NULL);
 }
 
+static unsigned stored_timeout;
+static unsigned timeout_activity;
+static bool timeout_storage_fails;
+static unsigned timeout_get(void *ctx) { assert(ctx == &stored_timeout); return stored_timeout; }
+static const char *timeout_set(unsigned minutes, void *ctx)
+{
+    assert(ctx == &stored_timeout && minutes <= JETKVM_SESSION_TIMEOUT_MAX_MINUTES);
+    if (timeout_storage_fails) return "The session timeout could not be stored";
+    stored_timeout = minutes;
+    return NULL;
+}
+static void note_timeout_activity(void) { ++timeout_activity; }
+static void test_session_timeout_contract(void)
+{
+    jetkvm_control_context_t none = {0};
+    expect_rpc_context(&none, "{\"jsonrpc\":\"2.0\",\"method\":\"getLocalAuthSessionTimeout\",\"id\":1}",
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32601,\"message\":\"Method not found\"}}");
+    jetkvm_control_set_default_session_timeout_context(&(jetkvm_session_timeout_context_t){
+        .get = timeout_get, .set = timeout_set, .ctx = &stored_timeout});
+    expect_rpc_context(&none, "{\"jsonrpc\":\"2.0\",\"method\":\"getLocalAuthSessionTimeout\",\"params\":{},\"id\":2}",
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":0}");
+    expect_rpc_context(&none, "{\"jsonrpc\":\"2.0\",\"method\":\"setLocalAuthSessionTimeout\",\"params\":{\"timeoutMinutes\":15},\"id\":3}",
+        "{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":null}");
+    expect_rpc_context(&none, "{\"jsonrpc\":\"2.0\",\"method\":\"getLocalAuthSessionTimeout\",\"id\":4}",
+        "{\"jsonrpc\":\"2.0\",\"id\":4,\"result\":15}");
+    expect_rpc_context(&none, "{\"jsonrpc\":\"2.0\",\"method\":\"setLocalAuthSessionTimeout\",\"params\":{\"timeoutMinutes\":1440},\"id\":5}",
+        "{\"jsonrpc\":\"2.0\",\"id\":5,\"result\":null}");
+    /* Upstream refuses values outside 0..1440 minutes; so do these. */
+    const char *invalid[] = {"{\"timeoutMinutes\":-1}", "{\"timeoutMinutes\":1441}",
+        "{\"timeoutMinutes\":2.5}", "{\"timeoutMinutes\":\"5\"}", "{}"};
+    for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+        char request[256];
+        snprintf(request, sizeof(request),
+            "{\"jsonrpc\":\"2.0\",\"method\":\"setLocalAuthSessionTimeout\",\"params\":%s,\"id\":6}", invalid[i]);
+        expect_rpc_context(&none, request,
+            "{\"jsonrpc\":\"2.0\",\"id\":6,\"error\":{\"code\":-32602,\"message\":\"Invalid params\","
+            "\"data\":\"session timeout must be between 0 and 1440 minutes\"}}");
+    }
+    assert(stored_timeout == 1440);
+    timeout_storage_fails = true;
+    expect_rpc_context(&none, "{\"jsonrpc\":\"2.0\",\"method\":\"setLocalAuthSessionTimeout\",\"params\":{\"timeoutMinutes\":5},\"id\":7}",
+        "{\"jsonrpc\":\"2.0\",\"id\":7,\"error\":{\"code\":-32603,\"message\":\"Internal error\","
+        "\"data\":\"The session timeout could not be stored\"}}");
+    timeout_storage_fails = false;
+
+    /* A local session's state-changing calls are activity; the reads the UI
+     * polls, ping and unknown methods are not. */
+    jetkvm_control_context_t local = {.note_local_activity = note_timeout_activity};
+    expect_rpc_context(&local, "{\"jsonrpc\":\"2.0\",\"method\":\"getLocalAuthSessionTimeout\",\"id\":8}",
+        "{\"jsonrpc\":\"2.0\",\"id\":8,\"result\":1440}");
+    expect_rpc_context(&local, "{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":9}",
+        "{\"jsonrpc\":\"2.0\",\"id\":9,\"result\":\"pong\"}");
+    expect_rpc_context(&local, "{\"jsonrpc\":\"2.0\",\"method\":\"setNoSuchThing\",\"id\":10}",
+        "{\"jsonrpc\":\"2.0\",\"id\":10,\"error\":{\"code\":-32601,\"message\":\"Method not found\"}}");
+    assert(timeout_activity == 0);
+    expect_rpc_context(&local, "{\"jsonrpc\":\"2.0\",\"method\":\"setLocalAuthSessionTimeout\",\"params\":{\"timeoutMinutes\":0},\"id\":11}",
+        "{\"jsonrpc\":\"2.0\",\"id\":11,\"result\":null}");
+    assert(timeout_activity == 1);
+    const char *readers[] = {"getVideoState", "listStorageFiles", "checkMountUrl", "isUpdatePending", "ping"};
+    for (size_t i = 0; i < sizeof(readers) / sizeof(readers[0]); ++i)
+        assert(!jetkvm_control_rpc_counts_as_activity(readers[i]));
+    const char *writers[] = {"setJigglerState", "keyboardReport", "absMouseReport", "wheelReport",
+        "reboot", "mountWithHTTP", "wakeHost", "renewDHCPLease", "guestClipboardSet"};
+    for (size_t i = 0; i < sizeof(writers) / sizeof(writers[0]); ++i)
+        assert(jetkvm_control_rpc_counts_as_activity(writers[i]));
+    assert(jetkvm_control_hidrpc_counts_as_activity(JETKVM_HIDRPC_EVENT_KEYPRESS_REPORT));
+    assert(jetkvm_control_hidrpc_counts_as_activity(JETKVM_HIDRPC_EVENT_ABS_MOUSE_REPORT));
+    assert(jetkvm_control_hidrpc_counts_as_activity(JETKVM_HIDRPC_EVENT_KEYBOARD_MACRO_REPORT));
+    assert(jetkvm_control_hidrpc_counts_as_activity(JETKVM_HIDRPC_EVENT_CANCEL_KEYBOARD_MACRO_REPORT));
+    assert(!jetkvm_control_hidrpc_counts_as_activity(JETKVM_HIDRPC_EVENT_KEYPRESS_KEEPALIVE_REPORT));
+    jetkvm_control_set_default_session_timeout_context(NULL);
+    puts("Session timeout RPCs and local activity: OK");
+}
+
 static unsigned deregister_calls;
 static const char *deregister_error;
 static const char *deregister_device(void *ctx)
@@ -1698,11 +1798,32 @@ static bool fake_download_state(jetkvm_control_storage_download_state_t *state,
     return true;
 }
 
+static unsigned download_cancels;
+
+static void fake_download_cancel(void *ctx)
+{
+    (void)ctx;
+    download_cancels++;
+}
+
+static bool capabilities_include(const char *name)
+{
+    const char *request = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getDeviceCapabilities\"}";
+    char output[1024];
+    size_t output_size = 0;
+    assert(jetkvm_control_handle_rpc(
+        (const uint8_t *)request, strlen(request), output, sizeof(output),
+        &output_size) == JETKVM_CONTROL_RESPONSE_READY);
+    char quoted[64];
+    snprintf(quoted, sizeof(quoted), "\"%s\"", name);
+    return strstr(output, quoted) != NULL;
+}
+
 static void test_storage_download_rpc(void)
 {
     /* Without a provider the state is idle and a download cannot start. */
     expect_rpc("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getStorageDownloadState\"}",
-        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"state\":\"idle\",\"filename\":\"\",\"bytes\":0,\"total\":0,\"reused\":false,\"videoPaused\":false,\"error\":\"\"}}");
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"state\":\"idle\",\"filename\":\"\",\"bytes\":0,\"total\":0,\"reused\":false,\"videoPaused\":false,\"error\":\"\",\"status\":\"idle\",\"received\":0,\"size\":0}}");
     expect_rpc("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"downloadToStorage\",\"params\":{\"url\":\"https://h/os.iso\",\"filename\":\"os.iso\"}}",
         "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32603,\"message\":\"Internal error\",\"data\":\"virtual media storage unavailable\"}}");
 
@@ -1737,7 +1858,7 @@ static void test_storage_download_rpc(void)
     assert(download_starts == 2);
 
     expect_rpc("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getStorageDownloadState\"}",
-        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"state\":\"downloading\",\"filename\":\"os.iso\",\"bytes\":4194304,\"total\":92807168,\"reused\":false,\"videoPaused\":true,\"error\":\"\"}}");
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"state\":\"downloading\",\"filename\":\"os.iso\",\"bytes\":4194304,\"total\":92807168,\"reused\":false,\"videoPaused\":true,\"error\":\"\",\"status\":\"downloading\",\"received\":4194304,\"size\":92807168}}");
 
     /* The peer task's context refuses a start while the media worker is
      * busy, and still reports the download's state. */
@@ -1752,7 +1873,7 @@ static void test_storage_download_rpc(void)
         "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32603,\"message\":\"Internal error\",\"data\":\"another virtual media operation is active\"}}");
     expect_rpc_context(&peer,
         "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getStorageDownloadState\"}",
-        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"state\":\"downloading\",\"filename\":\"os.iso\",\"bytes\":4194304,\"total\":92807168,\"reused\":false,\"videoPaused\":true,\"error\":\"\"}}");
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"state\":\"downloading\",\"filename\":\"os.iso\",\"bytes\":4194304,\"total\":92807168,\"reused\":false,\"videoPaused\":true,\"error\":\"\",\"status\":\"downloading\",\"received\":4194304,\"size\":92807168}}");
 
     jetkvm_control_storage_download_state_t state = {
         .phase = JETKVM_CONTROL_STORAGE_DOWNLOAD_ERROR,
@@ -1765,9 +1886,58 @@ static void test_storage_download_rpc(void)
     size_t length = 0;
     assert(jetkvm_control_render_storage_download_event(&state, event, sizeof(event), &length));
     assert(strcmp(event,
-        "{\"jsonrpc\":\"2.0\",\"method\":\"storageDownloadState\",\"params\":{\"state\":\"error\",\"filename\":\"os.iso\",\"bytes\":512,\"total\":1024,\"reused\":false,\"videoPaused\":false,\"error\":\"The download server answered HTTP 404.\"}}") == 0);
+        "{\"jsonrpc\":\"2.0\",\"method\":\"storageDownloadState\",\"params\":{\"state\":\"error\",\"filename\":\"os.iso\",\"bytes\":512,\"total\":1024,\"reused\":false,\"videoPaused\":false,\"error\":\"The download server answered HTTP 404.\",\"status\":\"failed\",\"received\":512,\"size\":1024}}") == 0);
     assert(length == strlen(event));
     assert(!jetkvm_control_render_storage_download_event(&state, event, 16, &length) && length == 0);
+
+    /* A cancelled download: the Mini's state and upstream's status agree. */
+    state = (jetkvm_control_storage_download_state_t){
+        .phase = JETKVM_CONTROL_STORAGE_DOWNLOAD_CANCELLED,
+        .filename = "os.iso",
+        .bytes = 512,
+        .total = 1024,
+    };
+    assert(jetkvm_control_render_storage_download_event(&state, event, sizeof(event), &length));
+    assert(strcmp(event,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"storageDownloadState\",\"params\":{\"state\":\"cancelled\",\"filename\":\"os.iso\",\"bytes\":512,\"total\":1024,\"reused\":false,\"videoPaused\":false,\"error\":\"\",\"status\":\"cancelled\",\"received\":512,\"size\":1024}}") == 0);
+    state.phase = JETKVM_CONTROL_STORAGE_DOWNLOAD_DONE;
+    assert(jetkvm_control_render_storage_download_event(&state, event, sizeof(event), &length));
+    assert(strstr(event, "\"state\":\"done\"") && strstr(event, "\"status\":\"done\""));
+
+    /* Upstream's start answers the state after the start. */
+    const unsigned starts = download_starts;
+    expect_rpc("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"startStorageDownload\",\"params\":{\"url\":\"https://h/os.iso\",\"filename\":\"os.iso\"}}",
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32603,\"message\":\"Internal error\",\"data\":\"No TF card is mounted. Insert a TF card, then try again.\"}}");
+    assert(download_starts == starts + 1U);
+    download.ctx = NULL;
+    jetkvm_control_set_default_storage_download_context(&download);
+    expect_rpc("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"startStorageDownload\",\"params\":{\"url\":\"https://h/os.iso\",\"filename\":\"os.iso\"}}",
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"state\":\"downloading\",\"filename\":\"os.iso\",\"bytes\":4194304,\"total\":92807168,\"reused\":false,\"videoPaused\":true,\"error\":\"\",\"status\":\"downloading\",\"received\":4194304,\"size\":92807168}}");
+    assert(download_starts == starts + 2U);
+    expect_rpc("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"startStorageDownload\",\"params\":{\"url\":\"https://h/os.iso\"}}",
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32602,\"message\":\"Invalid params\",\"data\":\"invalid virtual media parameters\"}}");
+    assert(download_starts == starts + 2U);
+
+    /* Without a cancel callback the device cannot cancel, and does not
+     * report storage_download. */
+    expect_rpc("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"cancelStorageDownload\"}",
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32603,\"message\":\"Internal error\",\"data\":\"virtual media storage unavailable\"}}");
+    assert(!capabilities_include("storage_download"));
+    download.cancel = fake_download_cancel;
+    jetkvm_control_set_default_storage_download_context(&download);
+    assert(capabilities_include("storage_download"));
+    expect_rpc("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"cancelStorageDownload\"}",
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":null}");
+    assert(download_cancels == 1);
+    expect_rpc("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"cancelStorageDownload\",\"params\":{\"filename\":\"os.iso\"}}",
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32602,\"message\":\"Invalid params\",\"data\":\"method does not accept parameters\"}}");
+    assert(download_cancels == 1);
+    /* The peer task's context replaces only start: a cancel there reaches
+     * the download. */
+    expect_rpc_context(&peer,
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"cancelStorageDownload\"}",
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":null}");
+    assert(download_cancels == 2);
     jetkvm_control_set_default_storage_download_context(NULL);
 }
 
@@ -1781,6 +1951,7 @@ int main(void)
     test_hidrpc();
     test_tls_contract();
     test_extra_hostnames_contract();
+    test_session_timeout_contract();
     test_board_capabilities();
     test_audio_contract();
     test_cloud_deregistration();
@@ -1856,6 +2027,7 @@ int main(void)
             .serial_number = "ESP32-P4",
             .manufacturer = "JetKVM",
             .product = "JetKVM USB Emulation Device",
+            .configuration = "Config 1: HID",
             .absolute_mouse = true,
             .relative_mouse = true,
             .keyboard = true,
@@ -1912,6 +2084,7 @@ int main(void)
             .tls_insecure = false,
             .enable_ha_discovery = true,
             .enable_actions = true,
+            .enable_keyboard_macros = true,
             .debounce_ms = 750,
         },
         .status = {
@@ -2061,6 +2234,7 @@ int main(void)
         .keyboard_macros = {
             .get = get_keyboard_macros,
             .set = set_keyboard_macros,
+            .run = run_keyboard_macro,
             .ctx = &observed_hid_profiles,
         },
         .jiggler = {
@@ -2090,7 +2264,7 @@ int main(void)
     expect_rpc_context(
         &context,
         "{\"jsonrpc\":\"2.0\",\"method\":\"getMqttSettings\",\"id\":490}",
-        "{\"jsonrpc\":\"2.0\",\"id\":490,\"result\":{\"enabled\":true,\"broker\":\"mqtt.example.test\",\"port\":8883,\"username\":\"operator\",\"password\":\"********\",\"base_topic\":\"lab/jetkvm\",\"use_tls\":true,\"tls_insecure\":false,\"enable_ha_discovery\":true,\"enable_actions\":true,\"debounce_ms\":750}}");
+        "{\"jsonrpc\":\"2.0\",\"id\":490,\"result\":{\"enabled\":true,\"broker\":\"mqtt.example.test\",\"port\":8883,\"username\":\"operator\",\"password\":\"********\",\"base_topic\":\"lab/jetkvm\",\"use_tls\":true,\"tls_insecure\":false,\"enable_ha_discovery\":true,\"enable_actions\":true,\"enable_keyboard_macros\":true,\"debounce_ms\":750}}");
     assert(observed_mqtt.get_settings_calls == 1U);
     const char *mqtt_settings_json =
         "{\"enabled\":false,\"broker\":\"192.168.50.1\",\"port\":1883,"
@@ -2115,6 +2289,8 @@ int main(void)
     assert(strcmp(observed_mqtt.settings.base_topic, "jetkvm") == 0);
     assert(observed_mqtt.settings.enable_ha_discovery);
     assert(observed_mqtt.settings.enable_actions);
+    /* Settings from a client before the switch turn it off, as in Go. */
+    assert(!observed_mqtt.settings.enable_keyboard_macros);
     assert(observed_mqtt.settings.debounce_ms == 0);
 
     expect_rpc_context(
@@ -2171,6 +2347,20 @@ int main(void)
         &context, mqtt_request,
         "{\"jsonrpc\":\"2.0\",\"id\":498,\"error\":{\"code\":-32602,\"message\":\"Invalid params\",\"data\":\"Invalid MQTT settings\"}}");
     observed_mqtt.set_result = JETKVM_MQTT_CONFIG_CHANGE_ACCEPTED;
+
+    const unsigned sets_before_macros = observed_mqtt.set_settings_calls;
+    expect_rpc_context(
+        &context,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"setMqttSettings\",\"params\":{\"settings\":{\"enabled\":false,\"broker\":\"192.168.50.1\",\"port\":1883,\"username\":\"\",\"password\":\"\",\"base_topic\":\"jetkvm\",\"use_tls\":false,\"tls_insecure\":false,\"enable_ha_discovery\":true,\"enable_actions\":false,\"enable_keyboard_macros\":true,\"debounce_ms\":0}},\"id\":4991}",
+        "{\"jsonrpc\":\"2.0\",\"id\":4991,\"result\":null}");
+    assert(observed_mqtt.set_settings_calls == sets_before_macros + 1U);
+    assert(!observed_mqtt.settings.enable_actions);
+    assert(observed_mqtt.settings.enable_keyboard_macros);
+    expect_rpc_context(
+        &context,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"setMqttSettings\",\"params\":{\"settings\":{\"enabled\":false,\"broker\":\"192.168.50.1\",\"port\":1883,\"username\":\"\",\"password\":\"\",\"base_topic\":\"jetkvm\",\"use_tls\":false,\"tls_insecure\":false,\"enable_ha_discovery\":true,\"enable_actions\":false,\"enable_keyboard_macros\":1,\"debounce_ms\":0}},\"id\":4992}",
+        "{\"jsonrpc\":\"2.0\",\"id\":4992,\"error\":{\"code\":-32602,\"message\":\"Invalid params\",\"data\":\"settings must contain the complete MQTT configuration\"}}");
+    assert(observed_mqtt.set_settings_calls == sets_before_macros + 1U);
 
     expect_rpc_context(
         &context,
@@ -2588,7 +2778,7 @@ int main(void)
     expect_rpc_context(
         &context,
         "{\"jsonrpc\":\"2.0\",\"method\":\"getNetworkSettings\",\"id\":3}",
-        "{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"read_only_fields\":[\"dhcp_client\",\"domain\",\"http_proxy\",\"ipv6_mode\",\"lldp_mode\",\"mdns_mode\",\"tailscale\"],\"hostname\":\"p4-kvm\",\"ipv4_mode\":\"static\",\"dhcp_client\":\"lwip\",\"domain\":\"local\",\"http_proxy\":\"\",\"ipv6_mode\":\"disabled\",\"lldp_mode\":\"disabled\",\"mdns_mode\":\"disabled\",\"time_sync_mode\":\"ntp_only\",\"time_sync_ntp_servers\":[],\"time_sync_disable_fallback\":false,\"ipv4_static\":{\"address\":\"192.168.50.2\",\"netmask\":\"255.255.255.0\",\"gateway\":\"192.168.50.1\",\"dns\":[\"8.8.8.8\",\"1.1.1.1\"]}}}");
+        "{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"read_only_fields\":[\"dhcp_client\",\"domain\",\"http_proxy\",\"ipv6_mode\",\"lldp_mode\",\"tailscale\"],\"hostname\":\"p4-kvm\",\"ipv4_mode\":\"static\",\"mdns_mode\":\"auto\",\"dhcp_client\":\"lwip\",\"domain\":\"local\",\"http_proxy\":\"\",\"ipv6_mode\":\"disabled\",\"lldp_mode\":\"disabled\",\"time_sync_mode\":\"ntp_only\",\"time_sync_ntp_servers\":[],\"time_sync_disable_fallback\":false,\"ipv4_static\":{\"address\":\"192.168.50.2\",\"netmask\":\"255.255.255.0\",\"gateway\":\"192.168.50.1\",\"dns\":[\"8.8.8.8\",\"1.1.1.1\"]}}}");
     expect_rpc_context(
         &context,
         "{\"jsonrpc\":\"2.0\",\"method\":\"getDeviceID\",\"params\":{},\"id\":31}",
@@ -2682,7 +2872,7 @@ int main(void)
     expect_rpc_context(
         &context,
         "{\"jsonrpc\":\"2.0\",\"method\":\"getUsbConfig\",\"id\":432}",
-        "{\"jsonrpc\":\"2.0\",\"id\":432,\"result\":{\"vendor_id\":\"0x303a\",\"product_id\":\"0x400c\",\"serial_number\":\"ESP32-P4\",\"manufacturer\":\"JetKVM\",\"product\":\"JetKVM USB Emulation Device\"}}");
+        "{\"jsonrpc\":\"2.0\",\"id\":432,\"result\":{\"vendor_id\":\"0x303a\",\"product_id\":\"0x400c\",\"serial_number\":\"ESP32-P4\",\"manufacturer\":\"JetKVM\",\"product\":\"JetKVM USB Emulation Device\",\"configuration\":\"Config 1: HID\"}}");
 
     expect_rpc_context(
         &context,
@@ -2701,6 +2891,33 @@ int main(void)
                "") == 0);
     assert(strcmp(observed_usb_configuration.last_descriptor_config.product,
                   "JetKVM P4~") == 0);
+    /* A page from before the configuration field leaves it out. */
+    assert(!observed_usb_configuration.last_descriptor_config
+                .has_configuration);
+
+    expect_rpc_context(
+        &context,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"setUsbConfig\",\"params\":{\"usbConfig\":{\"vendor_id\":\"0x046d\",\"product_id\":\"0xc52b\",\"serial_number\":\"\",\"manufacturer\":\"Logitech (x64)\",\"product\":\"Logitech USB Input Device\",\"configuration\":\"RQR24.11_B0036\"}},\"id\":43211}",
+        "{\"jsonrpc\":\"2.0\",\"id\":43211,\"result\":null}");
+    assert(observed_usb_configuration.descriptor_change_calls == 2U);
+    assert(observed_usb_configuration.last_descriptor_config
+               .has_configuration);
+    assert(strcmp(
+               observed_usb_configuration.last_descriptor_config.configuration,
+               "RQR24.11_B0036") == 0);
+    assert(strcmp(observed_usb_configuration.last_descriptor_config.product,
+                  "Logitech USB Input Device") == 0);
+
+    /* An empty configuration string is a setting, not a missing field. */
+    expect_rpc_context(
+        &context,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"setUsbConfig\",\"params\":{\"usbConfig\":{\"configuration\":\"\",\"vendor_id\":\"0x303a\",\"product_id\":\"0x400c\",\"serial_number\":\"P4\",\"manufacturer\":\"JetKVM\",\"product\":\"KVM\"}},\"id\":43212}",
+        "{\"jsonrpc\":\"2.0\",\"id\":43212,\"result\":null}");
+    assert(observed_usb_configuration.descriptor_change_calls == 3U);
+    assert(observed_usb_configuration.last_descriptor_config
+               .has_configuration);
+    assert(observed_usb_configuration.last_descriptor_config
+               .configuration[0] == '\0');
 
     expect_rpc_context(
         &context,
@@ -2868,6 +3085,33 @@ int main(void)
         &context,
         "{\"jsonrpc\":\"2.0\",\"method\":\"setUsbConfig\",\"params\":{\"usbConfig\":{\"vendor_id\":\"0x303a\",\"product_id\":\"0x400c\",\"serial_number\":\"P4\",\"manufacturer\":\"J\\u00e9tKVM\",\"product\":\"KVM\"}},\"id\":43451}",
         "{\"jsonrpc\":\"2.0\",\"id\":43451,\"error\":{\"code\":-32602,\"message\":\"Invalid params\",\"data\":\"usbConfig must contain valid vendor_id, product_id, serial_number, manufacturer, and product fields\"}}");
+    const char *invalid_configurations[] = {
+        "\"12345678901234567890123456789012\"",
+        "\"Config\\t1\"",
+        "1",
+        "null",
+    };
+    for (size_t i = 0; i < sizeof(invalid_configurations) /
+                               sizeof(invalid_configurations[0]);
+         ++i) {
+        char request[384];
+        char response[320];
+        int id = 43460 + (int)i;
+        assert(snprintf(
+                   request, sizeof(request),
+                   "{\"jsonrpc\":\"2.0\",\"method\":\"setUsbConfig\",\"params\":{\"usbConfig\":{\"vendor_id\":\"0x303a\",\"product_id\":\"0x400c\",\"serial_number\":\"P4\",\"manufacturer\":\"JetKVM\",\"product\":\"KVM\",\"configuration\":%s}},\"id\":%d}",
+                   invalid_configurations[i], id) > 0);
+        assert(snprintf(
+                   response, sizeof(response),
+                   "{\"jsonrpc\":\"2.0\",\"id\":%d,\"error\":{\"code\":-32602,\"message\":\"Invalid params\",\"data\":\"usbConfig must contain valid vendor_id, product_id, serial_number, manufacturer, and product fields\"}}",
+                   id) > 0);
+        expect_rpc_context(&context, request, response);
+    }
+    /* The configuration field does not stand in for a required one. */
+    expect_rpc_context(
+        &context,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"setUsbConfig\",\"params\":{\"usbConfig\":{\"vendor_id\":\"0x303a\",\"product_id\":\"0x400c\",\"serial_number\":\"P4\",\"manufacturer\":\"JetKVM\",\"configuration\":\"KVM\"}},\"id\":43464}",
+        "{\"jsonrpc\":\"2.0\",\"id\":43464,\"error\":{\"code\":-32602,\"message\":\"Invalid params\",\"data\":\"usbConfig must contain valid vendor_id, product_id, serial_number, manufacturer, and product fields\"}}");
     expect_rpc_context(
         &context,
         "{\"jsonrpc\":\"2.0\",\"method\":\"setUsbConfig\",\"params\":{\"usbConfig\":{\"vendor_id\":\"0x303a\",\"product_id\":\"0x400c\",\"serial_number\":\"P4\",\"manufacturer\":\"JetKVM\"}},\"id\":4346}",
@@ -3099,6 +3343,58 @@ int main(void)
         "{\"jsonrpc\":\"2.0\",\"method\":\"setKeyboardMacros\",\"params\":{\"params\":{\"macros\":[{\"id\":\"bad\",\"name\":\"Bad\",\"steps\":[{\"keys\":[\"NotAKey\"],\"modifiers\":[],\"delay\":100}]}]}},\"id\":604}",
         "{\"jsonrpc\":\"2.0\",\"id\":604,\"error\":{\"code\":-32602,\"message\":\"Invalid params\",\"data\":\"invalid keyboard macro step\"}}");
     assert(observed_hid_profiles.set_macros_calls == 1U);
+
+    /* runKeyboardMacro (Go rpcRunKeyboardMacro): an ID first, then a name
+     * without regard to case; the second macro's ID is the first one's
+     * name. */
+    expect_rpc_context(
+        &context,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"setKeyboardMacros\",\"params\":{\"params\":{\"macros\":["
+        "{\"id\":\"login\",\"name\":\"Log In\",\"sortOrder\":1,\"steps\":["
+        "{\"keys\":[\"KeyA\",\"KeyB\"],\"modifiers\":[\"ShiftLeft\",\"MetaRight\"],\"delay\":300},"
+        "{\"keys\":[],\"modifiers\":[],\"delay\":100},"
+        "{\"keys\":[\"Digit1\",\"Digit2\",\"Digit3\",\"Digit4\",\"Digit5\",\"Digit6\",\"Digit7\"],\"modifiers\":[],\"delay\":50}]},"
+        "{\"id\":\"Log In\",\"name\":\"Other\",\"sortOrder\":2,\"steps\":["
+        "{\"keys\":[\"Enter\"],\"modifiers\":[],\"delay\":100}]}]}},\"id\":610}",
+        "{\"jsonrpc\":\"2.0\",\"id\":610,\"result\":null}");
+    observed_hid_profiles.run_macro_result = JETKVM_KEYBOARD_MACRO_RUN_ACCEPTED;
+    expect_rpc_context(
+        &context,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"runKeyboardMacro\",\"params\":{\"macro\":\" log in \"},\"id\":611}",
+        "{\"jsonrpc\":\"2.0\",\"id\":611,\"result\":null}");
+    assert(observed_hid_profiles.run_macro_calls == 1U);
+    /* Each step with keys is a press held 20 ms and a release with the
+     * step's delay; the empty step is skipped and the seventh key dropped. */
+    assert(observed_hid_profiles.run_step_count == 4U);
+    const uint8_t no_keys[6] = {0};
+    const uint8_t a_b[6] = {0x04, 0x05};
+    const uint8_t digits[6] = {0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23};
+    expect_hid_step(&observed_hid_profiles.run_steps[0], 0x82, a_b, 20U);
+    expect_hid_step(&observed_hid_profiles.run_steps[1], 0x00, no_keys, 300U);
+    expect_hid_step(&observed_hid_profiles.run_steps[2], 0x00, digits, 20U);
+    expect_hid_step(&observed_hid_profiles.run_steps[3], 0x00, no_keys, 50U);
+    expect_rpc_context(
+        &context,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"runKeyboardMacro\",\"params\":{\"macro\":\"Log In\"},\"id\":612}",
+        "{\"jsonrpc\":\"2.0\",\"id\":612,\"result\":null}");
+    assert(observed_hid_profiles.run_macro_calls == 2U);
+    const uint8_t enter[6] = {0x28};
+    assert(observed_hid_profiles.run_step_count == 2U);
+    expect_hid_step(&observed_hid_profiles.run_steps[0], 0x00, enter, 20U);
+    expect_rpc_context(
+        &context,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"runKeyboardMacro\",\"params\":{\"macro\":\"nope\"},\"id\":613}",
+        "{\"jsonrpc\":\"2.0\",\"id\":613,\"error\":{\"code\":-32603,\"message\":\"Internal error\",\"data\":\"unknown keyboard macro: nope\"}}");
+    expect_rpc_context(
+        &context,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"runKeyboardMacro\",\"params\":{\"macro\":7},\"id\":614}",
+        "{\"jsonrpc\":\"2.0\",\"id\":614,\"error\":{\"code\":-32602,\"message\":\"Invalid params\",\"data\":\"macro must be a string\"}}");
+    observed_hid_profiles.run_macro_result = JETKVM_KEYBOARD_MACRO_RUN_UNAVAILABLE;
+    expect_rpc_context(
+        &context,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"runKeyboardMacro\",\"params\":{\"macro\":\"login\"},\"id\":615}",
+        "{\"jsonrpc\":\"2.0\",\"id\":615,\"error\":{\"code\":-32603,\"message\":\"Internal error\",\"data\":\"keyboard unavailable\"}}");
+    assert(observed_hid_profiles.run_macro_calls == 3U);
     expect_rpc_context(
         &context,
         "{\"jsonrpc\":\"2.0\",\"method\":\"getJigglerState\",\"id\":605}",

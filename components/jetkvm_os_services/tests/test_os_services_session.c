@@ -177,6 +177,10 @@ static void check_config(const fake_message_t *config, bool terminal,
     /* The KVM leaves the display's mode to a sender that says it sets it. */
     assert(cJSON_IsTrue(
         cJSON_GetObjectItemCaseSensitive(json, "display_mode_by_sender")));
+    /* A sender sets the primary-selection flag only for a KVM that says it
+     * takes the flag. */
+    assert(cJSON_IsTrue(
+        cJSON_GetObjectItemCaseSensitive(json, "clipboard_primary")));
     cJSON_Delete(json);
 }
 
@@ -674,6 +678,29 @@ static void test_clipboard(void)
     register_clipboard(0U, OSVC_OS_LINUX);
     assert(s_fake.clipboard_count == 7U);
     assert(!osvc_session_clipboard_available(&s_session));
+}
+
+/* The primary-selection flag is valid only with the write flag, because
+ * clipboard.set does the write. */
+static void test_clipboard_primary_flag(void)
+{
+    setup();
+    uint8_t token[OSVC_TOKEN_LEN];
+    open_session(token);
+    const uint32_t all = OSVC_CLIPBOARD_FLAG_READ | OSVC_CLIPBOARD_FLAG_WRITE |
+                         OSVC_CLIPBOARD_FLAG_PRIMARY;
+    register_clipboard(all, OSVC_OS_LINUX);
+    expect_clipboard_config(1U);
+    assert(osvc_session_clipboard_available(&s_session));
+    assert(s_session.clipboard.flags == all);
+    register_clipboard(OSVC_CLIPBOARD_FLAG_READ | OSVC_CLIPBOARD_FLAG_PRIMARY,
+                       OSVC_OS_LINUX);
+    assert(!osvc_session_clipboard_available(&s_session));
+    assert(s_session.counters.service_faults == 1U);
+    /* A bit this KVM does not know stays an error. */
+    register_clipboard(1U << 3, OSVC_OS_LINUX);
+    assert(s_session.counters.service_faults == 2U);
+    assert(osvc_session_open(&s_session));
 }
 
 static void test_clipboard_faults_and_settings(void)
@@ -4155,6 +4182,7 @@ int main(void)
     test_session_info_reports_changes();
     test_approval_pending();
     test_clipboard();
+    test_clipboard_primary_flag();
     test_clipboard_faults_and_settings();
     test_video_registration_is_answered();
     test_other_registrations();

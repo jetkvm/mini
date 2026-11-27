@@ -319,6 +319,9 @@ export type VideoSource = "physical" | "guest" | "switching_to_physical" | "swit
 export interface GuestClipboardState {
   read: boolean;
   write: boolean;
+  // A write also sets the primary selection, which a Linux terminal pastes
+  // with Shift+Insert. Not present on a KVM that predates the flag.
+  primary?: boolean;
   os: "windows" | "macos" | "linux" | "unknown";
 }
 
@@ -631,7 +634,7 @@ export interface MountMediaState {
   remoteVirtualMediaState: RemoteVirtualMediaState | null;
   setRemoteVirtualMediaState: (state: MountMediaState["remoteVirtualMediaState"]) => void;
 
-  modalView: "mode" | "url" | "device" | "upload" | "error" | null;
+  modalView: "mode" | "url" | "device" | "upload" | "download" | "error" | null;
   setModalView: (view: MountMediaState["modalView"]) => void;
 
   isMountMediaDialogOpen: boolean;
@@ -665,9 +668,11 @@ export const useMountMediaStore = create<MountMediaState>(set => ({
 }));
 
 // The firmware's downloadToStorage: one file streamed from a URL onto the
-// TF card. videoPaused is true while the transfer holds video off.
+// TF card. videoPaused is true while the transfer holds video off. The
+// device also sends upstream's status, received and size, which the mount
+// page's download view reads.
 export interface StorageDownloadState {
-  state: "idle" | "downloading" | "done" | "error";
+  state: "idle" | "downloading" | "done" | "error" | "cancelled";
   filename: string;
   bytes: number;
   total: number;
@@ -864,6 +869,7 @@ export interface UsbConfigState {
   serial_number: string;
   manufacturer: string;
   product: string;
+  configuration: string;
 }
 
 export const useUsbConfigModalStore = create<UsbConfigModalState>(set => ({
@@ -924,7 +930,8 @@ export type Capability =
   | "os_services" // USB link to the OS Services sender on the remote host (clipboard, file drop, shell)
   | "display_buttons" // side buttons wake the local display
   | "usb_debugging" // the USB debugging switch (the Mini's USB Serial/JTAG port)
-  | "extra_hostnames"; // other host names the web server answers to (getExtraHostnames)
+  | "extra_hostnames" // other host names the web server answers to (getExtraHostnames)
+  | "storage_download"; // device downloads an image from a URL into its storage
 
 export const useDeviceStore = create<DeviceState>(set => ({
   appVersion: null,

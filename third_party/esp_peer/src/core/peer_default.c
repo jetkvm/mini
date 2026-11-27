@@ -1912,6 +1912,19 @@ LOCAL int peer_main_loop(esp_peer_handle_t handle)
     case ESP_PEER_STATE_NEW_CONNECTION:
         peer_prepare(pc);
         break;
+    case ESP_PEER_STATE_CANDIDATE_GATHERING:
+        /* A remote that signals no candidate is known only from its
+         * authenticated Binding Request. agent_check_alive() reads the socket
+         * only while the agent has no remote candidate, so after it learns
+         * that one, pairing must take over the socket. */
+        if (pc->b_offer_created && pc->b_remote_sdp_got && pc->remote_candidate_count == 0) {
+            int learned = agent_get_remote_candidate_count(pc->agent);
+            if (learned > 0) {
+                pc->remote_candidate_count = learned;
+                peer_set_state(pc, ESP_PEER_STATE_PAIRING);
+            }
+        }
+        break;
     case ESP_PEER_STATE_PAIRING:
         peer_on_pairing(pc);
         break;

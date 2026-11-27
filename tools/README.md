@@ -18,6 +18,7 @@ Release:
 
 - `release_r2.sh`: builds, signs and uploads a release (`--help`).
 - `release_check.py`, `release_config.py`: its version and configuration checks.
+- `release_notify.sh`: comments on each issue that a release fixes. The `release-notify` workflow runs it on the release tag.
 - `third_party_notices.sh`: regenerates `THIRD_PARTY_NOTICES.md` from a build of both variants and the web UI (`third_party_notices.py`).
 - `mini_image.py`: reads the version and SKU from a firmware image.
 

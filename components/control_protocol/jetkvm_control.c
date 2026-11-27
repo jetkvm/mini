@@ -80,6 +80,11 @@ jetkvm_mqtt_context_t s_default_mqtt;
 jetkvm_ota_context_t s_default_ota;
 jetkvm_tls_context_t s_default_tls;
 jetkvm_extra_hostnames_context_t s_default_extra_hostnames;
+jetkvm_session_timeout_context_t s_default_session_timeout;
+void jetkvm_control_set_default_session_timeout_context(const jetkvm_session_timeout_context_t *context)
+{
+    s_default_session_timeout = context ? *context : (jetkvm_session_timeout_context_t){0};
+}
 jetkvm_tailscale_context_t s_default_tailscale;
 void jetkvm_control_set_default_tailscale_context(const jetkvm_tailscale_context_t *context)
 {
@@ -266,6 +271,8 @@ static const rpc_method_t s_rpc_methods[] = {
     { "setTLSState", rpc_set_tls_state },
     { "getExtraHostnames", rpc_get_extra_hostnames },
     { "setExtraHostnames", rpc_set_extra_hostnames },
+    { "getLocalAuthSessionTimeout", rpc_get_local_auth_session_timeout },
+    { "setLocalAuthSessionTimeout", rpc_set_local_auth_session_timeout },
     { "getBacklightSettings", rpc_get_backlight_settings },
     { "setBacklightSettings", rpc_set_backlight_settings },
     { "getDisplayRotation", rpc_get_display_rotation },
@@ -290,6 +297,7 @@ static const rpc_method_t s_rpc_methods[] = {
     { "setWakeOnLanDevices", rpc_set_wake_on_lan_devices },
     { "getKeyboardMacros", rpc_get_keyboard_macros },
     { "setKeyboardMacros", rpc_set_keyboard_macros },
+    { "runKeyboardMacro", rpc_run_keyboard_macro },
     { "getJigglerState", rpc_get_jiggler_state },
     { "setJigglerState", rpc_set_jiggler_state },
     { "getJigglerConfig", rpc_get_jiggler_config },
@@ -311,6 +319,8 @@ static const rpc_method_t s_rpc_methods[] = {
     { "deleteStorageFile", rpc_delete_storage_file },
     { "startStorageFileUpload", rpc_start_storage_file_upload },
     { "downloadToStorage", rpc_download_to_storage },
+    { "startStorageDownload", rpc_start_storage_download },
+    { "cancelStorageDownload", rpc_cancel_storage_download },
     { "getStorageDownloadState", rpc_get_storage_download_state },
     { "keyboardReport", rpc_keyboard_report },
     { "keypressReport", rpc_keypress_report },
@@ -405,6 +415,10 @@ jetkvm_control_result_t jetkvm_control_handle_rpc_with_context(
             dispatch.error_code = -32601;
             dispatch.error_message = "Method not found";
         } else {
+            if (context->note_local_activity &&
+                jetkvm_control_rpc_counts_as_activity(rpc_method->name)) {
+                context->note_local_activity();
+            }
             const cJSON *params = cJSON_GetObjectItemCaseSensitive(request, "params");
             added = rpc_method->handler(context, params, &dispatch);
         }

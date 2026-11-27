@@ -13,6 +13,17 @@ cc -std=c11 -Wall -Wextra -Werror \
   "$repo_root/components/jetkvm_mqtt/tests/test_mqtt_config.c" \
   -o "$binary"
 "$binary"
+cc -std=c11 -Wall -Wextra -Werror \
+  -I"$repo_root/components/jetkvm_settings/tests/compat" \
+  -I"$repo_root/components/jetkvm_mqtt" \
+  -I"$repo_root/components/jetkvm_mqtt/include" \
+  -I"$repo_root/components/control_protocol/include" \
+  "$repo_root/components/jetkvm_mqtt/jetkvm_mqtt_config.c" \
+  "$repo_root/components/jetkvm_mqtt/jetkvm_mqtt_store.c" \
+  "$repo_root/components/jetkvm_mqtt/tests/test_mqtt_store.c" \
+  -o "$binary"
+"$binary"
 python3 "$repo_root/components/jetkvm_mqtt/tests/test_mqtt_publish_drain.py"
 python3 "$repo_root/components/jetkvm_mqtt/tests/test_mqtt_values.py"
 python3 "$repo_root/components/jetkvm_mqtt/tests/test_mqtt_virtual_media.py"
+python3 "$repo_root/components/jetkvm_mqtt/tests/test_mqtt_keyboard_macros.py"

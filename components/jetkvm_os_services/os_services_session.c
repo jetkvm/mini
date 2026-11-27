@@ -399,7 +399,10 @@ static bool send_session_config(osvc_session_t *s)
               /* This KVM presents the same monitor each time to a sender
                * that sets the display's mode (video_display_serial). */
               cJSON_AddBoolToObject(config, "display_mode_by_sender", true) !=
-                  NULL;
+                  NULL &&
+              /* This KVM takes the primary-selection flag in
+               * clipboard.capabilities (OSVC_CLIPBOARD_FLAG_PRIMARY). */
+              cJSON_AddBoolToObject(config, "clipboard_primary", true) != NULL;
     if (ok) {
         text = cJSON_PrintUnformatted(config);
         ok = text != NULL;
@@ -774,8 +777,14 @@ static void handle_clipboard(osvc_session_t *s, const uint8_t *payload,
             return;
         }
         const uint32_t flags = osvc_get_u32(payload);
-        if ((flags & ~(OSVC_CLIPBOARD_FLAG_READ | OSVC_CLIPBOARD_FLAG_WRITE)) !=
-                0U ||
+        /* clipboard.set writes the primary selection, so its flag comes
+         * only with the write flag. */
+        const bool primary_without_write =
+            (flags & OSVC_CLIPBOARD_FLAG_PRIMARY) != 0U &&
+            (flags & OSVC_CLIPBOARD_FLAG_WRITE) == 0U;
+        if ((flags & ~(OSVC_CLIPBOARD_FLAG_READ | OSVC_CLIPBOARD_FLAG_WRITE |
+                       OSVC_CLIPBOARD_FLAG_PRIMARY)) != 0U ||
+            primary_without_write ||
             payload[4] > OSVC_OS_LINUX || payload[5] != 0U ||
             payload[6] != 0U || payload[7] != 0U) {
             fault_service(s, OSVC_SERVICE_CLIPBOARD,

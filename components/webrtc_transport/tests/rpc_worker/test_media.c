@@ -70,6 +70,8 @@ bool jetkvm_access_lock_epoch(uint32_t epoch)
     return true;
 }
 void jetkvm_access_unlock(void) { assert(access_depth-- > 0); }
+static unsigned activity_notes;
+void jetkvm_access_note_activity(void) { ++activity_notes; }
 void rpc_worker_notify_done(void) { ++notifications; }
 
 /* Control-slot collaborators; only setUsbEmulationState reaches them here. */
@@ -491,10 +493,17 @@ static void test_expired_access_epoch(void)
 
     rpc_worker_origin_t cloud = origin;
     cloud.cloud_authority = true; /* Cloud sessions are not local-password sessions */
+    unsigned notes = activity_notes;
     assert(defer(mount, &cloud));
     run_worker("jk_media_rpc");
     assert(blocking_calls == 1 && rpc_worker_take_reply(&reply));
+    /* Nor does a cloud session's call keep the local login. */
+    assert(activity_notes == notes);
     access_epoch = 5;
+    /* A local call counts when it joins the queue, and when it runs. */
+    assert(defer(mount, &origin) && activity_notes == notes + 1);
+    run_worker("jk_media_rpc");
+    assert(rpc_worker_take_reply(&reply) && activity_notes == notes + 2);
     assert(access_depth == 0);
     puts("a revoked access epoch stops a deferred request: OK");
 }

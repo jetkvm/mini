@@ -137,7 +137,9 @@ static bool get_usb_configuration_snapshot(
                sizeof(snapshot->serial_number)) == NULL ||
         memchr(snapshot->manufacturer, '\0',
                sizeof(snapshot->manufacturer)) == NULL ||
-        memchr(snapshot->product, '\0', sizeof(snapshot->product)) == NULL) {
+        memchr(snapshot->product, '\0', sizeof(snapshot->product)) == NULL ||
+        memchr(snapshot->configuration, '\0',
+               sizeof(snapshot->configuration)) == NULL) {
         (void)set_hid_unavailable(dispatch,
                                   "USB configuration unavailable");
         return false;
@@ -224,7 +226,8 @@ static bool parse_usb_descriptor_config(
         USB_CONFIG_SERIAL_NUMBER = 1U << 2,
         USB_CONFIG_MANUFACTURER = 1U << 3,
         USB_CONFIG_PRODUCT = 1U << 4,
-        USB_CONFIG_ALL = (1U << 5) - 1U,
+        USB_CONFIG_REQUIRED = (1U << 5) - 1U,
+        USB_CONFIG_CONFIGURATION = 1U << 5,
     };
     unsigned seen = 0U;
 
@@ -246,6 +249,8 @@ static bool parse_usb_descriptor_config(
             field = USB_CONFIG_MANUFACTURER;
         } else if (strcmp(item->string, "product") == 0) {
             field = USB_CONFIG_PRODUCT;
+        } else if (strcmp(item->string, "configuration") == 0) {
+            field = USB_CONFIG_CONFIGURATION;
         } else {
             return false;
         }
@@ -254,7 +259,14 @@ static bool parse_usb_descriptor_config(
         }
         seen |= field;
     }
-    if (seen != USB_CONFIG_ALL) {
+    if ((seen & USB_CONFIG_REQUIRED) != USB_CONFIG_REQUIRED) {
+        return false;
+    }
+    config->has_configuration = (seen & USB_CONFIG_CONFIGURATION) != 0U;
+    if (config->has_configuration &&
+        !copy_usb_descriptor_string(
+            cJSON_GetObjectItemCaseSensitive(object, "configuration"),
+            config->configuration)) {
         return false;
     }
 
@@ -525,7 +537,9 @@ bool rpc_get_usb_config(const jetkvm_control_context_t *context,
                                 snapshot.serial_number) ||
         !cJSON_AddStringToObject(result, "manufacturer",
                                 snapshot.manufacturer) ||
-        !cJSON_AddStringToObject(result, "product", snapshot.product)) {
+        !cJSON_AddStringToObject(result, "product", snapshot.product) ||
+        !cJSON_AddStringToObject(result, "configuration",
+                                snapshot.configuration)) {
         cJSON_Delete(result);
         return false;
     }

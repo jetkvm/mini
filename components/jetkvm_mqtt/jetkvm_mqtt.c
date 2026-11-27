@@ -23,6 +23,7 @@
 #include "freertos/task.h"
 #include "jetkvm_cloud_service.h"
 #include "jetkvm_device_state.h"
+#include "jetkvm_hid_input.h"
 #include "jetkvm_hid_profiles.h"
 #include "jetkvm_memory_policy.h"
 #include "jetkvm_mqtt_internal.h"
@@ -62,6 +63,11 @@
  * passed. After a change back from service video the HDMI capture has its
  * mode within 1.7 s. */
 #define MQTT_NO_SIGNAL_DELAY_MS 3000U
+/* The buttons of the stored macros, and as many of deleted macros whose
+ * removal did not reach the broker yet. */
+#define MQTT_MACRO_BUTTON_CAPACITY (2U * JETKVM_CONTROL_KEYBOARD_MACRO_MAX_COUNT)
+/* A macro discovery pass with a failed publish runs again after this time. */
+#define MQTT_MACRO_RETRY_INTERVAL_MS 5000U
 
 static const char *TAG = "jetkvm_mqtt";
 
@@ -83,6 +89,18 @@ typedef struct {
     TickType_t last_status_publish;
     uint32_t publishes_in_flight;
     bool reconfiguring;
+    /* The macro IDs whose Home Assistant buttons the broker holds, as far as
+     * this device knows. A pass clears the buttons of IDs that went away,
+     * also of those deleted while the broker was unreachable. */
+    char macro_buttons[MQTT_MACRO_BUTTON_CAPACITY]
+                      [JETKVM_CONTROL_KEYBOARD_MACRO_ID_CAPACITY];
+    size_t macro_button_count;
+    /* The HID profiles revision at the last macro discovery pass. */
+    uint32_t macro_revision;
+    /* The last pass did not publish or clear each button; the next pass is
+     * due at macro_retry_at. */
+    bool macro_retry;
+    TickType_t macro_retry_at;
 } mqtt_runtime_t;
 
 static mqtt_runtime_t s_mqtt;
@@ -897,6 +915,189 @@ static void publish_action_discovery(const jetkvm_mqtt_config_t *config,
     remove_unsupported_discovery(device_id);
 }
 
+/* Go macroObjectID: the button keeps its entity (and the automations that
+ * use it) when other macros are added, renamed or deleted. Characters
+ * outside the object_id alphabet of Home Assistant become underscores. */
+static void macro_object_id(const char *id, char *output, size_t capacity)
+{
+    static const char prefix[] = "macro_";
+    size_t length = 0U;
+    for (; length + 1U < capacity && prefix[length] != '\0'; ++length) {
+        output[length] = prefix[length];
+    }
+    for (const char *c = id; *c != '\0' && length + 1U < capacity; ++c) {
+        const bool allowed = (*c >= 'a' && *c <= 'z') ||
+                             (*c >= 'A' && *c <= 'Z') ||
+                             (*c >= '0' && *c <= '9') || *c == '-' ||
+                             *c == '_';
+        output[length++] = allowed ? *c : '_';
+    }
+    output[length] = '\0';
+}
+
+#define MACRO_OBJECT_ID_CAPACITY (6U + JETKVM_CONTROL_KEYBOARD_MACRO_ID_CAPACITY)
+
+/* False when the removal did not reach the client. */
+static bool remove_macro_button(const char *id, const char *device_id)
+{
+    char object_id[MACRO_OBJECT_ID_CAPACITY];
+    char topic[MQTT_TOPIC_CAPACITY];
+    macro_object_id(id, object_id, sizeof(object_id));
+    int length = snprintf(topic, sizeof(topic),
+                          "homeassistant/button/jetkvm_%s/%s/config",
+                          device_id, object_id);
+    return length > 0 && (size_t)length < sizeof(topic) &&
+           publish_current_topic(topic, "", 0U, true);
+}
+
+static void keep_macro_button(const char *id)
+{
+    for (size_t i = 0U; i < s_mqtt.macro_button_count; ++i) {
+        if (strcmp(s_mqtt.macro_buttons[i], id) == 0) {
+            return;
+        }
+    }
+    if (s_mqtt.macro_button_count < MQTT_MACRO_BUTTON_CAPACITY) {
+        copy_text(s_mqtt.macro_buttons[s_mqtt.macro_button_count++],
+                  sizeof(s_mqtt.macro_buttons[0]), id);
+    }
+}
+
+static bool macro_list_has(const jetkvm_control_keyboard_macro_list_t *macros,
+                           const char *id)
+{
+    for (size_t i = 0U; macros != NULL && i < macros->count; ++i) {
+        if (strcmp(macros->macros[i].id, id) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool keyboard_macros_allowed(void)
+{
+    if (!runtime_ready()) {
+        return false;
+    }
+    xSemaphoreTake(s_mqtt.lock, portMAX_DELAY);
+    bool allowed = s_mqtt.config.enable_keyboard_macros;
+    xSemaphoreGive(s_mqtt.lock);
+    return allowed;
+}
+
+/* Serializes the passes over s_mqtt.macro_buttons: the client's task and the
+ * manager's task both run them. */
+static SemaphoreHandle_t macro_discovery_lock(void)
+{
+    static StaticSemaphore_t storage;
+    static SemaphoreHandle_t lock;
+    static portMUX_TYPE spinlock = portMUX_INITIALIZER_UNLOCKED;
+    portENTER_CRITICAL(&spinlock);
+    if (lock == NULL) {
+        lock = xSemaphoreCreateMutexStatic(&storage);
+    }
+    portEXIT_CRITICAL(&spinlock);
+    return lock;
+}
+
+/* Go publishMacroDiscovery: one button per stored macro while keyboard
+ * macros over MQTT are on, and no buttons while they are off. The buttons
+ * of macros that no longer exist are cleared here too; an ID whose removal
+ * fails stays for the next pass (Go pendingMacroRemovals). A pass with a
+ * failed publish or removal runs again after MQTT_MACRO_RETRY_INTERVAL_MS. */
+static void publish_macro_discovery(const jetkvm_mqtt_config_t *config,
+                                    const char *device_id)
+{
+    jetkvm_control_keyboard_macro_list_t *macros =
+        jetkvm_memory_policy_control_alloc(sizeof(*macros));
+    jetkvm_hid_profiles_status_t profiles = {0};
+    if (macros == NULL) {
+        return;
+    }
+    if (jetkvm_hid_profiles_get_status(&profiles) != ESP_OK ||
+        jetkvm_hid_profiles_get_macros(macros) != ESP_OK) {
+        jetkvm_memory_policy_control_free(macros);
+        return;
+    }
+    const bool enabled = config->enable_keyboard_macros;
+    SemaphoreHandle_t lock = macro_discovery_lock();
+    xSemaphoreTake(lock, portMAX_DELAY);
+    bool complete = true;
+    size_t kept = 0U;
+    for (size_t i = 0U; i < s_mqtt.macro_button_count; ++i) {
+        const bool remove =
+            !enabled || !macro_list_has(macros, s_mqtt.macro_buttons[i]);
+        if (remove) {
+            if (remove_macro_button(s_mqtt.macro_buttons[i], device_id)) {
+                continue;
+            }
+            complete = false;
+        }
+        if (kept != i) {
+            memcpy(s_mqtt.macro_buttons[kept], s_mqtt.macro_buttons[i],
+                   sizeof(s_mqtt.macro_buttons[0]));
+        }
+        kept++;
+    }
+    s_mqtt.macro_button_count = kept;
+    for (size_t i = 0U; i < macros->count; ++i) {
+        const jetkvm_control_keyboard_macro_t *macro = &macros->macros[i];
+        if (!enabled) {
+            if (!remove_macro_button(macro->id, device_id)) {
+                keep_macro_button(macro->id);
+                complete = false;
+            }
+            continue;
+        }
+        char object_id[MACRO_OBJECT_ID_CAPACITY];
+        char name[sizeof("Macro: ") +
+                  JETKVM_CONTROL_KEYBOARD_MACRO_NAME_CAPACITY];
+        macro_object_id(macro->id, object_id, sizeof(object_id));
+        (void)snprintf(name, sizeof(name), "Macro: %s", macro->name);
+        cJSON *button = new_discovery_payload(
+            "button", object_id, name, NULL, "keyboard_macro/set", NULL,
+            device_id, config);
+        if (button != NULL &&
+            cJSON_AddStringToObject(button, "payload_press", macro->id) &&
+            cJSON_AddStringToObject(button, "icon", "mdi:keyboard-outline")) {
+            if (!publish_discovery_root("button", object_id, button,
+                                        device_id)) {
+                complete = false;
+            }
+        } else {
+            cJSON_Delete(button);
+            complete = false;
+        }
+        /* Kept also when the publish fails: the broker can hold an older
+         * config of this button. */
+        keep_macro_button(macro->id);
+    }
+    s_mqtt.macro_revision = profiles.revision;
+    s_mqtt.macro_retry = !complete;
+    s_mqtt.macro_retry_at =
+        xTaskGetTickCount() + pdMS_TO_TICKS(MQTT_MACRO_RETRY_INTERVAL_MS);
+    xSemaphoreGive(lock);
+    jetkvm_memory_policy_control_free(macros);
+}
+
+/* The HID profiles revision changes with each saved macro list; Go
+ * setKeyboardMacros republishes the discovery then. A pass that did not
+ * complete is stale again when its retry is due. */
+static bool macro_discovery_stale(void)
+{
+    jetkvm_hid_profiles_status_t profiles = {0};
+    if (jetkvm_hid_profiles_get_status(&profiles) != ESP_OK) {
+        return false;
+    }
+    SemaphoreHandle_t lock = macro_discovery_lock();
+    xSemaphoreTake(lock, portMAX_DELAY);
+    bool stale = profiles.revision != s_mqtt.macro_revision ||
+                 (s_mqtt.macro_retry &&
+                  (int32_t)(xTaskGetTickCount() - s_mqtt.macro_retry_at) >= 0);
+    xSemaphoreGive(lock);
+    return stale;
+}
+
 static void publish_ha_discovery(void)
 {
     jetkvm_mqtt_config_t config;
@@ -908,6 +1109,18 @@ static void publish_ha_discovery(void)
     }
     publish_general_discovery(&config, device_id);
     publish_action_discovery(&config, device_id);
+    publish_macro_discovery(&config, device_id);
+    jetkvm_mqtt_secure_zero(&config, sizeof(config));
+}
+
+static void republish_macro_discovery(void)
+{
+    jetkvm_mqtt_config_t config;
+    char device_id[JETKVM_DEVICE_ID_CAPACITY];
+    if (config_snapshot(&config, device_id, sizeof(device_id)) &&
+        config.enable_ha_discovery) {
+        publish_macro_discovery(&config, device_id);
+    }
     jetkvm_mqtt_secure_zero(&config, sizeof(config));
 }
 
@@ -1141,6 +1354,69 @@ static void handle_virtual_media_command(const esp_mqtt_event_t *event)
     jetkvm_mqtt_secure_zero(payload, sizeof(payload));
 }
 
+/* Go handleKeyboardMacroCommand. The HID worker types the macro; this task
+ * only queues it, so a running macro never holds up the next MQTT event. */
+static void handle_keyboard_macro_command(const esp_mqtt_event_t *event)
+{
+    char payload[JETKVM_CONTROL_KEYBOARD_MACRO_NAME_CAPACITY];
+    bool accepted = false;
+    if (!keyboard_macros_allowed()) {
+        ESP_LOGW(TAG, "keyboard macro command rejected: keyboard macros "
+                      "over MQTT are disabled");
+    } else if (event->retain) {
+        ESP_LOGW(TAG, "ignoring retained keyboard macro command");
+    } else if (!copy_trimmed_payload(event, payload, sizeof(payload))) {
+        ESP_LOGW(TAG, "unknown keyboard macro");
+    } else {
+        ESP_LOGI(TAG, "received keyboard macro command: %s", payload);
+        accepted = true;
+    }
+    jetkvm_control_keyboard_macro_list_t *macros = accepted ?
+        jetkvm_memory_policy_control_alloc(sizeof(*macros)) : NULL;
+    jetkvm_hidrpc_macro_step_t steps[JETKVM_CONTROL_KEYBOARD_MACRO_MAX_HID_STEPS];
+    size_t step_count = 0U;
+    char name[JETKVM_CONTROL_KEYBOARD_MACRO_NAME_CAPACITY] = "";
+    if (macros != NULL) {
+        int index = jetkvm_hid_profiles_get_macros(macros) == ESP_OK ?
+            jetkvm_control_keyboard_macro_find(macros, payload) : -1;
+        if (index < 0) {
+            ESP_LOGW(TAG, "unknown keyboard macro: %s", payload);
+            accepted = false;
+        } else {
+            copy_text(name, sizeof(name), macros->macros[index].name);
+            accepted = jetkvm_control_keyboard_macro_hid_steps(
+                &macros->macros[index], steps, &step_count);
+            if (!accepted) {
+                ESP_LOGE(TAG, "failed to convert keyboard macro %s", name);
+            }
+        }
+        jetkvm_memory_policy_control_free(macros);
+    } else {
+        accepted = false;
+    }
+    if (accepted && step_count > 0U) {
+        /* A macro from any source that runs or waits keeps running. */
+        jetkvm_hid_input_submit_result_t result =
+            jetkvm_hid_input_submit_local_macro(steps, (uint32_t)step_count,
+                                                false);
+        if (result == JETKVM_HID_INPUT_SUBMIT_BUSY ||
+            result == JETKVM_HID_INPUT_SUBMIT_BACKPRESSURE) {
+            ESP_LOGW(TAG, "keyboard macro command dropped: a keyboard macro "
+                          "is already running (%s)", name);
+            accepted = false;
+        } else if (result != JETKVM_HID_INPUT_SUBMIT_ACCEPTED) {
+            ESP_LOGE(TAG, "failed to execute keyboard macro %s (%d)", name,
+                     (int)result);
+            accepted = false;
+        }
+    }
+    if (!accepted) {
+        xSemaphoreTake(s_mqtt.lock, portMAX_DELAY);
+        s_mqtt.status.commands_rejected++;
+        xSemaphoreGive(s_mqtt.lock);
+    }
+}
+
 static void mqtt_reboot_task(void *argument)
 {
     (void)argument;
@@ -1173,16 +1449,25 @@ static void subscribe_commands(esp_mqtt_client_handle_t client)
     char jiggler[MQTT_TOPIC_CAPACITY];
     char reboot[MQTT_TOPIC_CAPACITY];
     char virtual_media[MQTT_TOPIC_CAPACITY];
+    char keyboard_macro[MQTT_TOPIC_CAPACITY];
     if (!current_topic("jiggler/set", jiggler, sizeof(jiggler)) ||
         !current_topic("reboot/set", reboot, sizeof(reboot)) ||
         !current_topic("virtual_media/set", virtual_media,
-                       sizeof(virtual_media))) {
+                       sizeof(virtual_media)) ||
+        !current_topic("keyboard_macro/set", keyboard_macro,
+                       sizeof(keyboard_macro))) {
         return;
     }
+    /* keyboard_macro/set is QoS 0, as in Go. The session is persistent, and
+     * with QoS 1 the broker queues commands published while the device is
+     * offline and sends them on reconnect; a macro must not type into the
+     * host then. A broker set to queue QoS 0 for offline sessions can still
+     * do that. The handler drops retained messages. */
     const esp_mqtt_topic_t topics[] = {
         {.filter = jiggler, .qos = 1},
         {.filter = reboot, .qos = 1},
         {.filter = virtual_media, .qos = 1},
+        {.filter = keyboard_macro, .qos = 0},
     };
     (void)esp_mqtt_client_subscribe_multiple(
         client, topics, (int)(sizeof(topics) / sizeof(topics[0])));
@@ -1258,6 +1543,8 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
             handle_virtual_media_command(event);
         } else if (topic_equals(event, "reboot/set")) {
             handle_reboot_command();
+        } else if (topic_equals(event, "keyboard_macro/set")) {
+            handle_keyboard_macro_command(event);
         }
         break;
     default:
@@ -1589,6 +1876,9 @@ static void mqtt_manager_task(void *argument)
         } else if (need_reconnect) {
             reconnect_current_client();
         }
+        if (connected && macro_discovery_stale()) {
+            republish_macro_discovery();
+        }
         if (need_publish) {
             publish_all_states();
         } else if (connected) {
@@ -1652,6 +1942,35 @@ static void direct_remove_all_discovery(esp_mqtt_client_handle_t client,
                                s_unsupported_discovery[i].component,
                                s_unsupported_discovery[i].object_id);
     }
+}
+
+/* Go removeAllDiscovery clears the buttons of the stored macros. This also
+ * clears those of macros deleted since the last discovery pass. */
+static void direct_remove_macro_discovery(esp_mqtt_client_handle_t client,
+                                          const char *device_id)
+{
+    char object_id[MACRO_OBJECT_ID_CAPACITY];
+    jetkvm_control_keyboard_macro_list_t *macros =
+        jetkvm_memory_policy_control_alloc(sizeof(*macros));
+    if (macros != NULL && jetkvm_hid_profiles_get_macros(macros) != ESP_OK) {
+        macros->count = 0U;
+    }
+    SemaphoreHandle_t lock = macro_discovery_lock();
+    xSemaphoreTake(lock, portMAX_DELAY);
+    for (size_t i = 0U; macros != NULL && i < macros->count; ++i) {
+        macro_object_id(macros->macros[i].id, object_id, sizeof(object_id));
+        direct_clear_discovery(client, device_id, "button", object_id);
+    }
+    for (size_t i = 0U; i < s_mqtt.macro_button_count; ++i) {
+        if (!macro_list_has(macros, s_mqtt.macro_buttons[i])) {
+            macro_object_id(s_mqtt.macro_buttons[i], object_id,
+                            sizeof(object_id));
+            direct_clear_discovery(client, device_id, "button", object_id);
+        }
+    }
+    s_mqtt.macro_button_count = 0U;
+    xSemaphoreGive(lock);
+    jetkvm_memory_policy_control_free(macros);
 }
 
 static void direct_cleanup_states(esp_mqtt_client_handle_t client,
@@ -1806,10 +2125,12 @@ esp_err_t jetkvm_mqtt_set_config(
     if (old_client != NULL && old_connected) {
         if (existing.enabled && !candidate.enabled) {
             direct_remove_all_discovery(old_client, device_id);
+            direct_remove_macro_discovery(old_client, device_id);
             direct_cleanup_states(old_client, &existing, device_id);
         } else if (existing.enable_ha_discovery &&
                    !candidate.enable_ha_discovery) {
             direct_remove_all_discovery(old_client, device_id);
+            direct_remove_macro_discovery(old_client, device_id);
         }
         char old_status[MQTT_TOPIC_CAPACITY];
         if (topic_from_snapshot(&existing, device_id, "status", old_status,

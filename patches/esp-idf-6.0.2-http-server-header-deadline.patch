@@ -1,0 +1,246 @@
+--- a/components/esp_http_server/include/esp_http_server.h
++++ b/components/esp_http_server/include/esp_http_server.h
+@@ -286,6 +286,14 @@
+      * of the `httpd_uri_match_func_t` function prototype)
+      */
+     httpd_uri_match_func_t uri_match_fn;
++
++    /**
++     * Time limit for the request line and headers of each request, in
++     * milliseconds, counted from the call that starts to read them. The
++     * server closes the connection when the headers are not complete in this
++     * time. 0 sets no limit: only recv_wait_timeout applies, to each recv.
++     */
++    uint32_t req_hdr_timeout_ms;
+ } httpd_config_t;
+ 
+ /**
+@@ -798,6 +806,24 @@
+ esp_err_t httpd_sess_set_recv_override(httpd_handle_t hd, int sockfd, httpd_recv_func_t recv_func);
+ 
+ /**
++ * @brief   Prepare the socket for one recv while request headers are read
++ *
++ * While the server reads the headers of a request on sockfd, sets the
++ * socket's receive timeout to recv_wait_timeout, cut to the time left until
++ * req_hdr_timeout_ms is over. Does nothing at other times. A receive function
++ * that calls recv() more than once for one call from the server, such as a
++ * TLS layer that reads a full record, calls this before each recv().
++ *
++ * @param[in] hd        HTTPD instance handle
++ * @param[in] sockfd    Session socket FD
++ *
++ * @return
++ *  - ESP_OK : The next recv() may wait for its timeout
++ *  - ESP_ERR_TIMEOUT : The time for the headers is over; do not recv()
++ */
++esp_err_t httpd_sess_arm_recv_timeout(httpd_handle_t hd, int sockfd);
++
++/**
+  * @brief   Override web server's send function (by session FD)
+  *
+  * This function overrides the web server's send function. This same function is
+--- a/components/esp_http_server/src/esp_httpd_priv.h
++++ b/components/esp_http_server/src/esp_httpd_priv.h
+@@ -146,6 +146,10 @@
+ 
+     /* Array of registered error handler functions */
+     httpd_err_handler_func_t *err_handler_fns;
++
++    /* The request whose headers are being read: one at a time, in the server task */
++    int64_t hdr_deadline_us;                /*!< esp_timer time for the headers to be complete, 0 for none */
++    int hdr_deadline_fd;                    /*!< Its socket */
+ };
+ 
+ /**
+--- a/components/esp_http_server/src/httpd_parse.c
++++ b/components/esp_http_server/src/httpd_parse.c
+@@ -645,6 +645,37 @@
+     data->settings.on_message_complete = cb_no_body;
+ }
+ 
++/* recv_wait_timeout limits each recv only. A client that sends a byte
++ * before each timeout keeps the loop in httpd_parse_req(), and with it the
++ * server task and all other sessions, busy until max_req_hdr_len is full.
++ * req_hdr_timeout_ms limits the request line and headers as a whole;
++ * httpd_sess_arm_recv_timeout() applies it to each recv. */
++static void hdr_deadline_start(struct httpd_data *hd)
++{
++    hd->hdr_deadline_us = 0;
++    if (hd->config.req_hdr_timeout_ms) {
++        hd->hdr_deadline_fd = hd->hd_req_aux.sd->fd;
++        hd->hdr_deadline_us = esp_timer_get_time() +
++                              (int64_t) hd->config.req_hdr_timeout_ms * 1000;
++    }
++}
++
++static bool hdr_deadline_over(const struct httpd_data *hd)
++{
++    return hd->hdr_deadline_us && esp_timer_get_time() >= hd->hdr_deadline_us;
++}
++
++static void hdr_deadline_stop(struct httpd_data *hd)
++{
++    if (!hd->hdr_deadline_us) {
++        return;
++    }
++    hd->hdr_deadline_us = 0;
++    /* The body and WebSocket frames keep recv_wait_timeout per recv */
++    struct timeval tv = { .tv_sec = hd->config.recv_wait_timeout, .tv_usec = 0 };
++    (void) setsockopt(hd->hdr_deadline_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
++}
++
+ /* Function that receives TCP data and runs parser on it
+  */
+ static esp_err_t httpd_parse_req(struct httpd_data *hd)
+@@ -656,19 +687,25 @@
+ 
+     /* Initialize parser */
+     parse_init(r, &parser, &parser_data);
++    hdr_deadline_start(hd);
+ 
+     /* Set offset to start of scratch buffer */
+     offset = 0;
+     do {
+         /* Read block into scratch buffer */
+         if ((blk_len = read_block(r, &parser, offset, PARSER_BLOCK_SIZE)) < 0) {
+-            if (blk_len == HTTPD_SOCK_ERR_TIMEOUT) {
++            if (blk_len == HTTPD_SOCK_ERR_TIMEOUT && !hdr_deadline_over(hd)) {
+                 /* Retry read in case of non-fatal timeout error.
+                  * read_block() ensures that the timeout error is
+                  * handled properly so that this doesn't get stuck
+                  * in an infinite loop */
+                 continue;
+             }
++            if (hdr_deadline_over(hd)) {
++                ESP_LOGW(TAG, LOG_FMT("request headers not complete in %"PRIu32" ms"),
++                         hd->config.req_hdr_timeout_ms);
++            }
++            hdr_deadline_stop(hd);
+             /* If not HTTPD_SOCK_ERR_TIMEOUT, returned error must
+              * be HTTPD_SOCK_ERR_FAIL which means we need to return
+              * failure and thereby close the underlying socket */
+@@ -681,14 +718,21 @@
+ 
+         /* Parse data block from buffer */
+         if ((offset = parse_block(&parser, offset, blk_len)) < 0) {
++            hdr_deadline_stop(hd);
+             /* HTTP error occurred.
+              * Send error code as response status and
+              * invoke error handler */
+             return httpd_req_handle_err(r, parser_data.error);
+         }
++        if (parser_data.status == PARSING_BODY) {
++            /* The headers are complete, the first byte of the body is not
++             * in yet: the wait for it is a body read */
++            hdr_deadline_stop(hd);
++        }
+     } while (parser_data.status != PARSING_COMPLETE);
+ 
+     ESP_LOGD(TAG, LOG_FMT("parsing complete"));
++    hdr_deadline_stop(hd);
+     return httpd_uri(hd);
+ }
+ 
+--- a/components/esp_http_server/src/httpd_txrx.c
++++ b/components/esp_http_server/src/httpd_txrx.c
+@@ -785,13 +785,38 @@
+     return ret;
+ }
+ 
++esp_err_t httpd_sess_arm_recv_timeout(httpd_handle_t handle, int sockfd)
++{
++    struct httpd_data *hd = (struct httpd_data *) handle;
++    if (hd == NULL || hd->hdr_deadline_us == 0 || hd->hdr_deadline_fd != sockfd) {
++        return ESP_OK;
++    }
++    int64_t left_us = hd->hdr_deadline_us - esp_timer_get_time();
++    if (left_us <= 0) {
++        return ESP_ERR_TIMEOUT;
++    }
++    int64_t wait_us = (int64_t) hd->config.recv_wait_timeout * 1000000;
++    if (wait_us == 0 || left_us < wait_us) {
++        wait_us = left_us;
++    }
++    /* lwIP counts whole milliseconds and takes 0 as no timeout */
++    int64_t wait_ms = (wait_us + 999) / 1000;
++    struct timeval tv = { .tv_sec = wait_ms / 1000, .tv_usec = (wait_ms % 1000) * 1000 };
++    if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
++        return ESP_FAIL;
++    }
++    return ESP_OK;
++}
++
+ int httpd_default_recv(httpd_handle_t hd, int sockfd, char *buf, size_t buf_len, int flags)
+ {
+-    (void)hd;
+     if (buf == NULL) {
+         return HTTPD_SOCK_ERR_INVALID;
+     }
+ 
++    if (httpd_sess_arm_recv_timeout(hd, sockfd) != ESP_OK) {
++        return HTTPD_SOCK_ERR_TIMEOUT;
++    }
+     int ret = recv(sockfd, buf, buf_len, flags);
+     if (ret < 0) {
+         return httpd_sock_err("recv", sockfd);
+--- a/components/esp_https_server/src/https_server.c
++++ b/components/esp_https_server/src/https_server.c
+@@ -9,6 +9,10 @@
+ #include "esp_log.h"
+ #include "sdkconfig.h"
+ #include "esp_tls.h"
++#if CONFIG_ESP_TLS_USING_MBEDTLS
++#include "mbedtls/net_sockets.h"
++#include "mbedtls/ssl.h"
++#endif
+ 
+ const static char *TAG = "esp_https_server";
+ 
+@@ -21,8 +25,31 @@
+ typedef struct httpd_ssl_transport_ctx {
+     esp_tls_t *tls;
+     httpd_ssl_ctx_t *global_ctx;
++#if CONFIG_ESP_TLS_USING_MBEDTLS
++    httpd_handle_t server;
++    mbedtls_net_context net;
++#endif
+ } httpd_ssl_transport_ctx_t;
+ 
++#if CONFIG_ESP_TLS_USING_MBEDTLS
++/* One esp_tls_conn_read() reads a full TLS record, with a recv for each
++ * segment that arrives, so the server's header time limit must apply to each
++ * of these recvs, not to the call. */
++static int httpd_ssl_bio_recv(void *ctx, unsigned char *buf, size_t len)
++{
++    httpd_ssl_transport_ctx_t *transport_ctx = ctx;
++    if (httpd_sess_arm_recv_timeout(transport_ctx->server, transport_ctx->net.fd) != ESP_OK) {
++        return MBEDTLS_ERR_SSL_TIMEOUT;
++    }
++    return mbedtls_net_recv(&transport_ctx->net, buf, len);
++}
++
++static int httpd_ssl_bio_send(void *ctx, const unsigned char *buf, size_t len)
++{
++    return mbedtls_net_send(&((httpd_ssl_transport_ctx_t *)ctx)->net, buf, len);
++}
++#endif
++
+ ESP_EVENT_DEFINE_BASE(ESP_HTTPS_SERVER_EVENT);
+ 
+ #if CONFIG_ESP_HTTPS_SERVER_EVENT_POST_TIMEOUT == -1
+@@ -193,6 +220,14 @@
+     }
+     transport_ctx->tls = tls;
+     transport_ctx->global_ctx = global_ctx;
++#if CONFIG_ESP_TLS_USING_MBEDTLS
++    transport_ctx->server = server;
++    mbedtls_net_init(&transport_ctx->net);
++    transport_ctx->net.fd = sockfd;
++    // httpd_ssl_close() frees transport_ctx after the session, which may still send
++    mbedtls_ssl_set_bio(esp_tls_get_ssl_context(tls), transport_ctx,
++                        httpd_ssl_bio_send, httpd_ssl_bio_recv, NULL);
++#endif
+ 
+     // Store the SSL session into the context field of the HTTPD session object
+     httpd_sess_set_transport_ctx(server, sockfd, transport_ctx, httpd_ssl_close);

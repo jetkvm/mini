@@ -429,6 +429,15 @@ esp_err_t jetkvm_usb_hid_get_keyboard_state(
     return ESP_OK;
 }
 
+static esp_err_t s_keyboard_report_result = ESP_OK;
+
+void fake_usb_set_keyboard_report_result(esp_err_t result)
+{
+    pthread_mutex_lock(&s_usb_lock);
+    s_keyboard_report_result = result;
+    pthread_mutex_unlock(&s_usb_lock);
+}
+
 esp_err_t jetkvm_usb_hid_keyboard_report(uint8_t modifier,
                                          const uint8_t keycodes[
                                              JETKVM_USB_HID_KEY_COUNT])
@@ -436,9 +445,13 @@ esp_err_t jetkvm_usb_hid_keyboard_report(uint8_t modifier,
     pthread_mutex_lock(&s_usb_lock);
     bool reports_allowed = s_usb_state.initialized && s_usb_state.mounted &&
                            !s_usb_state.suspended;
+    esp_err_t result = s_keyboard_report_result;
     pthread_mutex_unlock(&s_usb_lock);
     if (!reports_allowed) {
         return ESP_ERR_INVALID_STATE;
+    }
+    if (result != ESP_OK) {
+        return result;
     }
     record_keyboard(modifier, keycodes);
     return ESP_OK;

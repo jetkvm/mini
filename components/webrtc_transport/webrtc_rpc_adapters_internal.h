@@ -14,6 +14,8 @@ bool rpc_get_keyboard_macros_adapter(
     jetkvm_control_keyboard_macro_list_t *output, void *ctx);
 bool rpc_set_keyboard_macros_adapter(
     const jetkvm_control_keyboard_macro_list_t *input, void *ctx);
+jetkvm_keyboard_macro_run_result_t rpc_run_keyboard_macro_adapter(
+    const jetkvm_hidrpc_macro_step_t *steps, size_t step_count, void *ctx);
 bool rpc_get_jiggler_state_adapter(bool *enabled, void *ctx);
 bool rpc_set_jiggler_state_adapter(bool enabled, void *ctx);
 bool rpc_get_jiggler_config_adapter(

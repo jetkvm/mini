@@ -1408,6 +1408,14 @@ int agent_get_paired(agent_handle_t agent,esp_peer_addr_t *addr) {
  return connected?0:-3;
 }
 
+int agent_get_remote_candidate_count(agent_handle_t agent) {
+ if (!agent) return 0;
+ pthread_mutex_lock(&agent->mutex);
+ int count=agent->remote_candidates_count;
+ pthread_mutex_unlock(&agent->mutex);
+ return count;
+}
+
 int agent_get_ice_selected_summary(agent_handle_t agent,agent_ice_selected_summary_t *out) {
  if (!agent || !out) return -1;
  memset(out,0,sizeof(*out));

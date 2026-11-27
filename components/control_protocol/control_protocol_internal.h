@@ -280,6 +280,9 @@ bool rpc_get_keyboard_macros(const jetkvm_control_context_t *context,
 bool rpc_set_keyboard_macros(const jetkvm_control_context_t *context,
                              const cJSON *params,
                              rpc_dispatch_result_t *dispatch);
+bool rpc_run_keyboard_macro(const jetkvm_control_context_t *context,
+                            const cJSON *params,
+                            rpc_dispatch_result_t *dispatch);
 bool rpc_get_jiggler_state(const jetkvm_control_context_t *context,
                            const cJSON *params,
                            rpc_dispatch_result_t *dispatch);
@@ -338,6 +341,12 @@ extern jetkvm_storage_download_context_t s_default_storage_download;
 bool rpc_download_to_storage(const jetkvm_control_context_t *context,
                              const cJSON *params,
                              rpc_dispatch_result_t *dispatch);
+bool rpc_start_storage_download(const jetkvm_control_context_t *context,
+                                const cJSON *params,
+                                rpc_dispatch_result_t *dispatch);
+bool rpc_cancel_storage_download(const jetkvm_control_context_t *context,
+                                 const cJSON *params,
+                                 rpc_dispatch_result_t *dispatch);
 bool rpc_get_storage_download_state(const jetkvm_control_context_t *context,
                                     const cJSON *params,
                                     rpc_dispatch_result_t *dispatch);
@@ -364,6 +373,9 @@ bool rpc_guest_update_start(const jetkvm_control_context_t *context,
 
 extern jetkvm_tls_context_t s_default_tls;
 extern jetkvm_extra_hostnames_context_t s_default_extra_hostnames;
+extern jetkvm_session_timeout_context_t s_default_session_timeout;
+bool rpc_get_local_auth_session_timeout(const jetkvm_control_context_t *, const cJSON *, rpc_dispatch_result_t *);
+bool rpc_set_local_auth_session_timeout(const jetkvm_control_context_t *, const cJSON *, rpc_dispatch_result_t *);
 extern jetkvm_tailscale_context_t s_default_tailscale;
 const jetkvm_tailscale_context_t *tailscale_context(const jetkvm_control_context_t *);
 bool rpc_get_tailscale_status(const jetkvm_control_context_t *, const cJSON *, rpc_dispatch_result_t *);
