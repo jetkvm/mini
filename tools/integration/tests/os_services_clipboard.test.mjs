@@ -80,6 +80,12 @@ describe('the OS Services clipboard', () => {
     // The host's clipboard has the text again that it had.
     t.after(() => (found === '' ? clipboard.clear() : copy(found)));
     const offer = { read: true, write: true, os: host.system };
+    // primary is true only with a sender that also writes the primary selection
+    // (jetkvm/os-services#5), so the offer is compared without it.
+    const offered = ({ primary, ...rest }) => {
+      assert.equal(typeof primary, 'boolean', 'the Mini reports whether the sender writes the primary selection');
+      return rest;
+    };
     const get = () => mini.rpc('guestClipboardGet', {}, 15_000);
     const set = text => mini.rpc('guestClipboardSet', { text }, 15_000);
     const roundTrip = async label => {
@@ -91,7 +97,7 @@ describe('the OS Services clipboard', () => {
       assert.deepEqual(await get(), { status: 'ok', text: back, truncated: false }, `${label}: the Mini reads the host's text`);
     };
 
-    assert.deepEqual((await until(() => videoState(mini), connectedWithClipboard, 30)).guestClipboard, offer, 'the sender offers reading and writing');
+    assert.deepEqual(offered((await until(() => videoState(mini), connectedWithClipboard, 30)).guestClipboard), offer, 'the sender offers reading and writing');
 
     // To the host.
     for (const [what, text] of [
@@ -147,7 +153,7 @@ describe('the OS Services clipboard', () => {
 
     const onAt = Date.now();
     assert.deepEqual(await mini.rpc('setOsServicesSettings', { settings: { clipboard_enabled: true } }), before);
-    assert.deepEqual((await until(() => videoState(mini), connectedWithClipboard, 15)).guestClipboard, offer, 'the clipboard is offered again');
+    assert.deepEqual(offered((await until(() => videoState(mini), connectedWithClipboard, 15)).guestClipboard), offer, 'the clipboard is offered again');
     await notified('videoInputState', onAt, params => params.osServices !== undefined && params.guestClipboard !== undefined);
     await roundTrip('sharing on again');
   });

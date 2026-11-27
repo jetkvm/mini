@@ -132,6 +132,10 @@ enum {
 
 #define OSVC_CLIPBOARD_FLAG_READ (1U << 0)
 #define OSVC_CLIPBOARD_FLAG_WRITE (1U << 1)
+/* clipboard.set also writes the primary selection, which a Linux terminal
+ * pastes with Shift+Insert. A sender sets it only with the write flag, and
+ * only for a KVM whose session.config has "clipboard_primary". */
+#define OSVC_CLIPBOARD_FLAG_PRIMARY (1U << 2)
 #define OSVC_CLIPBOARD_MAX_TEXT 65528U
 
 typedef enum {
