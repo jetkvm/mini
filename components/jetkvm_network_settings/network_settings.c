@@ -279,10 +279,12 @@ static void apply_worker(void *arg)
         if (s_apply_failed) ESP_LOGE(TAG, "Network rollback failed: save=%s apply=%s",
             esp_err_to_name(persisted), esp_err_to_name(restored));
     }
-    /* A save can change IPv4 and the IPv6 mode at once. A mode that the
-     * interface does not take goes back to the one in effect. */
-    if (s_settings.ipv6_mode != s_previous.ipv6_mode &&
-        apply_ipv6(active_netif(), s_settings.ipv6_mode) != ESP_OK) {
+    /* IPv6 goes to the stored mode after each IPv4 apply, changed or not: a
+     * save can change both, and a link-up event during the delay above can
+     * have applied a mode that the rollback has taken back since. A new mode
+     * that the interface does not take goes back to the one in effect. */
+    if (apply_ipv6(active_netif(), s_settings.ipv6_mode) != ESP_OK &&
+        s_settings.ipv6_mode != s_previous.ipv6_mode) {
         ESP_LOGW(TAG, "IPv6 mode not applied");
         s_settings.ipv6_mode = s_previous.ipv6_mode;
         (void)apply_ipv6(active_netif(), s_settings.ipv6_mode);

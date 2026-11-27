@@ -42,22 +42,27 @@ static void hostname_changed(const char *hostname, void *arg)
  * mdns_init(), so it runs after that one and its request is the later one in
  * the responder's queue. */
 static atomic_bool s_ipv4_only;
-static void keep_ipv6_out(esp_netif_t *netif)
+static esp_err_t keep_ipv6_out(esp_netif_t *netif)
 {
-    if (netif) (void)mdns_netif_action(netif, MDNS_EVENT_DISABLE_IP6);
+    return netif ? mdns_netif_action(netif, MDNS_EVENT_DISABLE_IP6) : ESP_OK;
 }
 static void got_ipv6(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     (void)arg; (void)base; (void)id;
-    if (data && atomic_load(&s_ipv4_only)) keep_ipv6_out(((const ip_event_got_ip6_t *)data)->esp_netif);
+    if (!data || !atomic_load(&s_ipv4_only)) return;
+    esp_err_t err = keep_ipv6_out(((const ip_event_got_ip6_t *)data)->esp_netif);
+    if (err != ESP_OK) ESP_LOGW(TAG, "mDNS IPv6 not turned off for a new address: %s", esp_err_to_name(err));
 }
-/* For the interfaces that have an IPv6 address already. */
-static void apply_families(bool ipv4_only)
+/* For the interfaces that have an IPv6 address already. An error means that
+ * an interface can still answer over IPv6, so the caller must not record
+ * "ipv4_only" as running. */
+static esp_err_t apply_families(bool ipv4_only)
 {
     atomic_store(&s_ipv4_only, ipv4_only);
-    if (!ipv4_only) return;
-    keep_ipv6_out(esp_netif_get_handle_from_ifkey("ETH_DEF"));
-    keep_ipv6_out(esp_netif_get_handle_from_ifkey("WIFI_STA_DEF"));
+    if (!ipv4_only) return ESP_OK;
+    esp_err_t err = keep_ipv6_out(esp_netif_get_handle_from_ifkey("ETH_DEF"));
+    if (err == ESP_OK) err = keep_ipv6_out(esp_netif_get_handle_from_ifkey("WIFI_STA_DEF"));
+    return err;
 }
 
 static void stop_responder(void)
@@ -88,8 +93,11 @@ static esp_err_t start_responder(const jetkvm_mdns_plan_t *plan)
     if (err == ESP_OK) err = mdns_service_add(plan->instance, JETKVM_MDNS_SERVICE_TYPE,
                                               JETKVM_MDNS_SERVICE_PROTO, plan->port,
                                               items, JETKVM_MDNS_TXT_COUNT);
+    /* The policy first: got_ipv6 reads it from the moment it is registered,
+     * and after an "ipv4_only" responder it would still read true. */
+    atomic_store(&s_ipv4_only, plan->ipv4_only);
     if (err == ESP_OK) err = esp_event_handler_register(IP_EVENT, IP_EVENT_GOT_IP6, got_ipv6, NULL);
-    if (err == ESP_OK) apply_families(plan->ipv4_only);
+    if (err == ESP_OK) err = apply_families(plan->ipv4_only);
     if (err != ESP_OK) stop_responder();
     return err;
 }
@@ -113,7 +121,7 @@ static esp_err_t update_responder(const jetkvm_mdns_plan_t *plan, unsigned chang
         err = mdns_service_txt_set(JETKVM_MDNS_SERVICE_TYPE, JETKVM_MDNS_SERVICE_PROTO,
                                    items, JETKVM_MDNS_TXT_COUNT);
     }
-    if (err == ESP_OK && (changes & JETKVM_MDNS_FAMILIES)) apply_families(plan->ipv4_only);
+    if (err == ESP_OK && (changes & JETKVM_MDNS_FAMILIES)) err = apply_families(plan->ipv4_only);
     return err;
 }
 

@@ -28,19 +28,42 @@ const addressTowards = host => new Promise((resolve, reject) => {
   });
 });
 
-// A name of a DNS message at `offset`: [name, the offset after it].
+// A name of a DNS message at `offset`: [name, the offset after it]. Throws on
+// a name that leaves the message or whose pointers make a loop: a name of 255
+// bytes has fewer labels and pointers than that.
 function dnsName(message, offset) {
   const labels = [];
   let after = null;
-  for (;;) {
-    const length = message[offset];
+  for (let steps = 0; steps < 255; steps++) {
+    const length = message.readUInt8(offset);
     if (length === 0) return [labels.join('.'), after ?? offset + 1];
     if ((length & 0xc0) === 0xc0) {
       after ??= offset + 2;
-      offset = ((length & 0x3f) << 8) | message[offset + 1];
+      offset = ((length & 0x3f) << 8) | message.readUInt8(offset + 1);
     } else {
       labels.push(message.toString('latin1', offset + 1, offset + 1 + length));
       offset += 1 + length;
+    }
+  }
+  throw new RangeError('a DNS name without an end');
+}
+
+// Adds the A and AAAA records that a DNS answer has for `name` to `found`.
+function addRecords(message, name, found) {
+  if (!(message.readUInt16BE(2) & 0x8000)) return;
+  let offset = 12;
+  for (let i = 0; i < message.readUInt16BE(4); i++) offset = dnsName(message, offset)[1] + 4;
+  const records = message.readUInt16BE(6) + message.readUInt16BE(8) + message.readUInt16BE(10);
+  for (let i = 0; i < records; i++) {
+    const [owner, next] = dnsName(message, offset);
+    const type = message.readUInt16BE(next);
+    const size = message.readUInt16BE(next + 8);
+    const data = message.subarray(next + 10, next + 10 + size);
+    offset = next + 10 + size;
+    if (owner.toLowerCase() !== name.toLowerCase()) continue;
+    if (type === 1 && size === 4) found.a.add([...data].join('.'));
+    if (type === 28 && size === 16) {
+      found.aaaa.add(Array.from({ length: 8 }, (_, group) => data.readUInt16BE(group * 2).toString(16)).join(':'));
     }
   }
 }
@@ -51,21 +74,12 @@ async function mdnsAddresses(name, local, seconds = 4) {
   const socket = dgram.createSocket({ type: 'udp4', reuseAddr: true, reusePort: true });
   const found = { a: new Set(), aaaa: new Set() };
   socket.on('message', message => {
-    if (!(message.readUInt16BE(2) & 0x8000)) return;
-    let offset = 12;
-    for (let i = 0; i < message.readUInt16BE(4); i++) offset = dnsName(message, offset)[1] + 4;
-    const records = message.readUInt16BE(6) + message.readUInt16BE(8) + message.readUInt16BE(10);
-    for (let i = 0; i < records; i++) {
-      const [owner, next] = dnsName(message, offset);
-      const type = message.readUInt16BE(next);
-      const size = message.readUInt16BE(next + 8);
-      const data = message.subarray(next + 10, next + 10 + size);
-      offset = next + 10 + size;
-      if (owner.toLowerCase() !== name.toLowerCase()) continue;
-      if (type === 1) found.a.add([...data].join('.'));
-      if (type === 28) {
-        found.aaaa.add(Array.from({ length: 8 }, (_, group) => data.readUInt16BE(group * 2).toString(16)).join(':'));
-      }
+    try {
+      addRecords(message, name, found);
+    } catch (error) {
+      // Each host of the link sends to this group; a packet that does not
+      // parse is not the Mini's answer.
+      if (!(error instanceof RangeError)) throw error;
     }
   });
   await new Promise((resolve, reject) => socket.once('error', reject).bind(5353, resolve));
@@ -127,9 +141,13 @@ test('ipv6_mode gives the Mini IPv6 addresses for its page, its sessions and its
   const found = await mini.rpc('getNetworkSettings');
   const set = values => mini.rpc('setNetworkSettings', { settings: { ...found, mdns_mode: 'auto', ...values } });
   const state = () => mini.rpc('getNetworkState');
-  const own = new URL(mini.url).hostname;
+  // The Mini's IPv4 address as its A record and its candidates give it; the
+  // bench file can name the Mini by a host name.
+  const own = (await state()).ipv4_address;
+  assert.match(own ?? '', /^\d+\.\d+\.\d+\.\d+$/, 'the Mini has no IPv4 address');
   const local = await addressTowards(own);
   const name = `${found.hostname.toLowerCase()}.local`;
+  const routed = value => value.ipv6_addresses.map(one => groups(one.address));
   // The records settle a few seconds after a change.
   const mdns = check => until(() => mdnsAddresses(name, local), check, 30);
 
@@ -151,12 +169,19 @@ test('ipv6_mode gives the Mini IPv6 addresses for its page, its sessions and its
   assert.equal((await mini.rpc('getNetworkSettings')).ipv6_mode, 'link_local');
 
   await set({ ipv6_mode: 'slaac' });
-  const now = await until(state, value => value.ipv6_addresses.length > 0, 30).catch(() => null);
-  if (!now) {
+  // "No prefix" is an answer with an empty list for 30 s. A call that fails
+  // or an answer without the list is a failure, not a reason to skip.
+  let now = null;
+  const waited = await until(async () => {
+    now = null;
+    now = await state();
+    return now;
+  }, value => value.ipv6_addresses.length > 0, 30).catch(error => error);
+  if (waited instanceof Error) {
+    if (!Array.isArray(now?.ipv6_addresses)) throw waited;
     // close() stores the mode as found.
     return t.skip('no router of this network advertised an IPv6 prefix in 30 s, so the steps with a routed address did not run');
   }
-  const routed = value => value.ipv6_addresses.map(one => groups(one.address));
   const address = now.ipv6_addresses[0].address;
   for (const one of now.ipv6_addresses) assert.match(one.address, /^[0-9a-f:]+$/, 'an address is not in lower case');
   assert.equal(now.ipv6_link_local, linkLocal);
@@ -166,6 +191,26 @@ test('ipv6_mode gives the Mini IPv6 addresses for its page, its sessions and its
   // IPv4 is as before.
   assert.equal(await answers(mini.url), 200);
   assert.equal(now.ipv4_ready, true);
+
+  // A save that sets IPv4 up again leaves the IPv6 addresses as they are:
+  // the Mini's own address as a static one, then DHCP again.
+  const lease = now.dhcp_lease ?? {};
+  if (found.ipv4_mode === 'dhcp' && lease.netmask) {
+    const ipv4_static = { address: own, netmask: lease.netmask, gateway: lease.routers?.[0] ?? '', dns: lease.dns_servers ?? [] };
+    for (const ipv4 of [{ ipv4_mode: 'static', ipv4_static }, { ipv4_mode: 'dhcp' }]) {
+      await set({ ipv6_mode: 'slaac', ...ipv4 });
+      // The Mini applies the save a second after its answer.
+      await sleep(5000);
+      await mini.open();
+      const after = await until(state, value => value.ipv4_ready, 60);
+      assert.equal((await mini.rpc('getNetworkSettings')).ipv4_mode, ipv4.ipv4_mode);
+      assert.equal(after.ipv6_link_local, linkLocal, `the link-local address after a save of ${ipv4.ipv4_mode}`);
+      assert.ok(routed(after).includes(groups(address)), `the IPv6 address is gone after a save of ${ipv4.ipv4_mode}`);
+      assert.equal(await answers(url), 200, `the IPv6 address answers after a save of ${ipv4.ipv4_mode}`);
+    }
+  } else {
+    t.diagnostic('the Mini has no DHCP lease, so no save of IPv4 settings ran');
+  }
 
   // mDNS: "auto" announces the IPv6 addresses, "ipv4_only" does not, and
   // "auto" brings them back.
