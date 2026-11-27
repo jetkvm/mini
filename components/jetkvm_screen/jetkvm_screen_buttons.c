@@ -11,6 +11,7 @@
 
 #include "jetkvm_board_config.h"
 #include "jetkvm_screen_button.h"
+#include "jetkvm_screen_home_address.h"
 #include "jetkvm_screen_orientation.h"
 #include "jetkvm_screen_regulatory.h"
 #include "local_display_settings.h"
@@ -286,6 +287,8 @@ static void layout(void)
         lv_obj_set_width(logo, LV_SIZE_CONTENT);
         lv_obj_remove_state(logo, LV_STATE_USER_1);
     }
+    /* The address line is 22 px narrower beside a vertical strip. */
+    jetkvm_screen_home_address_fit();
 }
 
 static void focus(void)
