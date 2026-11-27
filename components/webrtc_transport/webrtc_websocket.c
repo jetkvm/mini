@@ -356,6 +356,8 @@ static esp_err_t receive_signal(websocket_client_t *client, const uint8_t *wire,
             webrtc_http_ipv4_t peer, device;
             bool have_peer = socket_ipv4(client->fd, true, &peer);
             bool have_device = socket_ipv4(client->fd, false, &device);
+            webrtc_transport_session_set_through_tailscale(
+                client->session_id, jetkvm_access_socket_through_tailscale(client->fd));
             webrtc_http_candidate_policy_begin(&client->candidates, client->session_id,
                 have_peer ? &peer : NULL, have_device ? &device : NULL);
             char *sdp = jetkvm_memory_policy_control_alloc(JETKVM_CLOUD_SIGNAL_MAX_SDP_SIZE + 1U);

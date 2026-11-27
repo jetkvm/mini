@@ -38,6 +38,10 @@ void jetkvm_screen_buttons_set_wifi_setup(bool active, bool stoppable);
  * canvas edge beside the buttons and the screens keep clear of it. */
 void jetkvm_screen_buttons_set_rotation(uint16_t degrees);
 
+/* Advanced > Tailscale Only appeared or went: the buttons step over the
+ * entries that are on the page. */
+void jetkvm_screen_buttons_set_tailscale_only(bool shown);
+
 #else
 
 static inline void jetkvm_screen_buttons_init(TaskHandle_t task, uint32_t notify_bits)
@@ -61,6 +65,11 @@ static inline void jetkvm_screen_buttons_set_wifi_setup(bool active, bool stoppa
 static inline void jetkvm_screen_buttons_set_rotation(uint16_t degrees)
 {
     (void)degrees;
+}
+
+static inline void jetkvm_screen_buttons_set_tailscale_only(bool shown)
+{
+    (void)shown;
 }
 
 #endif

@@ -141,9 +141,22 @@ static int nvs_get_u16(int h, const char *key, uint16_t *value) {
     if (!idle_minutes_stored) return ESP_ERR_NVS_NOT_FOUND;
     *value = stored_idle_minutes; return 0;
 }
+/* "Web interface through Tailscale only" is the one u8 the access namespace holds. */
+static uint8_t stored_tailscale_only;
+static bool tailscale_only_stored;
+static int nvs_set_u8(int h, const char *key, uint8_t value) {
+    assert(h == 1 && !strcmp(key, "ts_only"));
+    if (fail_save) return ESP_FAIL;
+    stored_tailscale_only = value; tailscale_only_stored = true; return 0;
+}
+static int nvs_get_u8(int h, const char *key, uint8_t *value) {
+    assert(h == 1 && !strcmp(key, "ts_only"));
+    if (!tailscale_only_stored) return ESP_ERR_NVS_NOT_FOUND;
+    *value = stored_tailscale_only; return 0;
+}
 static int nvs_erase_key(int h, const char *key) { (void)h; (void)key; staged_record.size = 0; return 0; }
 static int nvs_erase_all(int h) {
-    if (h == 1) idle_minutes_stored = false;
+    if (h == 1) idle_minutes_stored = tailscale_only_stored = false;
     staged_record.size = 0; return 0;
 }
 static int seek(nvs_iterator_t *p) {
@@ -208,15 +221,36 @@ static int test_getpeername(int fd, struct sockaddr *peer, socklen_t *size) {
 }
 #define getpeername test_getpeername
 static const char *server_ip = "192.0.2.10";
+/* The listener's other open connections, by the address each arrived on;
+ * the socket of a request (1) arrived on server_ip. closed_sockets has the
+ * ones that the device asked HTTPD to close. */
+#define OPEN_SOCKETS 8
+static const char *socket_ips[OPEN_SOCKETS];
+static bool closed_sockets[OPEN_SOCKETS];
 static int test_getsockname(int fd, struct sockaddr *local, socklen_t *size) {
-    (void)fd; (void)size;
+    (void)size;
+    const char *ip = fd >= 0 && fd < OPEN_SOCKETS && socket_ips[fd] ? socket_ips[fd] : server_ip;
     memset(local, 0, sizeof(struct sockaddr_storage));
-    local->sa_family = strchr(server_ip, ':') ? AF_INET6 : AF_INET;
-    return inet_pton(local->sa_family, server_ip, local->sa_family == AF_INET ?
+    local->sa_family = strchr(ip, ':') ? AF_INET6 : AF_INET;
+    return inet_pton(local->sa_family, ip, local->sa_family == AF_INET ?
         (void *)&((struct sockaddr_in *)local)->sin_addr :
         (void *)&((struct sockaddr_in6 *)local)->sin6_addr) == 1 ? 0 : -1;
 }
 #define getsockname test_getsockname
+static esp_err_t httpd_get_client_list(void *server, size_t *count, int *sockets) {
+    (void)server;
+    size_t open = 0;
+    for (int fd = 0; fd < OPEN_SOCKETS; ++fd) if (socket_ips[fd]) { assert(open < *count); sockets[open++] = fd; }
+    *count = open; return 0;
+}
+static esp_err_t httpd_sess_trigger_close(void *server, int fd) {
+    (void)server; assert(fd >= 0 && fd < OPEN_SOCKETS); closed_sockets[fd] = true; return 0;
+}
+/* The Mini's Tailscale address, or NULL while it has none. */
+static const char *tailscale_ip;
+static bool tailscale_address(uint8_t ipv4[4]) {
+    return tailscale_ip && inet_pton(AF_INET, tailscale_ip, ipv4) == 1;
+}
 /* PRODUCTION_IMPLEMENTATIONS */
 
 static void assert_status(bool setup, bool pending, bool error) {
@@ -683,5 +717,84 @@ int main(void) {
     check_host("kvm.lab.example", false);
     reboot_runtime(); start_access();
     assert(jetkvm_access_get_extra_host_names(names, JETKVM_ACCESS_EXTRA_HOST_NAMES) == 0);
+
+    /* "Web interface through Tailscale only". Off, the default, admits each
+     * connection. On, it admits only a connection that arrived on the Mini's
+     * Tailscale address, closes the other open ones, and answers no request
+     * on a connection that stayed open. */
+    enum { REQUEST = 1, LAN, TAILSCALE, LAN_V6, TAILSCALE_MAPPED, OTHER_TAILNET_HOST };
+    assert(jetkvm_access_register((void *)1, &device) == ESP_OK);
+    jetkvm_access_set_tailscale_address(tailscale_address);
+    tailscale_ip = "100.101.102.103";
+    socket_ips[LAN] = "192.0.2.10"; socket_ips[TAILSCALE] = "100.101.102.103";
+    socket_ips[LAN_V6] = "2001:db8::10"; socket_ips[TAILSCALE_MAPPED] = "::ffff:100.101.102.103";
+    /* An address of the Tailscale range that is not the Mini's own. */
+    socket_ips[OTHER_TAILNET_HOST] = "100.101.102.104";
+    assert(!jetkvm_access_get_tailscale_only());
+    for (int fd = LAN; fd <= OTHER_TAILNET_HOST; ++fd) assert(jetkvm_access_admits_socket(fd));
+    /* Which connection came through Tailscale does not depend on the setting. */
+    assert(!jetkvm_access_socket_through_tailscale(LAN) && jetkvm_access_socket_through_tailscale(TAILSCALE) &&
+           !jetkvm_access_socket_through_tailscale(LAN_V6) &&
+           jetkvm_access_socket_through_tailscale(TAILSCALE_MAPPED) &&
+           !jetkvm_access_socket_through_tailscale(OTHER_TAILNET_HOST));
+    host_header = "192.0.2.10";
+    assert(request("/device", HTTP_GET, "", NULL, NULL) == 200 && !strcmp(response, "{}"));
+    /* A value that is not stored changes nothing. */
+    fail_save = true;
+    assert(jetkvm_access_set_tailscale_only(true) && !jetkvm_access_get_tailscale_only());
+    fail_save = false;
+    for (int fd = 0; fd < OPEN_SOCKETS; ++fd) assert(!closed_sockets[fd]);
+    assert(!jetkvm_access_set_tailscale_only(true) && jetkvm_access_get_tailscale_only());
+    assert(closed_sockets[LAN] && closed_sockets[LAN_V6] && closed_sockets[OTHER_TAILNET_HOST] &&
+           !closed_sockets[TAILSCALE] && !closed_sockets[TAILSCALE_MAPPED]);
+    assert(!jetkvm_access_admits_socket(LAN) && !jetkvm_access_admits_socket(LAN_V6) &&
+           !jetkvm_access_admits_socket(OTHER_TAILNET_HOST) &&
+           jetkvm_access_admits_socket(TAILSCALE) && jetkvm_access_admits_socket(TAILSCALE_MAPPED));
+    /* A request on a local connection that stayed open gets no answer. One
+     * that keeps its connection is closed through HTTPD; one with a body
+     * closes by its handler result. */
+    memset(closed_sockets, 0, sizeof(closed_sockets));
+    assert(request("/device", HTTP_GET, "", NULL, NULL) == 200 && !response[0] &&
+           last_result == ESP_OK && closed_sockets[REQUEST]);
+    closed_sockets[REQUEST] = false;
+    assert(request("/auth/login-local", HTTP_POST, "{\"password\":\"12345678\"}", NULL, NULL) == 200 &&
+           !response[0] && last_result != ESP_OK && !closed_sockets[REQUEST]);
+    httpd_req_t local_socket = {.handle = (void *)1, .uri = "/webrtc/signaling/client",
+        .method = HTTP_GET, .origin = "http://192.0.2.10"};
+    assert(jetkvm_access_check_request(&local_socket, true) != ESP_OK && !response[0]);
+    /* The same requests through Tailscale are answered, by address and by name. */
+    memset(closed_sockets, 0, sizeof(closed_sockets));
+    server_ip = "100.101.102.103"; host_header = "100.101.102.103";
+    assert(request("/device", HTTP_GET, "", NULL, NULL) == 200 && !strcmp(response, "{}") &&
+           !closed_sockets[REQUEST]);
+    host_header = "mini.local";
+    assert(request("/device", HTTP_GET, "", NULL, NULL) == 200 && !strcmp(response, "{}"));
+    /* While the Mini has no Tailscale address, no connection is admitted. */
+    tailscale_ip = NULL;
+    assert(!jetkvm_access_admits_socket(TAILSCALE) && !jetkvm_access_socket_through_tailscale(TAILSCALE));
+    assert(request("/device", HTTP_GET, "", NULL, NULL) == 200 && !response[0]);
+    tailscale_ip = "100.101.102.103";
+    /* The setting is stored: it is on after a restart. */
+    reboot_runtime(); start_access();
+    assert(jetkvm_access_register((void *)1, &device) == ESP_OK);
+    assert(jetkvm_access_get_tailscale_only() && !jetkvm_access_admits_socket(LAN) &&
+           jetkvm_access_admits_socket(TAILSCALE));
+    /* Off again: the local address answers, also after a restart. */
+    memset(closed_sockets, 0, sizeof(closed_sockets));
+    assert(!jetkvm_access_set_tailscale_only(false) && !jetkvm_access_get_tailscale_only());
+    for (int fd = 0; fd < OPEN_SOCKETS; ++fd) assert(!closed_sockets[fd]);
+    server_ip = "192.0.2.10"; host_header = "192.0.2.10";
+    assert(jetkvm_access_admits_socket(LAN));
+    assert(request("/device", HTTP_GET, "", NULL, NULL) == 200 && !strcmp(response, "{}"));
+    reboot_runtime(); start_access();
+    assert(!jetkvm_access_get_tailscale_only());
+    /* A factory reset turns it off: the way back that needs no menu. */
+    assert(!jetkvm_access_set_tailscale_only(true));
+    reboot_runtime(); start_access();
+    assert(jetkvm_access_get_tailscale_only());
+    assert(!jetkvm_factory_reset_request(NULL)); complete_reset();
+    assert(!jetkvm_access_get_tailscale_only() && jetkvm_access_admits_socket(LAN));
+    host_header = "mini.local";
+    memset(socket_ips, 0, sizeof(socket_ips));
     puts("Setup/reset integration: HTTP modes, persistence, rejection, login, legacy records, erasure and failed-phase recovery: PASS");
 }

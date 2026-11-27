@@ -11,7 +11,7 @@ import { NestedSettingsGroup } from "@components/NestedSettingsGroup";
 import { SelectMenuBasic } from "@components/SelectMenuBasic";
 import { SettingsItem } from "@components/SettingsItem";
 import { useCopyToClipboard } from "@components/useCopyToClipBoard";
-import { TailscaleStatus } from "@hooks/stores";
+import { TailscaleOnlyAccess, TailscaleStatus, useCapability } from "@hooks/stores";
 import { JsonRpcResponse, useJsonRpc } from "@hooks/useJsonRpc";
 import { m } from "@localizations/messages.js";
 import notifications from "@/notifications";
@@ -38,6 +38,10 @@ export default function TailscaleCard() {
   const [isSavingControlURL, setIsSavingControlURL] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [showLogout, setShowLogout] = useState(false);
+  // "Web interface through Tailscale only", on firmware that has it.
+  const hasOnlyAccess = useCapability("tailscale_only");
+  const [onlyAccess, setOnlyAccess] = useState<TailscaleOnlyAccess | null>(null);
+  const [showOnlyAccess, setShowOnlyAccess] = useState(false);
   // The user has opened the login page; the page waits for the login.
   const [loginOpened, setLoginOpened] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -70,11 +74,24 @@ export default function TailscaleCard() {
     });
   }, [send]);
 
+  // The setting can also change on the screen of the KVM, so it is read
+  // with the status.
+  const refreshOnlyAccess = useCallback(() => {
+    if (!hasOnlyAccess) return;
+    send("getTailscaleOnlyAccess", {}, resp => {
+      if (!("error" in resp)) setOnlyAccess(resp.result as TailscaleOnlyAccess);
+    });
+  }, [hasOnlyAccess, send]);
+
   useEffect(() => {
-    refreshStatus();
-    const timer = window.setInterval(refreshStatus, 3000);
+    const refresh = () => {
+      refreshStatus();
+      refreshOnlyAccess();
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 3000);
     return () => window.clearInterval(timer);
-  }, [refreshStatus]);
+  }, [refreshStatus, refreshOnlyAccess]);
 
   const saveControlURL = useCallback(
     (controlURL: string) => {
@@ -107,9 +124,10 @@ export default function TailscaleCard() {
         if ("error" in resp) notifications.error(errorText(resp));
         else onDone?.();
         refreshStatus();
+        refreshOnlyAccess();
       });
     },
-    [refreshStatus, send],
+    [refreshStatus, refreshOnlyAccess, send],
   );
 
   const connectWithAuthKey = (authKey: string, onDone: () => void) =>
@@ -139,6 +157,9 @@ export default function TailscaleCard() {
 
   // Firmware without loggedIn reports an identity only while it is connected.
   const loggedIn = status.loggedIn ?? connected;
+  // While the web interface answers through Tailscale only, the KVM refuses
+  // to leave its tailnet, so the controls that ask for that are locked.
+  const onlyAccessOn = !!onlyAccess?.enabled;
 
   return (
     <div className="space-y-4">
@@ -255,10 +276,31 @@ export default function TailscaleCard() {
                 <Checkbox
                   aria-label={m.tailscale_enable()}
                   checked={status.enabled ?? false}
-                  disabled={isSaving}
+                  disabled={isSaving || onlyAccessOn}
                   onChange={e => setEnabled(e.target.checked)}
                 />
               </SettingsItem>
+              {onlyAccess && (
+                <SettingsItem
+                  size="SM"
+                  title={m.tailscale_only_title()}
+                  description={
+                    onlyAccess.enabled || onlyAccess.throughTailscale
+                      ? m.tailscale_only_description()
+                      : m.tailscale_only_hint()
+                  }
+                >
+                  <Checkbox
+                    aria-label={m.tailscale_only_title()}
+                    checked={onlyAccess.enabled}
+                    disabled={isSaving || (!onlyAccess.enabled && !onlyAccess.throughTailscale)}
+                    onChange={e => {
+                      if (e.target.checked) setShowOnlyAccess(true);
+                      else run("setTailscaleOnlyAccess", { enabled: false });
+                    }}
+                  />
+                </SettingsItem>
+              )}
               <SettingsItem
                 size="SM"
                 title={m.tailscale_logout()}
@@ -269,7 +311,7 @@ export default function TailscaleCard() {
                   theme="light"
                   type="button"
                   text={m.tailscale_logout()}
-                  disabled={isSaving}
+                  disabled={isSaving || onlyAccessOn}
                   onClick={() => setShowLogout(true)}
                 />
               </SettingsItem>
@@ -333,6 +375,19 @@ export default function TailscaleCard() {
           )}
         </div>
       </Fold>
+
+      <ConfirmDialog
+        open={showOnlyAccess}
+        onClose={() => setShowOnlyAccess(false)}
+        title={m.tailscale_only_dialog_title()}
+        description={m.tailscale_only_dialog_description()}
+        variant="danger"
+        confirmText={m.tailscale_only_dialog_confirm()}
+        isConfirming={isSaving}
+        onConfirm={() =>
+          run("setTailscaleOnlyAccess", { enabled: true }, () => setShowOnlyAccess(false))
+        }
+      />
 
       <ConfirmDialog
         open={showLogout}

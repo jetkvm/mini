@@ -82,6 +82,19 @@ bool rpc_get_tailscale_control_url(const jetkvm_control_context_t *context, cons
     return dispatch->result != NULL;
 }
 
+/* While "Web interface through Tailscale only" is on, a call that can take
+ * the device out of its tailnet would leave the web interface unreachable. */
+static bool only_access_on(void)
+{
+    return s_default_tailscale_only.get && s_default_tailscale_only.get(s_default_tailscale_only.ctx);
+}
+static bool refused_while_only_access(rpc_dispatch_result_t *dispatch)
+{
+    if (!only_access_on()) return false;
+    return set_invalid_hid_params(dispatch,
+        "Turn off \"Web interface through Tailscale only\" first");
+}
+
 static bool update(const jetkvm_tailscale_context_t *ts,
                    const jetkvm_tailscale_config_t *config, rpc_dispatch_result_t *dispatch)
 {
@@ -102,6 +115,7 @@ bool rpc_set_tailscale_control_url(const jetkvm_control_context_t *context, cons
         !copy_json_string(rpc_param(params, "controlURL"), config.control_url,
             sizeof(config.control_url), true))
         return set_invalid_hid_params(dispatch, "Expected controlURL string");
+    if (refused_while_only_access(dispatch)) return true;
     return update(ts, &config, dispatch);
 }
 
@@ -117,6 +131,9 @@ bool rpc_set_tailscale_config(const jetkvm_control_context_t *context, const cJS
         cJSON_GetArraySize(params) != (key ? 2 : 1) ||
         (key && !copy_json_string(key, config.auth_key, sizeof(config.auth_key), true)))
         return set_invalid_hid_params(dispatch, "Expected enabled boolean and optional authKey string");
+    /* Enabling without a key changes nothing for a device that is in its
+     * tailnet; a key enrolls it again, possibly into another tailnet. */
+    if ((!cJSON_IsTrue(enabled) || key) && refused_while_only_access(dispatch)) return true;
     config.enabled = cJSON_IsTrue(enabled);
     return update(ts, &config, dispatch);
 }
@@ -132,8 +149,58 @@ bool rpc_logout_tailscale(const jetkvm_control_context_t *context, const cJSON *
         return true;
     }
     if (!require_no_rpc_params(params, dispatch)) return true;
+    if (refused_while_only_access(dispatch)) return true;
     const char *error = ts->logout(ts->ctx);
     if (error) return set_hid_unavailable(dispatch, error);
     dispatch->result = cJSON_CreateNull();
     return dispatch->result != NULL;
+}
+
+static bool only_access_missing(rpc_dispatch_result_t *dispatch)
+{
+    if (s_default_tailscale_only.get && s_default_tailscale_only.set) return false;
+    dispatch->error_code = -32601;
+    dispatch->error_message = "Method not found";
+    return true;
+}
+
+/* enabled: the stored setting. throughTailscale: this session may turn it on. */
+static bool only_access_result(const jetkvm_control_context_t *context, rpc_dispatch_result_t *dispatch)
+{
+    cJSON *result = cJSON_CreateObject();
+    if (!result ||
+        !cJSON_AddBoolToObject(result, "enabled",
+                               s_default_tailscale_only.get(s_default_tailscale_only.ctx)) ||
+        !cJSON_AddBoolToObject(result, "throughTailscale",
+                               context && context->session_through_tailscale)) {
+        cJSON_Delete(result);
+        return false;
+    }
+    dispatch->result = result;
+    return true;
+}
+
+bool rpc_get_tailscale_only_access(const jetkvm_control_context_t *context, const cJSON *params,
+                                   rpc_dispatch_result_t *dispatch)
+{
+    if (only_access_missing(dispatch) || !require_no_rpc_params(params, dispatch)) return true;
+    return only_access_result(context, dispatch);
+}
+
+bool rpc_set_tailscale_only_access(const jetkvm_control_context_t *context, const cJSON *params,
+                                   rpc_dispatch_result_t *dispatch)
+{
+    if (only_access_missing(dispatch)) return true;
+    const cJSON *enabled = rpc_param(params, "enabled");
+    if (!cJSON_IsObject(params) || cJSON_GetArraySize(params) != 1 || !cJSON_IsBool(enabled))
+        return set_invalid_hid_params(dispatch, "Expected enabled boolean");
+    /* Turning it on needs a Tailscale path that works now: the session that
+     * asks must have come through it. Turning it off is the way back, so
+     * any session may do that. */
+    if (cJSON_IsTrue(enabled) && !(context && context->session_through_tailscale))
+        return set_invalid_hid_params(dispatch,
+            "Open the web interface through Tailscale to turn this on");
+    const char *error = s_default_tailscale_only.set(cJSON_IsTrue(enabled), s_default_tailscale_only.ctx);
+    if (error) return set_hid_unavailable(dispatch, error);
+    return only_access_result(context, dispatch);
 }

@@ -9,6 +9,7 @@
 #include "jetkvm_board_config.h"
 #include "jetkvm_screen_buttons.h"
 #include "jetkvm_screen_regulatory.h"
+#include "jetkvm_screen_tailscale_only.h"
 #include "jetkvm_screen_usb_debugging.h"
 #include "local_display_settings.h"
 #include "ui.h"
@@ -103,6 +104,7 @@ bool host_ui_start(void)
     set_var_system_version("ESP-IDF 6.0.2");
     ui_init();
     jetkvm_screen_usb_debugging_init();
+    jetkvm_screen_tailscale_only_init();
     jetkvm_screen_regulatory_init();
     return true;
 }
@@ -126,6 +128,16 @@ static void set_button(unsigned button, bool pressed)
 void host_ui_tap(unsigned button)
 {
     set_button(button, true);
+    set_button(button, false);
+}
+
+void host_ui_hold(unsigned button, uint32_t milliseconds)
+{
+    set_button(button, true);
+    for (uint32_t held = 0; held < milliseconds; held += 10) {
+        lv_tick_inc(10);
+        (void)jetkvm_screen_buttons_poll(false);
+    }
     set_button(button, false);
 }
 

@@ -12,6 +12,7 @@
 #include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "cJSON.h"
 #include "device_api.h"
@@ -225,6 +226,8 @@ static esp_err_t session_handler(httpd_req_t *req)
         httpd_resp_set_status(req, "503 Service Unavailable");
         return httpd_resp_sendstr(req, "transport is not running");
     }
+    webrtc_transport_session_set_through_tailscale(
+        session_id, jetkvm_access_socket_through_tailscale(httpd_req_to_sockfd(req)));
     webrtc_http_candidate_policy_begin(
         candidate_policy(req), session_id, have_peer ? &peer : NULL,
         have_device ? &device : NULL);
@@ -677,12 +680,38 @@ static esp_err_t register_routes(httpd_handle_t server, bool secure)
  * browser's next request on that connection, so Chromium never reports the
  * fetch finished and a page waiting for network idle hangs.  Upstream's Go
  * server writes with TCP_NODELAY set by the runtime. */
-static esp_err_t http_session_opened(httpd_handle_t server, int fd)
+/* The connection that http_session_opened() refused last. HTTPD closes a
+ * connection whose open hook fails twice: once through the close hook, and
+ * once more in httpd_accept_conn(). The second close could reach a socket
+ * that another task opened in between under the same number, so the close
+ * hook leaves the refused connection to httpd_accept_conn(). Both hooks run
+ * on the plain listener's task only. */
+static int s_refused_fd = -1;
+static esp_err_t https_session_opened(httpd_handle_t server, int fd)
 {
     (void)server;
     int one = 1;
     (void)setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
     return ESP_OK;
+}
+static esp_err_t http_session_opened(httpd_handle_t server, int fd)
+{
+    /* "Web interface through Tailscale only": a connection that did not
+     * arrive on the Tailscale address ends here, before any HTTP exchange. */
+    if (!jetkvm_access_admits_socket(fd)) {
+        s_refused_fd = fd;
+        return ESP_FAIL;
+    }
+    return https_session_opened(server, fd);
+}
+static void http_session_closed(httpd_handle_t server, int fd)
+{
+    (void)server;
+    if (fd == s_refused_fd) {
+        s_refused_fd = -1;
+        return;
+    }
+    close(fd);
 }
 
 static void configure_http(httpd_config_t *config)
@@ -718,6 +747,7 @@ static void configure_http(httpd_config_t *config)
     config->req_hdr_timeout_ms = 5000;
     config->uri_match_fn = httpd_uri_match_wildcard;
     config->open_fn = http_session_opened;
+    config->close_fn = http_session_closed;
 }
 
 typedef struct { httpd_handle_t server; SemaphoreHandle_t done; bool quiesce_uploads; } cleanup_t;
@@ -773,6 +803,12 @@ static esp_err_t start_secure_listener(const jetkvm_tls_config_t *tls)
     if (!strcmp(tls->mode, "disabled")) return ESP_OK;
     httpd_ssl_config_t config = HTTPD_SSL_CONFIG_DEFAULT();
     configure_http(&config.httpd);
+    /* The HTTPS server calls the open hook after the TLS handshake and
+     * ignores its result, and it has its own close hook. So this listener
+     * cannot refuse a connection when it opens; the Host check of
+     * jetkvm_access refuses its requests instead. */
+    config.httpd.open_fn = https_session_opened;
+    config.httpd.close_fn = NULL;
     config.httpd.stack_size = 10240;
     config.httpd.task_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
     config.servercert = (const uint8_t *)tls->certificate;

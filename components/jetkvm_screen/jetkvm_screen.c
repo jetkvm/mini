@@ -32,6 +32,7 @@
 #include "jetkvm_screen_orientation.h"
 #include "jetkvm_screen_regulatory.h"
 #include "jetkvm_screen_usb_debugging.h"
+#include "jetkvm_screen_tailscale_only.h"
 #include "jetkvm_board_config.h"
 #include "jetkvm_control.h"
 #include "jetkvm_factory_reset.h"
@@ -461,12 +462,46 @@ static bool usb_debugging_store(void)
     return stored;
 }
 
+/* Advanced > Tailscale Only: the RPC the web UI's Tailscale page sends, here
+ * without a session. A call without a session may only turn the setting off,
+ * which is all the display asks for. Returns true when the device answered
+ * without an error. */
+static bool tailscale_only_turn_off(void)
+{
+    static const char request[] =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"setTailscaleOnlyAccess\","
+        "\"params\":{\"enabled\":false}}";
+    char response[192];
+    size_t length = 0;
+    jetkvm_control_result_t result = jetkvm_control_handle_rpc(
+        (const uint8_t *)request, sizeof(request) - 1U, response, sizeof(response), &length);
+    bool answered = result == JETKVM_CONTROL_RESPONSE_READY && length < sizeof(response);
+    if (answered) {
+        response[length] = '\0';
+    }
+    bool stored = answered && strstr(response, "\"error\"") == NULL;
+    if (!stored) {
+        ESP_LOGE(TAG, "Tailscale-only access from the display not turned off: %.*s",
+                 result == JETKVM_CONTROL_RESPONSE_READY ? (int)length : 0, response);
+    }
+    return stored;
+}
+
 /* Runs on its own internal-RAM stack: the screen task's stack lives in PSRAM
- * and the factory reset and USB debugging write NVS, which disables the
- * external cache. */
+ * and the factory reset, USB debugging and the Tailscale-only setting write
+ * NVS, which disables the external cache. */
 static void screen_rpc_worker(void *arg)
 {
     const char *method = arg;
+    if (strcmp(method, "setTailscaleOnlyAccess") == 0) {
+        /* No restart and no rebooting screen: the entry goes with the next
+         * state when the setting is off. */
+        if (tailscale_only_turn_off()) {
+            ESP_LOGW(TAG, "Tailscale-only access turned off from the display");
+        }
+        vTaskDelete(NULL);
+        return;
+    }
     vTaskDelay(pdMS_TO_TICKS(SCREEN_RPC_REBOOT_DELAY_MS));
     if (strcmp(method, "resetConfig") == 0) {
         const char *error = jetkvm_factory_reset_request(NULL);
@@ -614,7 +649,8 @@ static void screen_rpc_handler(const char *method, const char *params)
         return;
     }
 #endif
-    static const char *const supported[] = {"reboot", "resetConfig", "setUsbDebuggingState"};
+    static const char *const supported[] = {"reboot", "resetConfig", "setUsbDebuggingState",
+                                            "setTailscaleOnlyAccess"};
     const char *action = NULL;
     for (size_t i = 0; i < sizeof(supported) / sizeof(supported[0]); i++) {
         if (strcmp(method, supported[i]) == 0) {
@@ -640,6 +676,10 @@ static void screen_rpc_handler(const char *method, const char *params)
                     (void *)action, SCREEN_RPC_WORKER_PRIORITY, NULL) != pdPASS) {
         ESP_LOGE(TAG, "no memory for the display %s worker", action);
         screen_rpc_restore();
+        return;
+    }
+    if (strcmp(action, "setTailscaleOnlyAccess") == 0) {
+        /* The device does not restart for this one. */
         return;
     }
     loadScreen(SCREEN_ID_REBOOTING_SCREEN);
@@ -1023,6 +1063,9 @@ static void apply_state(const jetkvm_screen_state_t *state)
                      __ATOMIC_RELEASE);
     set_connection_label(objects.hdmi_status_label, state->hdmi_connected);
     jetkvm_screen_usb_debugging_apply(state->usb_debugging_enabled, state->usb_debugging_active);
+    if (jetkvm_screen_tailscale_only_apply(state->tailscale_only)) {
+        jetkvm_screen_buttons_set_tailscale_only(state->tailscale_only);
+    }
 
     set_label_text(objects.device_id, state->device_id);
     set_optional_label(objects.app_version_1, objects.cloud_account_id_container,
@@ -1362,6 +1405,7 @@ static esp_err_t screen_hardware_init(screen_context_t *screen)
     wifi_status_init();
     wifi_setup_menu_init();
     jetkvm_screen_usb_debugging_init();
+    jetkvm_screen_tailscale_only_init();
     jetkvm_screen_regulatory_init();
     jetkvm_screen_state_t initial_state = {
         .cloud_state = JETKVM_SCREEN_CLOUD_NOT_CONFIGURED,

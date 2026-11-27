@@ -384,6 +384,9 @@ bool rpc_set_tailscale_config(const jetkvm_control_context_t *, const cJSON *, r
 bool rpc_logout_tailscale(const jetkvm_control_context_t *, const cJSON *, rpc_dispatch_result_t *);
 bool rpc_get_tailscale_control_url(const jetkvm_control_context_t *, const cJSON *, rpc_dispatch_result_t *);
 bool rpc_set_tailscale_control_url(const jetkvm_control_context_t *, const cJSON *, rpc_dispatch_result_t *);
+extern jetkvm_tailscale_only_context_t s_default_tailscale_only;
+bool rpc_get_tailscale_only_access(const jetkvm_control_context_t *, const cJSON *, rpc_dispatch_result_t *);
+bool rpc_set_tailscale_only_access(const jetkvm_control_context_t *, const cJSON *, rpc_dispatch_result_t *);
 bool rpc_get_tls_state(const jetkvm_control_context_t *, const cJSON *, rpc_dispatch_result_t *);
 bool rpc_set_tls_state(const jetkvm_control_context_t *, const cJSON *, rpc_dispatch_result_t *);
 bool rpc_get_extra_hostnames(const jetkvm_control_context_t *, const cJSON *, rpc_dispatch_result_t *);

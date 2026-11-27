@@ -54,7 +54,10 @@ static bool add_capability(cJSON *list, bool present, const char *name)
  * setting.
  * "storage_download": the build registered a download into the TF card that
  * starts and cancels (startStorageDownload, cancelStorageDownload), so the
- * mount page shows "Download from URL". */
+ * mount page shows "Download from URL".
+ * "tailscale_only": the web server can answer on the Tailscale address only
+ * (getTailscaleOnlyAccess, setTailscaleOnlyAccess), so the Tailscale page
+ * shows that setting. */
 static cJSON *device_capabilities_json(const jetkvm_control_context_t *context)
 {
     cJSON *result = cJSON_CreateArray();
@@ -82,7 +85,9 @@ static cJSON *device_capabilities_json(const jetkvm_control_context_t *context)
                         context->set_network_settings, "mdns") ||
         !add_capability(result, s_default_storage_download.start &&
                                     s_default_storage_download.cancel,
-                        "storage_download")) {
+                        "storage_download") ||
+        !add_capability(result, s_default_tailscale_only.get && s_default_tailscale_only.set,
+                        "tailscale_only")) {
         cJSON_Delete(result);
         return NULL;
     }
