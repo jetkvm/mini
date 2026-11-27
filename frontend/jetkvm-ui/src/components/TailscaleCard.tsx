@@ -97,7 +97,7 @@ export default function TailscaleCard() {
     (controlURL: string) => {
       setIsSavingControlURL(true);
       configCalls.current++;
-      send("setTailscaleControlURL", { controlURL }, resp => {
+      void send("setTailscaleControlURL", { controlURL }, resp => {
         setIsSavingControlURL(false);
         if ("error" in resp) {
           notifications.error(m.tailscale_control_server_update_failed({ error: errorText(resp) }));
@@ -106,6 +106,15 @@ export default function TailscaleCard() {
         notifications.success(m.tailscale_control_server_update_success());
         controlURLDirty.current = false;
         refreshStatus();
+      }).then(sent => {
+        // As run(): a call that was not sent gets no answer.
+        if (sent) return;
+        setIsSavingControlURL(false);
+        notifications.error(
+          m.tailscale_control_server_update_failed({
+            error: m.advanced_usb_debugging_not_connected(),
+          }),
+        );
       });
     },
     [refreshStatus, send],
@@ -127,11 +136,12 @@ export default function TailscaleCard() {
         refreshOnlyAccess();
       }).then(sent => {
         // A call that was not sent gets no answer: the RPC channel was
-        // closed. Unlock the controls; the status is read again when the
-        // channel is back.
+        // closed. Say so and unlock the controls; the status is read again
+        // when the channel is back.
         if (sent) return;
         configPending.current = false;
         setIsSaving(false);
+        notifications.error(m.advanced_usb_debugging_not_connected());
       });
     },
     [refreshStatus, refreshOnlyAccess, send],
