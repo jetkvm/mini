@@ -137,9 +137,13 @@ static void mdns_network_changed(const jetkvm_network_settings_t *settings)
 {
     jetkvm_mdns_set_network(settings->hostname, settings->mdns_mode);
 }
+/* Setup completes once and does not revert while the device runs, and the
+ * responder starts with "not set up". Only the completed state is published,
+ * so the read at start-up cannot replace a report of the setup listener that
+ * arrived after that read. */
 static void mdns_setup_changed(void)
 {
-    jetkvm_mdns_set_setup(jetkvm_access_is_setup());
+    if (jetkvm_access_is_setup()) jetkvm_mdns_set_setup(true);
 }
 static void mdns_prepare(void)
 {
