@@ -9,6 +9,7 @@
 #include "jetkvm_board_config.h"
 #include "jetkvm_screen_buttons.h"
 #include "jetkvm_screen_regulatory.h"
+#include "jetkvm_screen_tailscale_only.h"
 #include "jetkvm_screen_usb_debugging.h"
 #include "local_display_settings.h"
 #include "ui.h"
@@ -103,6 +104,7 @@ bool host_ui_start(void)
     set_var_system_version("ESP-IDF 6.0.2");
     ui_init();
     jetkvm_screen_usb_debugging_init();
+    jetkvm_screen_tailscale_only_init();
     jetkvm_screen_regulatory_init();
     return true;
 }
@@ -127,6 +129,31 @@ void host_ui_tap(unsigned button)
 {
     set_button(button, true);
     set_button(button, false);
+}
+
+void host_ui_press(unsigned button)
+{
+    set_button(button, true);
+}
+
+void host_ui_keep(uint32_t milliseconds)
+{
+    for (uint32_t held = 0; held < milliseconds; held += 10) {
+        lv_tick_inc(10);
+        (void)jetkvm_screen_buttons_poll(false);
+    }
+}
+
+void host_ui_release(unsigned button)
+{
+    set_button(button, false);
+}
+
+void host_ui_hold(unsigned button, uint32_t milliseconds)
+{
+    host_ui_press(button);
+    host_ui_keep(milliseconds);
+    host_ui_release(button);
 }
 
 /* The width that LVGL gives `letter` before `next` (0 at the end of the text). */

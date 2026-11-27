@@ -932,7 +932,8 @@ export type Capability =
   | "usb_debugging" // the USB debugging switch (the Mini's USB Serial/JTAG port)
   | "extra_hostnames" // other host names the web server answers to (getExtraHostnames)
   | "storage_download" // device downloads an image from a URL into its storage
-  | "display_schedule"; // the local display dims or turns off between two times of day
+  | "display_schedule" // the local display dims or turns off between two times of day
+  | "tailscale_only"; // web server can answer on the Tailscale address only (getTailscaleOnlyAccess)
 
 export const useDeviceStore = create<DeviceState>(set => ({
   appVersion: null,
@@ -1037,6 +1038,13 @@ export interface TailscaleStatus {
   enabled?: boolean;
   authKeySet?: boolean;
   loggedIn?: boolean;
+}
+
+// "Web interface through Tailscale only": the stored setting, and whether
+// this session came through Tailscale and so may turn it on.
+export interface TailscaleOnlyAccess {
+  enabled: boolean;
+  throughTailscale: boolean;
 }
 
 export interface NetworkState {

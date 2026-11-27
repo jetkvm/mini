@@ -11,7 +11,7 @@ import { NestedSettingsGroup } from "@components/NestedSettingsGroup";
 import { SelectMenuBasic } from "@components/SelectMenuBasic";
 import { SettingsItem } from "@components/SettingsItem";
 import { useCopyToClipboard } from "@components/useCopyToClipBoard";
-import { TailscaleStatus } from "@hooks/stores";
+import { TailscaleOnlyAccess, TailscaleStatus, useCapability } from "@hooks/stores";
 import { JsonRpcResponse, useJsonRpc } from "@hooks/useJsonRpc";
 import { m } from "@localizations/messages.js";
 import notifications from "@/notifications";
@@ -38,6 +38,10 @@ export default function TailscaleCard() {
   const [isSavingControlURL, setIsSavingControlURL] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [showLogout, setShowLogout] = useState(false);
+  // "Web interface through Tailscale only", on firmware that has it.
+  const hasOnlyAccess = useCapability("tailscale_only");
+  const [onlyAccess, setOnlyAccess] = useState<TailscaleOnlyAccess | null>(null);
+  const [showOnlyAccess, setShowOnlyAccess] = useState(false);
   // The user has opened the login page; the page waits for the login.
   const [loginOpened, setLoginOpened] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -70,17 +74,30 @@ export default function TailscaleCard() {
     });
   }, [send]);
 
+  // The setting can also change on the screen of the KVM, so it is read
+  // with the status.
+  const refreshOnlyAccess = useCallback(() => {
+    if (!hasOnlyAccess) return;
+    send("getTailscaleOnlyAccess", {}, resp => {
+      if (!("error" in resp)) setOnlyAccess(resp.result as TailscaleOnlyAccess);
+    });
+  }, [hasOnlyAccess, send]);
+
   useEffect(() => {
-    refreshStatus();
-    const timer = window.setInterval(refreshStatus, 3000);
+    const refresh = () => {
+      refreshStatus();
+      refreshOnlyAccess();
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 3000);
     return () => window.clearInterval(timer);
-  }, [refreshStatus]);
+  }, [refreshStatus, refreshOnlyAccess]);
 
   const saveControlURL = useCallback(
     (controlURL: string) => {
       setIsSavingControlURL(true);
       configCalls.current++;
-      send("setTailscaleControlURL", { controlURL }, resp => {
+      void send("setTailscaleControlURL", { controlURL }, resp => {
         setIsSavingControlURL(false);
         if ("error" in resp) {
           notifications.error(m.tailscale_control_server_update_failed({ error: errorText(resp) }));
@@ -89,6 +106,15 @@ export default function TailscaleCard() {
         notifications.success(m.tailscale_control_server_update_success());
         controlURLDirty.current = false;
         refreshStatus();
+      }).then(sent => {
+        // As run(): a call that was not sent gets no answer.
+        if (sent) return;
+        setIsSavingControlURL(false);
+        notifications.error(
+          m.tailscale_control_server_update_failed({
+            error: m.advanced_usb_debugging_not_connected(),
+          }),
+        );
       });
     },
     [refreshStatus, send],
@@ -101,15 +127,24 @@ export default function TailscaleCard() {
       configPending.current = true;
       configCalls.current++;
       setIsSaving(true);
-      send(method, params, resp => {
+      void send(method, params, resp => {
         configPending.current = false;
         setIsSaving(false);
         if ("error" in resp) notifications.error(errorText(resp));
         else onDone?.();
         refreshStatus();
+        refreshOnlyAccess();
+      }).then(sent => {
+        // A call that was not sent gets no answer: the RPC channel was
+        // closed. Say so and unlock the controls; the status is read again
+        // when the channel is back.
+        if (sent) return;
+        configPending.current = false;
+        setIsSaving(false);
+        notifications.error(m.advanced_usb_debugging_not_connected());
       });
     },
-    [refreshStatus, send],
+    [refreshStatus, refreshOnlyAccess, send],
   );
 
   const connectWithAuthKey = (authKey: string, onDone: () => void) =>
@@ -139,6 +174,9 @@ export default function TailscaleCard() {
 
   // Firmware without loggedIn reports an identity only while it is connected.
   const loggedIn = status.loggedIn ?? connected;
+  // While the web interface answers through Tailscale only, the KVM refuses
+  // to leave its tailnet, so the controls that ask for that are locked.
+  const onlyAccessOn = !!onlyAccess?.enabled;
 
   return (
     <div className="space-y-4">
@@ -255,10 +293,27 @@ export default function TailscaleCard() {
                 <Checkbox
                   aria-label={m.tailscale_enable()}
                   checked={status.enabled ?? false}
-                  disabled={isSaving}
+                  disabled={isSaving || onlyAccessOn}
                   onChange={e => setEnabled(e.target.checked)}
                 />
               </SettingsItem>
+              {onlyAccess && (
+                <SettingsItem
+                  size="SM"
+                  title={m.tailscale_only_title()}
+                  description={m.tailscale_only_description()}
+                >
+                  <Checkbox
+                    aria-label={m.tailscale_only_title()}
+                    checked={onlyAccess.enabled}
+                    disabled={isSaving || (!onlyAccess.enabled && !onlyAccess.throughTailscale)}
+                    onChange={e => {
+                      if (e.target.checked) setShowOnlyAccess(true);
+                      else run("setTailscaleOnlyAccess", { enabled: false });
+                    }}
+                  />
+                </SettingsItem>
+              )}
               <SettingsItem
                 size="SM"
                 title={m.tailscale_logout()}
@@ -269,7 +324,7 @@ export default function TailscaleCard() {
                   theme="light"
                   type="button"
                   text={m.tailscale_logout()}
-                  disabled={isSaving}
+                  disabled={isSaving || onlyAccessOn}
                   onClick={() => setShowLogout(true)}
                 />
               </SettingsItem>
@@ -289,7 +344,7 @@ export default function TailscaleCard() {
               size="XS"
               label=""
               value={controlServerMode}
-              disabled={isSavingControlURL}
+              disabled={isSavingControlURL || onlyAccessOn}
               onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
                 const mode = e.target.value as ControlServerMode;
                 setControlServerMode(mode);
@@ -316,6 +371,7 @@ export default function TailscaleCard() {
                 label={m.tailscale_control_server_custom_url_label()}
                 placeholder={m.tailscale_control_server_custom_url_placeholder()}
                 value={controlURLInput}
+                disabled={onlyAccessOn}
                 onChange={e => {
                   controlURLDirty.current = true;
                   setControlURLInput(e.target.value);
@@ -326,13 +382,26 @@ export default function TailscaleCard() {
                 theme="primary"
                 type="button"
                 text={isSavingControlURL ? m.tailscale_saving() : m.tailscale_save()}
-                disabled={isSavingControlURL || !controlURLInput.trim()}
+                disabled={isSavingControlURL || onlyAccessOn || !controlURLInput.trim()}
                 onClick={() => saveControlURL(controlURLInput.trim())}
               />
             </NestedSettingsGroup>
           )}
         </div>
       </Fold>
+
+      <ConfirmDialog
+        open={showOnlyAccess}
+        onClose={() => setShowOnlyAccess(false)}
+        title={m.tailscale_only_dialog_title()}
+        description={m.tailscale_only_dialog_description()}
+        variant="danger"
+        confirmText={m.tailscale_only_dialog_confirm()}
+        isConfirming={isSaving}
+        onConfirm={() =>
+          run("setTailscaleOnlyAccess", { enabled: true }, () => setShowOnlyAccess(false))
+        }
+      />
 
       <ConfirmDialog
         open={showLogout}

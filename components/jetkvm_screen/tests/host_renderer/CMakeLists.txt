@@ -26,6 +26,7 @@ add_library(jetkvm_ui STATIC
     "${COMPONENT_DIR}/jetkvm_screen_home_address.c"
     "${COMPONENT_DIR}/jetkvm_screen_orientation.c"
     "${COMPONENT_DIR}/jetkvm_screen_usb_debugging.c"
+    "${COMPONENT_DIR}/jetkvm_screen_tailscale_only.c"
     "${COMPONENT_DIR}/jetkvm_screen_regulatory.c"
     "${COMPONENT_DIR}/regulatory.c"
     "${UI_DIR}/actions.c"
@@ -94,3 +95,6 @@ target_link_libraries(jetkvm_ui_renderer PRIVATE jetkvm_ui)
 
 add_executable(jetkvm_home_address_fit_test test_home_address_fit.c)
 target_link_libraries(jetkvm_home_address_fit_test PRIVATE jetkvm_ui)
+
+add_executable(jetkvm_tailscale_only_menu_test test_tailscale_only_menu.c)
+target_link_libraries(jetkvm_tailscale_only_menu_test PRIVATE jetkvm_ui)

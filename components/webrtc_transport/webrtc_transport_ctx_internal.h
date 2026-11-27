@@ -168,6 +168,9 @@ typedef struct {
     /* The browser offer's H.264 profiles, for the answer to use. */
     webrtc_h264_offer_profiles_t controlled_offer_h264_profiles;
     uint32_t local_access_epoch;
+    /* The signaling connection of the session arrived on the device's
+     * Tailscale address (webrtc_transport_session_set_through_tailscale()). */
+    bool session_through_tailscale;
     webrtc_transport_session_role_t session_role;
     webrtc_transport_session_role_t active_peer_role;
     uint32_t session_playout_delay_session_id;

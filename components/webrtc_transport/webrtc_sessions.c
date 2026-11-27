@@ -372,6 +372,7 @@ static esp_err_t session_create_with_role(
     ctx->session_active = true;
     ctx->session_role = role;
     ctx->local_access_epoch = access_epoch;
+    ctx->session_through_tailscale = false;
     ctx->cloud_signal_cb = role == WEBRTC_TRANSPORT_SESSION_CLOUD_CONTROLLED ?
                                cloud_signal_cb : NULL;
     ctx->cloud_lifecycle_cb =
@@ -424,6 +425,17 @@ esp_err_t webrtc_transport_websocket_session_create(uint32_t access_epoch, uint3
         true, NULL, NULL, NULL, NULL, session_id, generation);
     jetkvm_access_unlock();
     return err;
+}
+
+void webrtc_transport_session_set_through_tailscale(uint32_t session_id, bool through_tailscale)
+{
+    transport_ctx_t *ctx = webrtc_transport_context();
+    portENTER_CRITICAL(&ctx->lock);
+    if (ctx->session_active && ctx->session_id == session_id &&
+        ctx->session_role != WEBRTC_TRANSPORT_SESSION_CLOUD_CONTROLLED) {
+        ctx->session_through_tailscale = through_tailscale;
+    }
+    portEXIT_CRITICAL(&ctx->lock);
 }
 
 esp_err_t webrtc_transport_cloud_session_create(
