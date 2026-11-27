@@ -382,7 +382,7 @@ export function useDiagnosisEngine({
   if (
     heldVideo ||
     clock.current.question !== openQuestion ||
-    clock.current.peerConnection !== peerConnection
+    (peerConnection !== null && clock.current.peerConnection !== peerConnection)
   ) {
     clock.current = {
       question: openQuestion,
