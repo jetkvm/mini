@@ -20,6 +20,7 @@
 #include "esp_log.h"
 #include "esp_rom_sys.h"
 #include "esp_system.h"
+#include "esp_app_desc.h"
 #include "esp_timer.h"
 #include "esp_private/startup_internal.h"
 #include "nvs_flash.h"
@@ -46,6 +47,7 @@
 #include "jetkvm_hid_input.h"
 #include "jetkvm_hid_profiles.h"
 #include "jetkvm_hdmi_bridge.h"
+#include "jetkvm_mdns.h"
 #include "jetkvm_memory_policy.h"
 #include "jetkvm_mqtt.h"
 #include "jetkvm_tailscale.h"
@@ -71,13 +73,18 @@ static jetkvm_oidc_validator_t *s_cloud_oidc_validator;
 static jetkvm_tailscale_context_t s_tailscale_context;
 
 /* The names a browser may use for the device besides its addresses: the
- * hostname it gives the LAN and, on a tailnet, its Tailscale names. */
+ * hostname it gives the LAN, the name its mDNS responder took when another
+ * host on the link has that hostname and, on a tailnet, its Tailscale names. */
 static size_t access_host_names(char (*names)[JETKVM_ACCESS_HOST_NAME_CAPACITY], size_t capacity)
 {
     size_t count = 0;
     jetkvm_network_settings_t network;
     if (count < capacity && jetkvm_network_settings_get(&network, NULL) && network.hostname[0]) {
         snprintf(names[count++], JETKVM_ACCESS_HOST_NAME_CAPACITY, "%s", network.hostname);
+    }
+    if (count < capacity && jetkvm_mdns_get_hostname(names[count], JETKVM_ACCESS_HOST_NAME_CAPACITY) &&
+        (!count || strcasecmp(names[count], names[0]) != 0)) {
+        ++count;
     }
     jetkvm_tailscale_status_t *tailnet = s_tailscale_context.get_status ?
         malloc(sizeof(*tailnet)) : NULL;
@@ -122,6 +129,37 @@ static const char *session_timeout_set(unsigned minutes, void *ctx)
 {
     (void)ctx;
     return jetkvm_access_set_idle_minutes(minutes);
+}
+
+/* The mDNS advertisement follows the hostname and mdns_mode, the setup state
+ * and the HTTPS listener (jetkvm_mdns.h). */
+static void mdns_network_changed(const jetkvm_network_settings_t *settings)
+{
+    jetkvm_mdns_set_network(settings->hostname, settings->mdns_mode);
+}
+/* Setup completes once and does not revert while the device runs, and the
+ * responder starts with "not set up". Only the completed state is published,
+ * so the read at start-up cannot replace a report of the setup listener that
+ * arrived after that read. */
+static void mdns_setup_changed(void)
+{
+    if (jetkvm_access_is_setup()) jetkvm_mdns_set_setup(true);
+}
+static void mdns_prepare(void)
+{
+    char device_id[JETKVM_DEVICE_ID_CAPACITY] = {0};
+    if (jetkvm_device_state_get_id(device_id, sizeof(device_id)) != ESP_OK) device_id[0] = '\0';
+    jetkvm_mdns_init(device_id, esp_app_get_description()->version, CONFIG_WEBRTC_TRANSPORT_HTTP_PORT);
+    jetkvm_network_settings_set_listener(mdns_network_changed);
+    jetkvm_access_set_setup_listener(mdns_setup_changed);
+    webrtc_transport_set_https_listener(jetkvm_mdns_set_https_port);
+}
+static void mdns_advertise(void)
+{
+    jetkvm_network_settings_t network;
+    if (jetkvm_network_settings_get(&network, NULL)) mdns_network_changed(&network);
+    mdns_setup_changed();
+    jetkvm_mdns_start();
 }
 
 #define P4_STAGED_DIAGNOSTIC 0
@@ -1274,9 +1312,13 @@ void app_main(void)
     jetkvm_access_set_host_names(access_host_names);
     jetkvm_control_set_default_extra_hostnames_context(&(jetkvm_extra_hostnames_context_t){
         .get = extra_hostnames_get, .set = extra_hostnames_set});
+    /* Before the transport start, which applies the saved TLS setting and so
+     * reports the HTTPS port. */
+    mdns_prepare();
     jetkvm_control_set_default_session_timeout_context(&(jetkvm_session_timeout_context_t){
         .get = session_timeout_get, .set = session_timeout_set});
     ESP_ERROR_CHECK(webrtc_transport_start());
+    mdns_advertise();
     if (s_cloud_oidc_validator) {
         ret = jetkvm_cloud_service_start(s_cloud_oidc_validator);
         if (ret != ESP_OK) {

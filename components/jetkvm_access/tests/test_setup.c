@@ -244,8 +244,15 @@ static size_t own_names(char (*names)[JETKVM_ACCESS_HOST_NAME_CAPACITY], size_t 
     for (; count < capacity && count < 2; ++count) strcpy(names[count], own[count]);
     return count;
 }
+/* The mDNS TXT record follows the setup state through this listener. */
+static unsigned setup_notices;
+static void setup_noticed(void) {
+    assert(jetkvm_access_is_setup());
+    ++setup_notices;
+}
 static void start_access(void) {
     jetkvm_access_set_host_names(own_names);
+    jetkvm_access_set_setup_listener(setup_noticed);
     assert(jetkvm_access_init(NULL) == ESP_OK);
     assert(jetkvm_access_attach((void *)1, false) == ESP_OK);
 }
@@ -410,15 +417,19 @@ int main(void) {
     assert(SETUP("{\"localAuthMode\":\"noPassword\",\"password\":\"12345678\"}") == 400);
     assert(request("/device/setup", HTTP_POST, "{\"localAuthMode\":\"noPassword\"}", "https://evil.test", NULL) == 403);
     assert_status(false, false, false);
+    assert(setup_notices == 0);
     fail_save = true;
     assert(SETUP("{\"localAuthMode\":\"noPassword\"}") == 500);
     assert_status(false, false, false);
+    assert(setup_notices == 0);
     fail_save = false;
     assert(SETUP("{\"localAuthMode\":\"noPassword\"}") == 201);
+    assert(setup_notices == 1);
     assert(!jetkvm_access_password_enabled()); assert_status(true, false, false);
     assert(device_request() == 200);
     assert(jetkvm_access_check_request(&socket, true) == ESP_OK);
     assert(SETUP("{\"localAuthMode\":\"password\",\"password\":\"12345678\"}") == 409);
+    assert(setup_notices == 1);
     reboot_runtime(); start_access(); assert_status(true, false, false);
     records[2].size = 8; /* A saved non-default device setting. */
     assert(!jetkvm_factory_reset_request(NULL)); assert_status(true, true, false);
@@ -430,6 +441,7 @@ int main(void) {
     assert(SETUP("{\"localAuthMode\":\"password\",\"password\":\"12345678\"}") == 201);
     assert(jetkvm_access_password_enabled()); assert_status(true, false, false);
     assert(response_cookie[0]);
+    assert(setup_notices == 2);
     assert(SETUP("{\"localAuthMode\":\"noPassword\"}") == 409);
     reboot_runtime(); start_access(); assert_status(true, false, false);
     assert(jetkvm_access_password_enabled());
@@ -508,8 +520,11 @@ int main(void) {
         for (int i = 0; i < 5; ++i)
             assert(request("/auth/login-local?test=1", HTTP_POST, "{\"password\":\"wrongpass\"}", NULL, NULL) == 401);
         assert(request("/auth/login-local", HTTP_POST, "{\"password\":\"12345678\"}", NULL, NULL) == 429);
+        unsigned notices = setup_notices;
         assert(request("/auth/password-local", HTTP_PUT,
             "{\"oldPassword\":\"12345678\",\"newPassword\":\"23456789\"}", NULL, cookie) == 200);
+        /* A password change on a set-up device is no setup. */
+        assert(setup_notices == notices);
         strcpy(cookie, response_cookie);
         assert(request("/auth/login-local", HTTP_POST, "{\"password\":\"23456789\"}", NULL, NULL) == 429);
         if (!family) {

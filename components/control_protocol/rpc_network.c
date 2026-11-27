@@ -8,8 +8,33 @@
 static const struct { const char *key; const char *value; } fixed_settings[] = {
     {"dhcp_client", "lwip"}, {"domain", "local"}, {"http_proxy", ""},
     {"ipv6_mode", "disabled"}, {"lldp_mode", "disabled"},
-    {"mdns_mode", "disabled"},
 };
+static const char *const mdns_mode_names[] = {
+    [JETKVM_MDNS_MODE_AUTO] = "auto",
+    [JETKVM_MDNS_MODE_DISABLED] = "disabled",
+    [JETKVM_MDNS_MODE_IPV4_ONLY] = "ipv4_only",
+};
+#define MDNS_MODE_COUNT (sizeof(mdns_mode_names) / sizeof(mdns_mode_names[0]))
+static const char *mdns_mode_name(uint8_t mode)
+{
+    return mode < MDNS_MODE_COUNT ? mdns_mode_names[mode] : "auto";
+}
+/* Returns NULL when parsed, otherwise "mdns_mode" for upstream's ipv6_only
+ * (the Mini has no IPv6 address) or "" for malformed input. A missing mode
+ * saves upstream's default, auto. */
+static const char *parse_mdns_mode(const cJSON *settings, jetkvm_network_settings_t *parsed)
+{
+    const cJSON *mode = cJSON_GetObjectItemCaseSensitive(settings, "mdns_mode");
+    if (!mode || cJSON_IsNull(mode)) return NULL;
+    if (!cJSON_IsString(mode)) return "";
+    for (uint8_t i = 0; i < MDNS_MODE_COUNT; ++i) {
+        if (strcmp(mode->valuestring, mdns_mode_names[i]) == 0) {
+            parsed->mdns_mode = i;
+            return NULL;
+        }
+    }
+    return strcmp(mode->valuestring, "ipv6_only") == 0 ? "mdns_mode" : "";
+}
 /* The shared form always submits the mode; the Mini has NTP with user servers
  * (upstream "custom") or public NTP only. HTTP time sources do not exist here. */
 static const char *time_sync_mode_name(const jetkvm_network_settings_t *settings)
@@ -23,7 +48,8 @@ static cJSON *settings_json(const jetkvm_network_settings_t *settings)
     cJSON *readonly = cJSON_AddArrayToObject(result, "read_only_fields");
     if (!result || !readonly ||
         !cJSON_AddStringToObject(result, "hostname", settings->hostname) ||
-        !cJSON_AddStringToObject(result, "ipv4_mode", settings->dhcp ? "dhcp" : "static")) goto fail;
+        !cJSON_AddStringToObject(result, "ipv4_mode", settings->dhcp ? "dhcp" : "static") ||
+        !cJSON_AddStringToObject(result, "mdns_mode", mdns_mode_name(settings->mdns_mode))) goto fail;
     for (size_t i = 0; i < sizeof(fixed_settings) / sizeof(fixed_settings[0]); ++i) {
         if (!cJSON_AddStringToObject(result, fixed_settings[i].key, fixed_settings[i].value) ||
             !cJSON_AddItemToArray(readonly, cJSON_CreateString(fixed_settings[i].key))) goto fail;
@@ -150,7 +176,8 @@ bool rpc_set_network_settings(const jetkvm_control_context_t *context,
             return true;
         }
     }
-    const char *unsupported = parse_time_sync(settings, &parsed);
+    const char *unsupported = parse_mdns_mode(settings, &parsed);
+    if (!unsupported) unsupported = parse_time_sync(settings, &parsed);
     if (unsupported && !unsupported[0]) goto invalid;
     if (unsupported) {
         dispatch->error_code = -32602;
@@ -170,6 +197,7 @@ bool rpc_set_network_settings(const jetkvm_control_context_t *context,
         bool known = strcmp(field->string, "hostname") == 0 ||
             strcmp(field->string, "ipv4_mode") == 0 ||
             strcmp(field->string, "ipv4_static") == 0 ||
+            strcmp(field->string, "mdns_mode") == 0 ||
             strcmp(field->string, "read_only_fields") == 0;
         for (size_t i = 0; i < sizeof(time_sync_fields) / sizeof(time_sync_fields[0]); ++i) {
             known |= strcmp(field->string, time_sync_fields[i]) == 0;

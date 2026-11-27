@@ -164,6 +164,8 @@ static const jetkvm_password_backend_t s_backend = {
 };
 bool jetkvm_access_password_enabled(void) { return atomic_load(&s_enabled); }
 bool jetkvm_access_is_setup(void) { return atomic_load(&s_setup); }
+static void (*s_setup_listener)(void);
+void jetkvm_access_set_setup_listener(void (*listener)(void)) { s_setup_listener = listener; }
 /* A session (signaling socket, peer, queued control) stays valid for the
  * epoch it was admitted under. Upstream keeps a connected page working after
  * its cookie is cleared or expires; only a password change, setup or login
@@ -377,7 +379,7 @@ static bool host_allowed(httpd_req_t *req)
     size_t length = strlen(name);
     if (length && name[length - 1] == '.') name[--length] = '\0';
     if (!length) return false;
-    char names[4][JETKVM_ACCESS_HOST_NAME_CAPACITY];
+    char names[5][JETKVM_ACCESS_HOST_NAME_CAPACITY];
     size_t count = s_host_names ? s_host_names(names, sizeof(names) / sizeof(names[0])) : 0;
     if (extra_host_name(name)) return true;
     for (size_t i = 0; i < count; ++i) {
@@ -612,7 +614,7 @@ static esp_err_t auth_handler(httpd_req_t *req)
     jetkvm_password_record_t staged = s_password;
     jetkvm_password_result_t result = JETKVM_PASSWORD_OK;
     const char *status = "200 OK", *error = NULL;
-    bool issue = false;
+    bool issue = false, became_setup = false;
     login_limit_t *limit = (login || setup) && !s_password_busy ? login_limit(req) : NULL;
     if (setup && (atomic_load(&s_setup) || jetkvm_factory_reset_pending())) {
         status = "409 Conflict"; error = "Setup already completed or factory reset incomplete";
@@ -654,7 +656,7 @@ static esp_err_t auth_handler(httpd_req_t *req)
                 s_password = staged;
                 /* A valid persisted record is the setup marker, including an
                  * explicit noPassword choice. Reset erases both atomically. */
-                atomic_store(&s_setup, true);
+                became_setup = !atomic_exchange(&s_setup, true);
             }
         }
         issue = result == JETKVM_PASSWORD_OK && staged.enabled;
@@ -706,6 +708,7 @@ static esp_err_t auth_handler(httpd_req_t *req)
     }
     wipe(cookie, sizeof(cookie));
     jetkvm_access_unlock();
+    if (became_setup && s_setup_listener) s_setup_listener();
     return logout ? ESP_FAIL : err;
 }
 static esp_err_t guarded_handler(httpd_req_t *req)
