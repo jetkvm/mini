@@ -97,6 +97,7 @@ export default function SettingsNetworkRoute() {
   const hasHttpProxy = useCapability("http_proxy");
   const hasDomain = useCapability("domain");
   const hasMdns = useCapability("mdns");
+  const hasMdnsIpv6Only = useCapability("mdns_ipv6_only");
   const hasIpv6 = useCapability("ipv6");
   const hasIpv6Static = useCapability("ipv6_static");
   const hasWifi = useCapability("wifi");
@@ -536,7 +537,9 @@ export default function SettingsNetworkRoute() {
                       { value: "disabled", label: m.network_mdns_disabled() },
                       { value: "auto", label: m.network_mdns_auto() },
                       { value: "ipv4_only", label: m.network_mdns_ipv4_only() },
-                      { value: "ipv6_only", label: m.network_mdns_ipv6_only() },
+                      ...(hasMdnsIpv6Only
+                        ? [{ value: "ipv6_only", label: m.network_mdns_ipv6_only() }]
+                        : []),
                     ]}
                     {...register("mdns_mode")}
                   />

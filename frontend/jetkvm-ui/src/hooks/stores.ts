@@ -490,8 +490,7 @@ export const useVideoStore = create<VideoState>(set => ({
           }
         : {},
     ),
-  resetOsServicesSettings: () =>
-    set({ osServicesSettings: null, osServicesSettingsSequence: 0 }),
+  resetOsServicesSettings: () => set({ osServicesSettings: null, osServicesSettingsSequence: 0 }),
 
   videoElement: null,
   setVideoElement: (element: HTMLVideoElement | null) => set({ videoElement: element }),
@@ -922,6 +921,7 @@ export type Capability =
   | "http_proxy" // network settings the device can change
   | "domain"
   | "mdns"
+  | "mdns_ipv6_only" // the device takes the mDNS mode "ipv6_only"
   | "ipv6"
   | "ipv6_static" // the device takes a static IPv6 configuration (ipv6_mode "static")
   | "tls" // HTTPS listener with a selectable certificate
