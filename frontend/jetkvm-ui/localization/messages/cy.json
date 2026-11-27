@@ -713,6 +713,8 @@
     "mqtt_error_tls": "Gwall TLS — gwiriwch eich gosodiadau tystysgrif",
     "mqtt_ha_discovery_description": "Cofrestru synwyryddion, switshis, a rheolaethau yn Home Assistant yn awtomatig",
     "mqtt_ha_discovery_title": "Darganfod Awtomatig",
+    "mqtt_keyboard_macros_description": "Caniatáu i gleientiaid MQTT redeg macros bysellfwrdd sydd wedi'u cadw. Mae macro yn teipio ar y cyfrifiadur gwesteiwr, felly gall unrhyw un sy'n gallu cyhoeddi i'r brocer deipio arno.",
+    "mqtt_keyboard_macros_title": "Macros Bysellfwrdd",
     "mqtt_load_error": "Methwyd â llwytho gosodiadau MQTT: {error}",
     "mqtt_password_description": "Fel y'i ffurfweddwyd ar eich brocer MQTT",
     "mqtt_password_label": "Cyfrinair",

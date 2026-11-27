@@ -23,6 +23,7 @@ cc -std=c11 -Wall -Wextra -Werror \
   "$repo_root/components/control_protocol/rpc_tailscale.c" \
   "$repo_root/components/control_protocol/rpc_mqtt.c" \
   "$repo_root/components/control_protocol/rpc_macros.c" \
+  "$repo_root/components/control_protocol/keyboard_macro_hid.c" \
   "$repo_root/components/control_protocol/rpc_virtual_media.c" \
   "$repo_root/components/control_protocol/rpc_os_services.c" \
   "$repo_root/components/control_protocol/jetkvm_hidrpc.c" \

@@ -718,6 +718,8 @@
     "mqtt_error_tls": "TLS 錯誤 — 請檢查您的憑證設定",
     "mqtt_ha_discovery_description": "自動在 Home Assistant 中註冊感測器、開關和控制項",
     "mqtt_ha_discovery_title": "自動探索",
+    "mqtt_keyboard_macros_description": "允許 MQTT 用戶端執行已儲存的鍵盤巨集。巨集會在主機上輸入，因此任何能向代理發布訊息的人都可以在主機上輸入。",
+    "mqtt_keyboard_macros_title": "鍵盤巨集",
     "mqtt_load_error": "載入 MQTT 設定失敗：{error}",
     "mqtt_password_description": "依 MQTT Broker 上的設定",
     "mqtt_password_label": "密碼",

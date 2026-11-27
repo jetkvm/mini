@@ -560,11 +560,47 @@ typedef bool (*jetkvm_get_keyboard_macros_fn)(
 typedef bool (*jetkvm_set_keyboard_macros_fn)(
     const jetkvm_control_keyboard_macro_list_t *list, void *ctx);
 
+/* A stored step becomes a press report and a release report. */
+#define JETKVM_CONTROL_KEYBOARD_MACRO_MAX_HID_STEPS \
+    (2U * JETKVM_CONTROL_KEYBOARD_MACRO_MAX_STEPS)
+
+typedef enum {
+    JETKVM_KEYBOARD_MACRO_RUN_ACCEPTED = 0,
+    JETKVM_KEYBOARD_MACRO_RUN_BUSY,
+    JETKVM_KEYBOARD_MACRO_RUN_UNAVAILABLE,
+} jetkvm_keyboard_macro_run_result_t;
+
+/** Queue the HID steps of a stored macro without a WebRTC session. The steps
+ *  run after the call returns; a macro that runs or waits is replaced. */
+typedef jetkvm_keyboard_macro_run_result_t (*jetkvm_run_keyboard_macro_fn)(
+    const jetkvm_hidrpc_macro_step_t *steps, size_t step_count, void *ctx);
+
 typedef struct {
     jetkvm_get_keyboard_macros_fn get;
     jetkvm_set_keyboard_macros_fn set;
+    jetkvm_run_keyboard_macro_fn run;
     void *ctx;
 } jetkvm_keyboard_macros_context_t;
+
+/**
+ * Find a stored macro by ID or, when no ID matches, by name without regard
+ * to case (Go findKeyboardMacro). Returns the index in `list`, or -1.
+ */
+int jetkvm_control_keyboard_macro_find(
+    const jetkvm_control_keyboard_macro_list_t *list, const char *id_or_name);
+
+/**
+ * Convert a stored macro into HID macro steps as the web UI does
+ * (executeMacroRemote): each step with keys or modifiers becomes a press
+ * held for 20 ms and an all-zero release that waits the step's delay. Steps
+ * without keys and modifiers are skipped, and keys beyond the six slots of a
+ * report are dropped. Returns false for a key or modifier ID outside the
+ * name tables.
+ */
+bool jetkvm_control_keyboard_macro_hid_steps(
+    const jetkvm_control_keyboard_macro_t *macro,
+    jetkvm_hidrpc_macro_step_t steps[JETKVM_CONTROL_KEYBOARD_MACRO_MAX_HID_STEPS],
+    size_t *step_count);
 
 typedef struct {
     uint32_t inactivity_limit_seconds;
@@ -738,6 +774,7 @@ typedef struct {
     bool tls_insecure;
     bool enable_ha_discovery;
     bool enable_actions;
+    bool enable_keyboard_macros;
     int32_t debounce_ms;
 } jetkvm_control_mqtt_settings_t;
 

@@ -1380,6 +1380,7 @@ int peer_on_data(esp_peer_data_frame_t *frame, void *arg)
             .keyboard_macros = {
                 .get = rpc_get_keyboard_macros_adapter,
                 .set = rpc_set_keyboard_macros_adapter,
+                .run = rpc_run_keyboard_macro_adapter,
             },
             .jiggler = {
                 .get_state = rpc_get_jiggler_state_adapter,

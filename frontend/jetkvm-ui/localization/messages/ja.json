@@ -718,6 +718,8 @@
     "mqtt_error_tls": "TLSエラー — 証明書の設定を確認してください",
     "mqtt_ha_discovery_description": "Home Assistantにセンサー、スイッチ、コントロールを自動登録します",
     "mqtt_ha_discovery_title": "自動検出",
+    "mqtt_keyboard_macros_description": "MQTTクライアントが保存済みのキーボードマクロを実行できるようにします。マクロはホストコンピューターに入力するため、ブローカーに発行できる人は誰でもホストに入力できます。",
+    "mqtt_keyboard_macros_title": "キーボードマクロ",
     "mqtt_load_error": "MQTT設定の読み込みに失敗しました: {error}",
     "mqtt_password_description": "MQTTブローカーで設定されたパスワード",
     "mqtt_password_label": "パスワード",

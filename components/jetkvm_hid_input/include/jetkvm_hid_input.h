@@ -68,6 +68,8 @@ typedef enum {
     JETKVM_HID_INPUT_SUBMIT_NOT_READY,
     JETKVM_HID_INPUT_SUBMIT_NOT_SUPPORTED,
     JETKVM_HID_INPUT_SUBMIT_INVALID_ARGUMENT,
+    /* A macro runs or waits, and the submit must not replace it. */
+    JETKVM_HID_INPUT_SUBMIT_BUSY,
 } jetkvm_hid_input_submit_result_t;
 
 typedef struct {
@@ -206,6 +208,18 @@ jetkvm_hid_input_submit_result_t jetkvm_hid_input_submit_movement(
  * mouse jiggler and still traverses the single USB worker/release barrier.
  */
 esp_err_t jetkvm_hid_input_submit_local_relative_mouse(int8_t dx, int8_t dy);
+
+/**
+ * Queue a device-owned keyboard macro without a live WebRTC generation, for
+ * MQTT and runKeyboardMacro. It shares the one-entry macro mailbox: with
+ * `replace`, it replaces a running or pending macro as a browser macro does;
+ * without it, it returns BUSY when a macro from any source runs or waits.
+ * A browser macro, browser key input, a cancel, a generation change and
+ * every release barrier cancel it. The call never blocks.
+ */
+jetkvm_hid_input_submit_result_t jetkvm_hid_input_submit_local_macro(
+    const jetkvm_hidrpc_macro_step_t *steps, uint32_t step_count,
+    bool replace);
 
 /** Monotonic timestamp of the last successfully delivered user/HID report. */
 int64_t jetkvm_hid_input_last_user_input_us(void);

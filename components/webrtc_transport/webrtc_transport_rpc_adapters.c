@@ -19,6 +19,7 @@
 
 #include "jetkvm_control.h"
 #include "jetkvm_device_state.h"
+#include "jetkvm_hid_input.h"
 #include "jetkvm_hid_profiles.h"
 #include "jetkvm_settings.h"
 #include "jetkvm_usb_service.h"
@@ -125,6 +126,27 @@ bool rpc_set_keyboard_macros_adapter(
     (void)ctx;
     return input != NULL &&
            jetkvm_hid_profiles_set_macros(input) == ESP_OK;
+}
+
+/* runKeyboardMacro: the macro does not need this session, as in Go, and it
+ * replaces a macro that runs, as rpcExecuteKeyboardMacro does. */
+jetkvm_keyboard_macro_run_result_t rpc_run_keyboard_macro_adapter(
+    const jetkvm_hidrpc_macro_step_t *steps, size_t step_count, void *ctx)
+{
+    (void)ctx;
+    if (step_count > JETKVM_HIDRPC_MACRO_MAX_STEPS) {
+        return JETKVM_KEYBOARD_MACRO_RUN_UNAVAILABLE;
+    }
+    switch (jetkvm_hid_input_submit_local_macro(steps, (uint32_t)step_count,
+                                                true)) {
+    case JETKVM_HID_INPUT_SUBMIT_ACCEPTED:
+        return JETKVM_KEYBOARD_MACRO_RUN_ACCEPTED;
+    case JETKVM_HID_INPUT_SUBMIT_BUSY:
+    case JETKVM_HID_INPUT_SUBMIT_BACKPRESSURE:
+        return JETKVM_KEYBOARD_MACRO_RUN_BUSY;
+    default:
+        return JETKVM_KEYBOARD_MACRO_RUN_UNAVAILABLE;
+    }
 }
 
 bool rpc_get_jiggler_state_adapter(bool *enabled, void *ctx)

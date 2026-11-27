@@ -280,6 +280,9 @@ bool rpc_get_keyboard_macros(const jetkvm_control_context_t *context,
 bool rpc_set_keyboard_macros(const jetkvm_control_context_t *context,
                              const cJSON *params,
                              rpc_dispatch_result_t *dispatch);
+bool rpc_run_keyboard_macro(const jetkvm_control_context_t *context,
+                            const cJSON *params,
+                            rpc_dispatch_result_t *dispatch);
 bool rpc_get_jiggler_state(const jetkvm_control_context_t *context,
                            const cJSON *params,
                            rpc_dispatch_result_t *dispatch);

@@ -775,6 +775,8 @@
     "mqtt_error_tls": "TLS error — check your certificate settings",
     "mqtt_ha_discovery_description": "Register sensors, switches, and controls in Home Assistant automatically",
     "mqtt_ha_discovery_title": "Auto-Discovery",
+    "mqtt_keyboard_macros_description": "Allow MQTT clients to run stored keyboard macros. A macro types on the host computer, so anyone who can publish to the broker can type on it.",
+    "mqtt_keyboard_macros_title": "Keyboard Macros",
     "mqtt_load_error": "Failed to load MQTT settings: {error}",
     "mqtt_password_description": "As configured on your MQTT broker",
     "mqtt_password_label": "Password",

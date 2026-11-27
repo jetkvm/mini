@@ -21,6 +21,8 @@ unsigned fake_usb_wake_call_count(void);
 void fake_usb_emit_led(uint8_t leds);
 /* What jetkvm_usb_hid_keypress() returns; ESP_OK sends the report. */
 void fake_usb_set_keypress_result(esp_err_t result);
+/* What jetkvm_usb_hid_keyboard_report() returns; ESP_OK sends the report. */
+void fake_usb_set_keyboard_report_result(esp_err_t result);
 /* What jetkvm_usb_hid_bus_events_waiting() returns. */
 void fake_usb_set_bus_events_waiting(bool waiting);
 

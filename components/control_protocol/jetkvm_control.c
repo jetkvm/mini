@@ -297,6 +297,7 @@ static const rpc_method_t s_rpc_methods[] = {
     { "setWakeOnLanDevices", rpc_set_wake_on_lan_devices },
     { "getKeyboardMacros", rpc_get_keyboard_macros },
     { "setKeyboardMacros", rpc_set_keyboard_macros },
+    { "runKeyboardMacro", rpc_run_keyboard_macro },
     { "getJigglerState", rpc_get_jiggler_state },
     { "setJigglerState", rpc_set_jiggler_state },
     { "getJigglerConfig", rpc_get_jiggler_config },
