@@ -331,7 +331,7 @@ export default function TailscaleCard() {
               size="XS"
               label=""
               value={controlServerMode}
-              disabled={isSavingControlURL}
+              disabled={isSavingControlURL || onlyAccessOn}
               onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
                 const mode = e.target.value as ControlServerMode;
                 setControlServerMode(mode);
@@ -358,6 +358,7 @@ export default function TailscaleCard() {
                 label={m.tailscale_control_server_custom_url_label()}
                 placeholder={m.tailscale_control_server_custom_url_placeholder()}
                 value={controlURLInput}
+                disabled={onlyAccessOn}
                 onChange={e => {
                   controlURLDirty.current = true;
                   setControlURLInput(e.target.value);
@@ -368,7 +369,7 @@ export default function TailscaleCard() {
                 theme="primary"
                 type="button"
                 text={isSavingControlURL ? m.tailscale_saving() : m.tailscale_save()}
-                disabled={isSavingControlURL || !controlURLInput.trim()}
+                disabled={isSavingControlURL || onlyAccessOn || !controlURLInput.trim()}
                 onClick={() => saveControlURL(controlURLInput.trim())}
               />
             </NestedSettingsGroup>
