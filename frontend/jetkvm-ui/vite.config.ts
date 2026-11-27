@@ -45,6 +45,16 @@ export default defineConfig(({ mode, command }) => {
     build: {
       outDir: isCloud ? "dist" : "../static",
       rolldownOptions: {
+        // A name imported from a module that does not export it is undefined
+        // at run time. The bundler only warns, and the page then fails where
+        // the name is first used: every text of the UI when the translation
+        // compiler has produced no messages. Fail the build instead.
+        onwarn(warning, defaultHandler) {
+          if (warning.code === "IMPORT_IS_UNDEFINED") {
+            throw new Error(warning.message);
+          }
+          defaultHandler(warning);
+        },
         output: {
           manualChunks: id => {
             if (id.includes("node_modules")) {
