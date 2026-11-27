@@ -284,6 +284,8 @@ apply_managed_component_patch(patches/tinyusb-0.19.0-dwc2-cache-line-by-address.
 apply_managed_component_patch(patches/tinyusb-0.19.0-dwc2-close-all-out-nak.patch)
 apply_managed_component_patch(patches/tinyusb-0.19.0-msc-async-read10-in-task.patch)
 apply_managed_component_patch(patches/esp_tinyusb-2.2.1-custom-msc-backend.patch)
+# A ninth string descriptor, for the configuration name (iConfiguration).
+apply_managed_component_patch(patches/esp_tinyusb-2.2.1-nine-strings.patch)
 # That patch adds CONFIG_TINYUSB_MSC_CUSTOM_BACKEND. A fresh build directory
 # parses Kconfig before the patch exists, so its generated sdkconfig lacks the
 # symbol and sdkconfig.defaults never re-applies. Remove that sdkconfig and

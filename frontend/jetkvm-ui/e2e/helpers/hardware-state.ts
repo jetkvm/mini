@@ -7,6 +7,7 @@ export interface UsbConfig {
   serial_number: string;
   manufacturer: string;
   product: string;
+  configuration?: string;
 }
 
 export interface MediaState {
