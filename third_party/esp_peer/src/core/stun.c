@@ -104,7 +104,8 @@ static size_t stun_attr_read_size(uint16_t type, const char *value, size_t attr_
  * and the length of each attribute come from the sender: the parser reads
  * no byte after the received ones. Returns 0, or -1 for a message with an
  * attribute that does not fit: such a message has no meaning, and a caller
- * must not take it for a message without the attributes that follow. */
+ * must not take it for a message without the attributes that follow. After
+ * -1, the fields of msg before buf are zero. */
 int stun_parse_msg_buf(stun_msg_t *msg)
 {
     stun_header_t *header = (stun_header_t *)msg->buf;
@@ -139,6 +140,9 @@ int stun_parse_msg_buf(stun_msg_t *msg)
         size_t attr_size = ntohs(attr->length);
         if (attr_size > length - pos - sizeof(stun_attr_t) ||
             attr_size < stun_attr_read_size(ntohs(attr->type), attr->value, attr_size)) {
+            /* Nothing of a refused message stays for a caller: not its
+             * class and method, and no attribute before this one. */
+            memset(msg, 0, offsetof(stun_msg_t, buf));
             return -1;
         }
         switch (ntohs(attr->type)) {

@@ -201,6 +201,23 @@ int main(void)
     assert(stun_parse_msg_buf(&msg) == 0);
     assert(msg.mapped_addr.port == 0x1111 && msg.mapped_addr.family == AF_INET);
 
+    /* A refused message leaves no attribute for the caller. Here a relayed
+     * address comes before an attribute that does not fit. */
+    memset(&msg, 0, sizeof(msg));
+    stun_datagram(0x0103, 12 + 4, 36);
+    memcpy(msg.buf, datagram, 36);
+    put16(msg.buf + 20, STUN_ATTR_TYPE_XOR_RELAYED_ADDRESS); put16(msg.buf + 22, 8);
+    memset(msg.buf + 24, 0x11, 8);
+    put16(msg.buf + 32, STUN_ATTR_TYPE_DATA); put16(msg.buf + 34, 100);
+    msg.size = 36;
+    assert(stun_parse_msg_buf(&msg) == -1);
+    assert(msg.relayed_addr.port == 0 && msg.stunmethod == 0);
+    /* Without the attribute that does not fit, the caller gets the address. */
+    put16(msg.buf + 2, 12);
+    msg.size = 32;
+    assert(stun_parse_msg_buf(&msg) == 0);
+    assert(msg.relayed_addr.port != 0 && msg.stunmethod == STUN_METHOD_ALLOCATE);
+
     /* The validator copies a message into a buffer of the STUN message
      * size. It refuses a longer one. */
     char password[] = "password";
