@@ -95,9 +95,13 @@ enum {
     STRING_ABSOLUTE_MOUSE,
     STRING_RELATIVE_MOUSE,
     STRING_MSC_CDROM,
+    /* Last, so the indexes above stay as they were before it. */
+    STRING_CONFIGURATION,
     STRING_COUNT,
 };
-_Static_assert(STRING_COUNT <= 8, "esp_tinyusb accepts at most 8 strings");
+/* esp_tinyusb 2.2.1 accepts 8 strings; patches/esp_tinyusb-2.2.1-nine-strings.patch
+ * makes it 9. With more, tinyusb_driver_install fails. */
+_Static_assert(STRING_COUNT <= 9, "esp_tinyusb accepts at most 9 strings");
 
 enum {
     ENDPOINT_KEYBOARD = 1,
@@ -290,6 +294,8 @@ typedef struct {
     uint8_t interface_by_function[HID_FUNCTION_COUNT];
     uint8_t interface_count;
     uint16_t configuration_length;
+    /* iConfiguration: STRING_CONFIGURATION, or 0 for an empty string. */
+    uint8_t configuration_string;
     bool mass_storage;
     uint8_t mass_storage_string;
     bool audio;
@@ -801,6 +807,7 @@ compiled_default_descriptor_configuration(void)
         .serial_number = "ESP32-P4",
         .manufacturer = "JetKVM",
         .product = "JetKVM USB Emulation Device",
+        .configuration = "Config 1: HID",
         .absolute_mouse = true,
         .relative_mouse = true,
         .keyboard = true,
@@ -923,7 +930,8 @@ static esp_err_t build_configuration_descriptor(
 {
     const uint8_t header[] = {
         TUD_CONFIG_DESCRIPTOR(
-            1, bank->interface_count, 0, bank->configuration_length,
+            1, bank->interface_count, bank->configuration_string,
+            bank->configuration_length,
             TUSB_DESC_CONFIG_ATT_REMOTE_WAKEUP, 100),
     };
     memcpy(destination, header, sizeof(header));
@@ -1035,9 +1043,17 @@ static esp_err_t build_descriptor_bank(
         error = copy_usb_string(bank->string_storage[STRING_MSC_CDROM],
                                 "JetKVM Virtual CD-ROM");
     }
+    if (error == ESP_OK) {
+        error = copy_usb_string(
+            bank->string_storage[STRING_CONFIGURATION],
+            configuration->configuration ? configuration->configuration : "");
+    }
     if (error != ESP_OK) {
         return error;
     }
+    bank->configuration_string =
+        bank->string_storage[STRING_CONFIGURATION][0] != '\0' ?
+            STRING_CONFIGURATION : 0U;
 
     bank->configuration_length = TUD_CONFIG_DESC_LEN;
     for (hid_function_t function = HID_FUNCTION_KEYBOARD;
@@ -2492,6 +2508,8 @@ esp_err_t jetkvm_usb_hid_get_configuration_snapshot(
                            bank.string_storage[STRING_MANUFACTURER]);
     copy_descriptor_string(snapshot->product,
                            bank.string_storage[STRING_PRODUCT]);
+    copy_descriptor_string(snapshot->configuration,
+                           bank.string_storage[STRING_CONFIGURATION]);
 
     snapshot->keyboard_instance =
         bank.instance_by_function[HID_FUNCTION_KEYBOARD];
@@ -2770,8 +2788,13 @@ esp_err_t jetkvm_usb_hid_wheel_report(int8_t wheel_y, int8_t wheel_x)
         return jetkvm_usb_hid_absolute_wheel_report(wheel_y, wheel_x);
     }
     if (active_function_enabled(HID_FUNCTION_RELATIVE_MOUSE)) {
+        /* Keep held buttons down: a wheel report with buttons 0 releases
+         * them on the host. */
+        portENTER_CRITICAL(&s_state_lock);
+        const uint8_t buttons = s_ctx.relative_buttons;
+        portEXIT_CRITICAL(&s_state_lock);
         return jetkvm_usb_hid_relative_mouse_report(
-            0, 0, 0, wheel_y, wheel_x);
+            0, 0, buttons, wheel_y, wheel_x);
     }
     return ESP_OK;
 }

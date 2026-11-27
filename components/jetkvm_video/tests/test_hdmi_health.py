@@ -32,7 +32,7 @@ def define(source, name):
 task = function(video, "static void hdmi_capture_task(")
 # Every HPD rise that arms the recovery pulses also restores the resets.
 assert task.count("hdmi_hpd_retry_arm(&hpd_retry);") == \
-    task.count("hdmi_health_arm(&health);") == 3
+    task.count("hdmi_health_arm(&health);") == 4
 # Capture running, a detected mode without capture, and a signal whose
 # timings stay out of range are judged.
 assert task.count("hdmi_health_check(&ctx, &health, &hpd_retry,") == 3
@@ -40,14 +40,15 @@ assert "ctx->h264_mode_refused = ret == ESP_ERR_NOT_SUPPORTED;" in function(
     video, "static void publish_prepared_h264_mode(")
 assert "ctx->h264_mode_refused = false;" in function(
     video, "static esp_err_t csi_destroy(")
-# A bridge that fails its setup restarts the Mini, as at boot.
-assert "ESP_ERROR_CHECK(hdmi_bridge_reset(ctx));" in function(
-    video, "static bool hdmi_health_check(")
+# No access of the bridge restarts the Mini.
+assert not re.search(r"ESP_ERROR_CHECK\((tc_|hdmi_bridge_reset)", video)
 
 production = "\n".join([
     re.search(r"^static const uint32_t TC358743_REFCLK_HZ = .*$", video,
               re.M).group(0),
     function(video, "static esp_err_t hdmi_bridge_reset("),
+    function(video, "static void hdmi_bridge_fault("),
+    function(video, "static void hdmi_stream_stop("),
     function(video, "static bool hdmi_health_check("),
 ])
 
@@ -58,11 +59,16 @@ preamble = r'''
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include "hdmi_bridge_fault.h"
 #include "hdmi_hpd_retry.h"
 #include "hdmi_health.h"
 typedef int esp_err_t;
 #define ESP_OK 0
 #define ESP_FAIL (-1)
+static const char *esp_err_to_name(esp_err_t error)
+{
+    return error == ESP_OK ? "ESP_OK" : "ESP_FAIL";
+}
 #define TAG "test"
 static char last_log[256];
 static int give_up_logs;
@@ -85,6 +91,7 @@ typedef struct {
     jetkvm_hdmi_bridge_t bridge;
     video_metrics_t metrics;
     bool h264_mode_refused;
+    hdmi_bridge_fault_t bridge_fault;
 } app_ctx_t;
 
 static int64_t now_us;
@@ -94,6 +101,8 @@ static int64_t esp_timer_get_time(void) { return now_us; }
  * start). Bad either trickles frames or reports a mode the transport
  * refuses. */
 static int fix_after;
+/* The bridge stops answering during its next reset. */
+static bool dies_in_reset;
 static int resets;
 static int64_t reset_at_us[16];
 static bool refuses_when_bad;
@@ -117,7 +126,7 @@ static esp_err_t tc_enable_stream(jetkvm_hdmi_bridge_t *ctx, bool enable)
 {
     (void)ctx;
     call(enable ? "stream-on" : "stream-off");
-    return ESP_OK;
+    return dies_in_reset ? ESP_FAIL : ESP_OK;
 }
 static esp_err_t csi_destroy(app_ctx_t *ctx)
 {
@@ -134,7 +143,7 @@ static esp_err_t tc_probe_chip(jetkvm_hdmi_bridge_t *ctx)
 {
     (void)ctx;
     call("probe");
-    return ESP_OK;
+    return dies_in_reset ? ESP_FAIL : ESP_OK;
 }
 static esp_err_t tc_initial_setup(jetkvm_hdmi_bridge_t *ctx,
                                   uint32_t refclk_hz,
@@ -203,6 +212,7 @@ static void reset(int fix)
 {
     now_us = S(100);
     fix_after = fix;
+    dies_in_reset = false;
     resets = 0;
     refuses_when_bad = false;
     signal_present = true;
@@ -324,6 +334,20 @@ int main(void)
     /* The window in progress may still pass. */
     run_until(now_us + 3 * HDMI_HEALTH_WINDOW_US + S(1));
     assert(resets == 1);
+
+    /* A bridge that stops answering when the reset begins: the check
+     * tears capture down and reports one fault, which the capture loop
+     * handles. The Mini does not restart. */
+    reset(1);
+    run_until(t0 + 2 * HDMI_HEALTH_WINDOW_US - S(1));
+    assert(!ctx.bridge_fault.faulted && calls[0] == '\0');
+    dies_in_reset = true;
+    while (!ctx.bridge_fault.faulted) {
+        assert(now_us < t0 + 3 * HDMI_HEALTH_WINDOW_US);
+        run_until(now_us + PASS_US);
+    }
+    assert(ctx.bridge_fault.faults == 1);
+    assert(strcmp(calls, "stream-off destroy hw-reset probe ") == 0);
 
     puts("HDMI bridge resets when its signal gives no usable video, three "
          "at most: PASS");

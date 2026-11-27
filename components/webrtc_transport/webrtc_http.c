@@ -709,6 +709,13 @@ static void configure_http(httpd_config_t *config)
     config->lru_purge_enable = true;
     config->recv_wait_timeout = 5;
     config->send_wait_timeout = 5;
+    /* The server task reads the headers of one request at a time. While a
+     * client sends its headers slowly, all other connections on this
+     * listener wait, the signaling WebSocket too. Upstream allows 10 s,
+     * because there a slow client holds only its own goroutine. Here it holds
+     * the listener, so the limit is 5 s, the same as one recv with no data
+     * and the TLS handshake. A browser sends its headers in one segment. */
+    config->req_hdr_timeout_ms = 5000;
     config->uri_match_fn = httpd_uri_match_wildcard;
     config->open_fn = http_session_opened;
 }

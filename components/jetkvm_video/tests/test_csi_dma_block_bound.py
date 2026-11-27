@@ -61,6 +61,7 @@ macros = "".join(define_block(name) for name in (
 
 # Accepted EDID modes plus two host modes whose frames are not whole bursts.
 modes = [(1920, 1080), (1280, 720), (1024, 768), (1280, 800), (1280, 1024),
+         (1440, 900), (1680, 1050), (640, 480), (800, 600),
          (1600, 900), (1366, 768)]
 frames = sorted({width * height * half_bytes // 2
                  for width, height in modes

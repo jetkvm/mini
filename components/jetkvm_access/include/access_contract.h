@@ -3,6 +3,9 @@
 #include <stdint.h>
 #include <string.h>
 
+/* Upstream localAuthMaxIdleMinutes: a session timeout of at most a day. */
+#define JETKVM_ACCESS_MAX_IDLE_MINUTES 1440U
+
 static inline bool jetkvm_access_has_encoded_nul(const char *json)
 {
     /* Skip each escaped byte as a unit; \\u0000 is a literal backslash

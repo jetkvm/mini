@@ -118,6 +118,18 @@ static const char *extra_hostnames_set(const char *const *names, size_t count, v
     (void)ctx;
     return jetkvm_access_set_extra_host_names(names, count);
 }
+_Static_assert(JETKVM_SESSION_TIMEOUT_MAX_MINUTES == JETKVM_ACCESS_MAX_IDLE_MINUTES,
+               "the RPC carries the access gate's idle timeout");
+static unsigned session_timeout_get(void *ctx)
+{
+    (void)ctx;
+    return jetkvm_access_get_idle_minutes();
+}
+static const char *session_timeout_set(unsigned minutes, void *ctx)
+{
+    (void)ctx;
+    return jetkvm_access_set_idle_minutes(minutes);
+}
 
 /* The mDNS advertisement follows the hostname and mdns_mode, the setup state
  * and the HTTPS listener (jetkvm_mdns.h). */
@@ -1299,6 +1311,8 @@ void app_main(void)
     /* Before the transport start, which applies the saved TLS setting and so
      * reports the HTTPS port. */
     mdns_prepare();
+    jetkvm_control_set_default_session_timeout_context(&(jetkvm_session_timeout_context_t){
+        .get = session_timeout_get, .set = session_timeout_set});
     ESP_ERROR_CHECK(webrtc_transport_start());
     mdns_advertise();
     if (s_cloud_oidc_validator) {

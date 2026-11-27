@@ -115,6 +115,7 @@ static esp_err_t select_descriptor_configuration(
         .serial_number = configuration->serial_number,
         .manufacturer = configuration->manufacturer,
         .product = configuration->product,
+        .configuration = configuration->configuration,
         .absolute_mouse = configuration->absolute_mouse,
         .relative_mouse = configuration->relative_mouse,
         .keyboard = configuration->keyboard,
