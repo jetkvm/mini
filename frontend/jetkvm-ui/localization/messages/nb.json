@@ -379,7 +379,7 @@
     "hardware_display_schedule_end_title": "Til",
     "hardware_display_schedule_error": "Kunne ikke angi skjermplanen: {error}",
     "hardware_display_schedule_inactivity_title": "Etter inaktivitet",
-    "hardware_display_schedule_note": "Skjermen våkner når en knapp trykkes inn. Den våkner også når tilkoblingsstatusen endres, unntatt mellom tidene som er angitt ovenfor. Tidene gjelder når enheten har nettverkstiden.",
+    "hardware_display_schedule_note": "Skjermen våkner når en knapp trykkes inn eller tilkoblingsstatusen endres. Mellom de angitte tidene vekker bare et knappetrykk den.",
     "hardware_display_schedule_off_between_description": "Slå av skjermen mellom to klokkeslett",
     "hardware_display_schedule_off_title": "Slå av skjermen",
     "hardware_display_schedule_set_times": "Angi tider",

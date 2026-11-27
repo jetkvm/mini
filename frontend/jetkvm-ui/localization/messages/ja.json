@@ -379,7 +379,7 @@
     "hardware_display_schedule_end_title": "終了",
     "hardware_display_schedule_error": "ディスプレイスケジュールの設定に失敗しました: {error}",
     "hardware_display_schedule_inactivity_title": "無操作後",
-    "hardware_display_schedule_note": "ボタンが押されるとディスプレイが起動します。接続状態が変わったときも起動しますが、上で設定した時間帯は除きます。時刻は、デバイスがネットワーク時刻を取得してから適用されます。",
+    "hardware_display_schedule_note": "ボタンが押されたとき、または接続状態が変わったときにディスプレイが起動します。設定した時間帯は、ボタンを押したときだけ起動します。",
     "hardware_display_schedule_off_between_description": "指定した時間帯にディスプレイを消灯します",
     "hardware_display_schedule_off_title": "ディスプレイ消灯",
     "hardware_display_schedule_set_times": "時刻を設定",

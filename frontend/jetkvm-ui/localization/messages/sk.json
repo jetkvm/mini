@@ -363,7 +363,7 @@
     "hardware_display_schedule_end_title": "Do",
     "hardware_display_schedule_error": "Nepodarilo sa nastaviť plán displeja: {error}",
     "hardware_display_schedule_inactivity_title": "Po nečinnosti",
-    "hardware_display_schedule_note": "Displej sa prebudí po stlačení tlačidla. Prebudí sa aj pri zmene stavu pripojenia, okrem časov nastavených vyššie. Časy platia, keď má zariadenie sieťový čas.",
+    "hardware_display_schedule_note": "Displej sa prebudí po stlačení tlačidla alebo pri zmene stavu pripojenia. Medzi nastavenými časmi ho prebudí iba stlačenie tlačidla.",
     "hardware_display_schedule_off_between_description": "Vypnúť displej medzi dvoma časmi dňa",
     "hardware_display_schedule_off_title": "Vypnúť displej",
     "hardware_display_schedule_set_times": "Nastaviť časy",

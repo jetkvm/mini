@@ -379,7 +379,7 @@
     "hardware_display_schedule_end_title": "Till",
     "hardware_display_schedule_error": "Misslyckades med att ställa in skärmschemat: {error}",
     "hardware_display_schedule_inactivity_title": "Efter inaktivitet",
-    "hardware_display_schedule_note": "Skärmen vaknar när en knapp trycks in. Den vaknar också när anslutningsstatusen ändras, utom mellan tiderna som angetts ovan. Tiderna gäller när enheten har nätverkstiden.",
+    "hardware_display_schedule_note": "Skärmen vaknar när en knapp trycks in eller anslutningsstatusen ändras. Mellan de angivna tiderna väcker bara en knapptryckning den.",
     "hardware_display_schedule_off_between_description": "Stäng av skärmen mellan två klockslag",
     "hardware_display_schedule_off_title": "Stäng av skärmen",
     "hardware_display_schedule_set_times": "Ange tider",

@@ -379,7 +379,7 @@
     "hardware_display_schedule_end_title": "Bitiş",
     "hardware_display_schedule_error": "Ekran zamanlaması ayarlanamadı: {error}",
     "hardware_display_schedule_inactivity_title": "Hareketsizlikten sonra",
-    "hardware_display_schedule_note": "Bir düğmeye basıldığında ekran uyanır. Bağlantı durumu değiştiğinde de uyanır, ancak yukarıda ayarlanan saatler arasında uyanmaz. Saatler, cihaz ağ saatini aldıktan sonra geçerli olur.",
+    "hardware_display_schedule_note": "Bir düğmeye basıldığında veya bağlantı durumu değiştiğinde ekran uyanır. Ayarlanan saatler arasında ekranı yalnızca bir düğmeye basmak uyandırır.",
     "hardware_display_schedule_off_between_description": "Ekranı günün iki saati arasında kapat",
     "hardware_display_schedule_off_title": "Ekranı Kapat",
     "hardware_display_schedule_set_times": "Saatleri ayarla",

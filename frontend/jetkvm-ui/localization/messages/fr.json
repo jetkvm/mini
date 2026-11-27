@@ -379,7 +379,7 @@
     "hardware_display_schedule_end_title": "À",
     "hardware_display_schedule_error": "Échec de la définition de la planification de l'écran : {error}",
     "hardware_display_schedule_inactivity_title": "Après inactivité",
-    "hardware_display_schedule_note": "L'écran se réveille lorsqu'un bouton est pressé. Il se réveille aussi lorsque l'état de connexion change, sauf entre les heures définies ci-dessus. Les heures s'appliquent une fois que l'appareil dispose de l'heure réseau.",
+    "hardware_display_schedule_note": "L'écran se réveille lorsqu'un bouton est pressé ou lorsque l'état de connexion change. Entre les heures définies, seul un appui sur un bouton le réveille.",
     "hardware_display_schedule_off_between_description": "Éteindre l'écran entre deux heures de la journée",
     "hardware_display_schedule_off_title": "Éteindre l'écran",
     "hardware_display_schedule_set_times": "Définir les heures",

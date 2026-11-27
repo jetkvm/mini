@@ -432,7 +432,7 @@
     "hardware_display_schedule_end_title": "Until",
     "hardware_display_schedule_error": "Failed to set display schedule: {error}",
     "hardware_display_schedule_inactivity_title": "After inactivity",
-    "hardware_display_schedule_note": "The display wakes up when a button is pressed. It also wakes up when the connection state changes, except between the times set above. The times apply after the device has the network time.",
+    "hardware_display_schedule_note": "The display wakes up when a button is pressed or the connection state changes. Between the set times, only a button press wakes it.",
     "hardware_display_schedule_off_between_description": "Turn off the display between two times of day",
     "hardware_display_schedule_off_title": "Turn off Display",
     "hardware_display_schedule_set_times": "Set times",

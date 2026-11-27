@@ -379,7 +379,7 @@
     "hardware_display_schedule_end_title": "До",
     "hardware_display_schedule_error": "Не удалось установить расписание экрана: {error}",
     "hardware_display_schedule_inactivity_title": "После бездействия",
-    "hardware_display_schedule_note": "Экран включается при нажатии кнопки. Он также включается при изменении состояния соединения, кроме заданных выше промежутков. Время действует после того, как устройство получит сетевое время.",
+    "hardware_display_schedule_note": "Экран включается при нажатии кнопки или при изменении состояния соединения. В заданные промежутки его включает только нажатие кнопки.",
     "hardware_display_schedule_off_between_description": "Отключать экран между двумя моментами времени суток",
     "hardware_display_schedule_off_title": "Отключение экрана",
     "hardware_display_schedule_set_times": "Задать время",

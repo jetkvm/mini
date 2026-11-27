@@ -379,7 +379,7 @@
     "hardware_display_schedule_end_title": "Até",
     "hardware_display_schedule_error": "Falha ao definir o agendamento da tela: {error}",
     "hardware_display_schedule_inactivity_title": "Após inatividade",
-    "hardware_display_schedule_note": "A tela é ativada quando um botão é pressionado. Também é ativada quando o estado da conexão muda, exceto entre os horários definidos acima. Os horários se aplicam quando o dispositivo tem a hora da rede.",
+    "hardware_display_schedule_note": "A tela é ativada quando um botão é pressionado ou o estado da conexão muda. Entre os horários definidos, apenas o pressionar de um botão a ativa.",
     "hardware_display_schedule_off_between_description": "Desligar a tela entre dois horários do dia",
     "hardware_display_schedule_off_title": "Desligar Tela",
     "hardware_display_schedule_set_times": "Definir horários",

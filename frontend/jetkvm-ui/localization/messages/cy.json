@@ -374,7 +374,7 @@
     "hardware_display_schedule_end_title": "Tan",
     "hardware_display_schedule_error": "Methwyd gosod amserlen y dangosydd: {error}",
     "hardware_display_schedule_inactivity_title": "Ar ôl anweithgarwch",
-    "hardware_display_schedule_note": "Bydd y dangosydd yn deffro pan gaiff botwm ei wasgu. Bydd hefyd yn deffro pan fydd cyflwr y cysylltiad yn newid, heblaw rhwng yr amseroedd a osodwyd uchod. Mae'r amseroedd yn berthnasol pan fydd gan y ddyfais amser y rhwydwaith.",
+    "hardware_display_schedule_note": "Bydd y dangosydd yn deffro pan gaiff botwm ei wasgu neu pan fydd cyflwr y cysylltiad yn newid. Rhwng yr amseroedd a osodwyd, dim ond gwasgu botwm sy'n ei ddeffro.",
     "hardware_display_schedule_off_between_description": "Diffodd y dangosydd rhwng dwy adeg o'r dydd",
     "hardware_display_schedule_off_title": "Diffodd y Dangosydd",
     "hardware_display_schedule_set_times": "Gosod amseroedd",

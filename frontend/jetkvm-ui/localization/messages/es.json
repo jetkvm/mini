@@ -379,7 +379,7 @@
     "hardware_display_schedule_end_title": "Hasta",
     "hardware_display_schedule_error": "No se pudo configurar el horario de la pantalla: {error}",
     "hardware_display_schedule_inactivity_title": "Tras inactividad",
-    "hardware_display_schedule_note": "La pantalla se activa cuando se pulsa un botón. También se activa cuando cambia el estado de la conexión, excepto entre las horas definidas arriba. Las horas se aplican cuando el dispositivo tiene la hora de la red.",
+    "hardware_display_schedule_note": "La pantalla se activa cuando se pulsa un botón o cambia el estado de la conexión. Entre las horas definidas, solo la pulsación de un botón la activa.",
     "hardware_display_schedule_off_between_description": "Apagar la pantalla entre dos horas del día",
     "hardware_display_schedule_off_title": "Apagar la pantalla",
     "hardware_display_schedule_set_times": "Definir horas",

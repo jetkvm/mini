@@ -379,7 +379,7 @@
     "hardware_display_schedule_end_title": "Til",
     "hardware_display_schedule_error": "Kunne ikke indstille skærmplanen: {error}",
     "hardware_display_schedule_inactivity_title": "Efter inaktivitet",
-    "hardware_display_schedule_note": "Skærmen vågner, når der trykkes på en knap. Den vågner også, når forbindelsestilstanden ændres, undtagen mellem de tider, der er angivet ovenfor. Tiderne gælder, når enheden har netværkstiden.",
+    "hardware_display_schedule_note": "Skærmen vågner, når der trykkes på en knap, eller forbindelsestilstanden ændres. Mellem de angivne tider vækker kun et tryk på en knap den.",
     "hardware_display_schedule_off_between_description": "Sluk skærmen mellem to klokkeslæt",
     "hardware_display_schedule_off_title": "Sluk skærmen",
     "hardware_display_schedule_set_times": "Angiv tider",

@@ -379,7 +379,7 @@
     "hardware_display_schedule_end_title": "Alle",
     "hardware_display_schedule_error": "Impossibile impostare la pianificazione del display: {error}",
     "hardware_display_schedule_inactivity_title": "Dopo inattività",
-    "hardware_display_schedule_note": "Il display si riattiva quando viene premuto un pulsante. Si riattiva anche quando cambia lo stato della connessione, tranne tra gli orari impostati sopra. Gli orari si applicano quando il dispositivo ha l'ora di rete.",
+    "hardware_display_schedule_note": "Il display si riattiva quando viene premuto un pulsante o cambia lo stato della connessione. Tra gli orari impostati, solo la pressione di un pulsante lo riattiva.",
     "hardware_display_schedule_off_between_description": "Disattiva il display tra due orari del giorno",
     "hardware_display_schedule_off_title": "Disattiva display",
     "hardware_display_schedule_set_times": "Imposta orari",

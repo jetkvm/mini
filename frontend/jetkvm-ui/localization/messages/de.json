@@ -379,7 +379,7 @@
     "hardware_display_schedule_end_title": "Bis",
     "hardware_display_schedule_error": "Fehler beim Festlegen des Display-Zeitplans: {error}",
     "hardware_display_schedule_inactivity_title": "Nach Inaktivität",
-    "hardware_display_schedule_note": "Das Display wird aktiviert, wenn eine Taste gedrückt wird. Es wird auch aktiviert, wenn sich der Verbindungsstatus ändert, außer zwischen den oben festgelegten Zeiten. Die Zeiten gelten, sobald das Gerät die Netzwerkzeit hat.",
+    "hardware_display_schedule_note": "Das Display wird aktiviert, wenn eine Taste gedrückt wird oder sich der Verbindungsstatus ändert. Zwischen den festgelegten Zeiten aktiviert es nur ein Tastendruck.",
     "hardware_display_schedule_off_between_description": "Display zwischen zwei Uhrzeiten ausschalten",
     "hardware_display_schedule_off_title": "Display ausschalten",
     "hardware_display_schedule_set_times": "Zeiten festlegen",
