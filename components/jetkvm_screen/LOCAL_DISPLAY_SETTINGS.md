@@ -7,7 +7,7 @@
 - `getBacklightSettings` and `setBacklightSettings` use `max_brightness` (0–255), `dim_after` and `off_after` (seconds, 0 means never), wrapped in a `params` object. Dimming halves the brightness. The default is 35 with both timers off.
 - `getDisplayRotation` and `setDisplayRotation` carry `rotation` as the string `"0"`, `"90"`, `"180"` or `"270"`. Upstream's Normal (`"270"`) is the Kconfig mounting; each other value turns the picture a further quarter turn clockwise. The `display_quarter_turns` capability makes the UI offer all four turns.
 - With `JETKVM_SCREEN_BUTTONS`, the `display_buttons` capability makes the UI say a button press, not a touch, wakes the display.
-- `getDisplaySchedule` and `setDisplaySchedule` carry the quiet hours: `enabled`, `action` (`"off"` or `"dim"`), `start` and `end` (`"HH:MM"`, not equal; an end before the start is on the next day) and `timezone`, wrapped in a `params` object for the setter. `getDisplayScheduleTimezones` lists the zone names that the setter takes. The `display_schedule` capability makes the UI show the setting. The default is off, 22:00 to 06:00, UTC.
+- `getDisplaySchedule` and `setDisplaySchedule` carry the quiet hours: `enabled`, `action` (`"off"` or `"dim"`), `start` and `end` (`"HH:MM"`, not equal; an end before the start is on the next day) and `timezone`, wrapped in a `params` object for the setter. `getDisplayScheduleTimezones` lists the zone names that the setter takes. The `display_schedule` capability makes the UI show the setting. The default is off, 22:00 to 06:00, with no time zone (`""`). The setter takes `""` only for a schedule that is not enabled, so the UI can tell a schedule that was never turned on from one that is in UTC.
 
 ## Behavior
 

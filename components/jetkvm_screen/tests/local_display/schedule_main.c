@@ -117,9 +117,9 @@ static void test_display(void)
     restart(true);
     local_display_state_t snapshot;
     jetkvm_display_schedule_t stored;
-    /* Without a stored schedule: off, 22:00 to 06:00, UTC. */
+    /* Without a stored schedule: off, 22:00 to 06:00, no time zone. */
     assert(registered.get_schedule(&stored, NULL) && !stored.enabled && !stored.dim &&
-           stored.start_minute == 1320 && stored.end_minute == 360 && !strcmp(stored.timezone, "UTC"));
+           stored.start_minute == 1320 && stored.end_minute == 360 && !stored.timezone[0]);
     wall = utc(2026, 11, 27, 23, 0, 0);
     clock_set = true;
     local_display_tick();
@@ -224,6 +224,9 @@ static void test_storage(void)
     assert(registered.set_schedule(&bad, NULL));
     memset(bad.timezone, 'A', sizeof(bad.timezone));
     assert(registered.set_schedule(&bad, NULL));
+    /* Only a schedule that is off may have no time zone. */
+    bad = schedule(true, false, 22, 0, 6, 0, "");
+    assert(registered.set_schedule(&bad, NULL));
     /* A failed write keeps the schedule in use. */
     save_fails = true;
     jetkvm_display_schedule_t other = schedule(false, false, 1, 0, 2, 0, "UTC");
@@ -243,8 +246,25 @@ static void test_storage(void)
         if (which == 4) memcpy(saved_schedule + 4, saved_schedule + 6, 2); /* start equals end */
         restart(true);
         assert(registered.get_schedule(&stored, NULL) && !stored.enabled &&
-               stored.start_minute == 1320 && stored.end_minute == 360 && !strcmp(stored.timezone, "UTC"));
+               stored.start_minute == 1320 && stored.end_minute == 360 && !stored.timezone[0]);
     }
+    /* A schedule that is off is stored and read without a time zone, and it
+     * has no quiet hours. */
+    jetkvm_display_schedule_t unset = schedule(false, true, 1, 0, 2, 0, "");
+    assert(!registered.set_schedule(&unset, NULL));
+    restart(true);
+    assert(registered.get_schedule(&stored, NULL) && !stored.enabled && stored.dim &&
+           stored.start_minute == 60 && stored.end_minute == 120 && !stored.timezone[0]);
+    wall = utc(2026, 11, 27, 1, 30, 0);
+    clock_set = true;
+    local_display_tick();
+    jetkvm_backlight_settings_t backlight;
+    assert(registered.get_backlight(&backlight, NULL) && backlight.max_brightness == 64 &&
+           physical_brightness == 64);
+    /* The same record with the schedule on cannot be used. */
+    saved_schedule[1] = 1;
+    restart(true);
+    assert(registered.get_schedule(&stored, NULL) && !stored.enabled && stored.start_minute == 1320);
     memcpy(saved_schedule, schedule_before, sizeof(saved_schedule));
     saved_schedule_size = sizeof(saved_schedule);
     /* A reset boot does not read the schedule, so it cannot hide the progress. */

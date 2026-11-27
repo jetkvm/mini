@@ -538,11 +538,12 @@ bool rpc_set_display_schedule(const jetkvm_control_context_t *context,
         !minute_of_day(cJSON_GetObjectItemCaseSensitive(value, "end"), &schedule.end_minute) ||
         schedule.start_minute == schedule.end_minute ||
         !copy_json_string(cJSON_GetObjectItemCaseSensitive(value, "timezone"), schedule.timezone,
-                          sizeof(schedule.timezone), false)) {
+                          sizeof(schedule.timezone), true) ||
+        (cJSON_IsTrue(enabled) && schedule.timezone[0] == '\0')) {
         dispatch->error_code = -32602;
         dispatch->error_message = "Invalid params";
         dispatch->error_data = "params requires enabled (boolean), action (\"off\" or \"dim\"), "
-                               "start and end (\"HH:MM\", not equal) and timezone";
+                               "start and end (\"HH:MM\", not equal) and timezone (\"\" only when not enabled)";
         return true;
     }
     schedule.enabled = cJSON_IsTrue(enabled);

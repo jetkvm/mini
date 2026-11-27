@@ -1052,7 +1052,8 @@ typedef struct {
 #define JETKVM_CONTROL_DISPLAY_SCHEDULE_TIMEZONE_CAPACITY 64U
 /* The quiet hours of the local display: between start and end, minutes of the
  * local day (0..1439) in the time zone, the display is dimmed or off. An end
- * before the start is on the next day. */
+ * before the start is on the next day. A schedule that was never turned on
+ * has no time zone (""); one that is on has a zone. */
 typedef struct {
     bool enabled;
     /* Dim to half the set brightness; otherwise off. */

@@ -5,8 +5,8 @@ import { test } from "node:test";
 import { isTimeOfDay, menuOfSchedule, scheduleForMenu } from "../src/utils/displaySchedule.ts";
 
 const ZONES = ["Asia/Tokyo", "Europe/Stockholm", "UTC"];
-// What the device answers before a schedule was stored.
-const UNSET = { enabled: false, action: "off", start: "22:00", end: "06:00", timezone: "UTC" };
+// What the device answers before a schedule was stored: no time zone.
+const UNSET = { enabled: false, action: "off", start: "22:00", end: "06:00", timezone: "" };
 
 test("the menu shows the action of a schedule that is on, and Never otherwise", () => {
   assert.equal(menuOfSchedule(UNSET), "never");
@@ -26,7 +26,7 @@ test("a schedule turned on for the first time takes the browser's time zone", ()
   assert.equal(scheduleForMenu(UNSET, "dim", ZONES, "Asia/Tokyo").action, "dim");
 });
 
-test("a time zone that the device does not have leaves the schedule in UTC", () => {
+test("a browser time zone that the device does not have gives a first schedule in UTC", () => {
   assert.equal(scheduleForMenu(UNSET, "off", ZONES, "Asia/Calcutta").timezone, "UTC");
   // The list has not arrived yet.
   assert.equal(scheduleForMenu(UNSET, "off", [], "Europe/Stockholm").timezone, "UTC");
@@ -35,11 +35,11 @@ test("a time zone that the device does not have leaves the schedule in UTC", () 
 test("a stored time zone stays when the schedule is turned on again or its action changes", () => {
   const stored = { ...UNSET, timezone: "Asia/Tokyo" };
   assert.equal(scheduleForMenu(stored, "off", ZONES, "Europe/Stockholm").timezone, "Asia/Tokyo");
-  const utc = { ...UNSET, enabled: true };
-  assert.deepEqual(scheduleForMenu(utc, "dim", ZONES, "Europe/Stockholm"), {
-    ...utc,
-    action: "dim",
-  });
+  // UTC that the user selected is a stored zone as any other.
+  const utc = { ...UNSET, timezone: "UTC" };
+  assert.equal(scheduleForMenu(utc, "dim", ZONES, "Europe/Stockholm").timezone, "UTC");
+  const on = { ...utc, enabled: true };
+  assert.deepEqual(scheduleForMenu(on, "dim", ZONES, "Europe/Stockholm"), { ...on, action: "dim" });
 });
 
 test("Never turns the schedule off and keeps the rest", () => {

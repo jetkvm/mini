@@ -24,8 +24,9 @@ typedef struct {
 } schedule_record_t;
 _Static_assert(sizeof(schedule_record_t) == 8U + JETKVM_CONTROL_DISPLAY_SCHEDULE_TIMEZONE_CAPACITY,
                "the stored schedule has no padding");
+/* Never turned on: no time zone yet. */
 static const jetkvm_display_schedule_t s_default_schedule = {
-    .start_minute = 22U * 60U, .end_minute = 6U * 60U, .timezone = "UTC"};
+    .start_minute = 22U * 60U, .end_minute = 6U * 60U};
 static display_record_t s_config;
 static jetkvm_display_schedule_t s_schedule;
 /* The rule of s_schedule.timezone, and the quiet state of one minute. */
@@ -99,13 +100,17 @@ static esp_err_t save_blob(const char *key, const void *record, size_t size)
 }
 static esp_err_t save(const display_record_t *record)
 { return save_blob("settings", record, sizeof(*record)); }
-/* The rule of a schedule that can be stored and used; NULL for another one. */
-static const char *schedule_rule(const jetkvm_display_schedule_t *schedule)
+/* True for a schedule that can be stored and used, with the rule of its
+ * zone. A schedule that is off may have no zone, and then has no rule. */
+static bool schedule_valid(const jetkvm_display_schedule_t *schedule, const char **rule)
 {
+    *rule = NULL;
     if (schedule->start_minute > 1439U || schedule->end_minute > 1439U ||
         schedule->start_minute == schedule->end_minute ||
-        !memchr(schedule->timezone, '\0', sizeof(schedule->timezone))) return NULL;
-    return jetkvm_timezone_rule(schedule->timezone);
+        !memchr(schedule->timezone, '\0', sizeof(schedule->timezone))) return false;
+    if (schedule->timezone[0] == '\0') return !schedule->enabled;
+    *rule = jetkvm_timezone_rule(schedule->timezone);
+    return *rule != NULL;
 }
 /* A settings change counts as a press, so that the display shows it. */
 static void pressed(int64_t now)
@@ -198,12 +203,13 @@ static const char *set_schedule(const jetkvm_display_schedule_t *schedule, void 
 {
     (void)ctx;
     if (!schedule) return "Display schedule unavailable";
-    const char *rule = schedule_rule(schedule);
-    if (!rule) return "Unknown time zone, or start and end are not two times of the day";
+    const char *rule;
+    if (!schedule_valid(schedule, &rule))
+        return "Unknown time zone, or start and end are not two times of the day";
     schedule_record_t record = {.version = 1, .enabled = schedule->enabled, .dim = schedule->dim,
         .start_minute = schedule->start_minute, .end_minute = schedule->end_minute};
     /* The record is all zero after the name, so equal schedules store equal
-     * bytes. schedule_rule() found the name's end inside the field. */
+     * bytes. schedule_valid() found the name's end inside the field. */
     memcpy(record.timezone, schedule->timezone, strlen(schedule->timezone));
     if (!lock()) return "Local display unavailable or busy";
     esp_err_t error = save_blob("schedule", &record, sizeof(record));
@@ -259,11 +265,12 @@ esp_err_t local_display_settings_init(uint16_t rotation, const local_display_dri
         jetkvm_display_schedule_t schedule = {.enabled = saved.enabled == 1U, .dim = saved.dim == 1U,
             .start_minute = saved.start_minute, .end_minute = saved.end_minute};
         memcpy(schedule.timezone, saved.timezone, sizeof(schedule.timezone));
+        const char *rule;
         if (error == ESP_OK && size == sizeof(saved) && saved.version == 1U && saved.enabled <= 1U &&
-            saved.dim <= 1U && schedule_rule(&schedule)) s_schedule = schedule;
+            saved.dim <= 1U && schedule_valid(&schedule, &rule)) s_schedule = schedule;
         else if (error != ESP_ERR_NVS_NOT_FOUND) ESP_LOGW(TAG, "Invalid saved display schedule; it is off");
     }
-    s_schedule_rule = schedule_rule(&s_schedule);
+    (void)schedule_valid(&s_schedule, &s_schedule_rule);
     const jetkvm_local_display_context_t context = {
         .get_backlight = get_backlight, .set_backlight = set_backlight,
         .get_rotation = get_rotation, .set_rotation = set_rotation,

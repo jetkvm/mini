@@ -1469,7 +1469,8 @@ static bool schedule_test_get(jetkvm_display_schedule_t *schedule, void *ctx)
 static const char *schedule_test_set(const jetkvm_display_schedule_t *schedule, void *ctx)
 {
     (void)ctx; ++schedule_test_writes;
-    if (strcmp(schedule->timezone, "Europe/Stockholm") && strcmp(schedule->timezone, "UTC")) return "Unknown time zone";
+    if (strcmp(schedule->timezone, "Europe/Stockholm") && strcmp(schedule->timezone, "UTC") &&
+        (schedule->enabled || schedule->timezone[0])) return "Unknown time zone";
     schedule_test_value = *schedule; return NULL;
 }
 static bool schedule_test_timezone(size_t index, const char **name, void *ctx)
@@ -1515,6 +1516,14 @@ static void test_display_schedule(void)
     };
     for (size_t i = 0; i < sizeof(bad)/sizeof(bad[0]); ++i) display_test_error("setDisplaySchedule", bad[i], -32602);
     assert(schedule_test_writes == 1);
+    /* A schedule that is off may have no time zone. */
+    expect_rpc("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"setDisplaySchedule\",\"params\":{\"params\":{\"enabled\":false,\"action\":\"dim\",\"start\":\"01:00\",\"end\":\"02:00\",\"timezone\":\"\"}}}",
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":null}");
+    expect_rpc("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getDisplaySchedule\"}",
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"enabled\":false,\"action\":\"dim\",\"start\":\"01:00\",\"end\":\"02:00\",\"timezone\":\"\"}}");
+    expect_rpc("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"setDisplaySchedule\",\"params\":{\"params\":{\"enabled\":true,\"action\":\"off\",\"start\":\"23:59\",\"end\":\"00:00\",\"timezone\":\"UTC\"}}}",
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":null}");
+    schedule_test_writes = 1;
     /* The display, not the protocol, knows the zone names. */
     display_test_error("setDisplaySchedule",
         "{\"params\":{\"enabled\":true,\"action\":\"off\",\"start\":\"22:00\",\"end\":\"06:00\",\"timezone\":\"Europe/Atlantis\"}}", -32603);

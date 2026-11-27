@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { JsonRpcResponse, useJsonRpc } from "@hooks/useJsonRpc";
 import InputField from "@components/InputField";
@@ -23,6 +23,9 @@ export function DisplayScheduleSetting() {
   // The time fields as typed; a field is stored when it loses the focus.
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
+  // The schedule that the device has, and the count of the writes so far.
+  const stored = useRef<DisplaySchedule | null>(null);
+  const writes = useRef(0);
 
   const show = useCallback((value: DisplaySchedule) => {
     setSchedule(value);
@@ -36,7 +39,8 @@ export function DisplayScheduleSetting() {
         console.error("Failed to get display schedule:", resp.error);
         return;
       }
-      show(resp.result as DisplaySchedule);
+      stored.current = resp.result as DisplaySchedule;
+      show(stored.current);
     });
     send("getDisplayScheduleTimezones", {}, (resp: JsonRpcResponse) => {
       if ("error" in resp) {
@@ -55,18 +59,25 @@ export function DisplayScheduleSetting() {
   // Until the device has answered, there is no schedule to show.
   if (!schedule) return null;
 
-  // The page shows the stored schedule again when the device refuses one.
+  // The page shows the new schedule at once. When the device refuses it, or
+  // the request cannot be sent, the page shows the schedule that the device
+  // has. After a newer write, the answer to that write decides instead.
   const store = (next: DisplaySchedule) => {
+    const write = ++writes.current;
+    const failed = (error: string) => {
+      notifications.error(m.hardware_display_schedule_error({ error }));
+      if (write === writes.current && stored.current) show(stored.current);
+    };
     show(next);
-    send("setDisplaySchedule", { params: next }, (resp: JsonRpcResponse) => {
+    void send("setDisplaySchedule", { params: next }, (resp: JsonRpcResponse) => {
       if ("error" in resp) {
-        notifications.error(
-          m.hardware_display_schedule_error({ error: resp.error.data || m.unknown_error() }),
-        );
-        show(schedule);
+        failed(resp.error.data || m.unknown_error());
         return;
       }
+      stored.current = next;
       notifications.success(m.hardware_display_schedule_success());
+    }).then(sent => {
+      if (!sent) failed(m.unknown_error());
     });
   };
 

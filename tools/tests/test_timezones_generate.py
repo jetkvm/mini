@@ -48,9 +48,10 @@ class GenerateTest(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content if isinstance(content, bytes) else content.encode())
 
-    def generate(self, *args):
+    def generate(self, *args, since="2026-11-27"):
+        dated = ["--since", since] if since else []
         return subprocess.run([sys.executable, str(SCRIPT), "--zoneinfo", str(self.zones), "--output", str(self.output),
-                               "--since", "2026-11-27", *args], capture_output=True, text=True, timeout=120)
+                               *dated, *args], capture_output=True, text=True, timeout=120)
 
     def test_table_has_each_zone_with_its_rule_in_the_order_of_the_search(self):
         # Not zones: copies in other time scales, the machine's own zone, a
@@ -67,7 +68,7 @@ class GenerateTest(unittest.TestCase):
         text = self.output.read_text()
         self.assertIn("from tzdata 2026x;", text)
         self.assertIn(" * 4 zones,", text)
-        self.assertNotIn("differs", text)
+        self.assertIn("over the 5 years from 2026-11-27.\n * They agree.\n", text)
         rows = [line.strip() for line in text.splitlines() if line.startswith("    {")]
         self.assertEqual(rows, [
             '{"America/Argentina/Ushuaia", "<-03>3"},',
@@ -84,8 +85,7 @@ class GenerateTest(unittest.TestCase):
         result = self.generate()
         self.assertEqual(result.returncode, 0, result.stderr)
         text = self.output.read_text()
-        self.assertIn("in the 5 years from 2026-11-27\n * for: Asia/Late.\n", text)
-        self.assertNotIn("Asia/Past.", text)
+        self.assertIn("over the 5 years from 2026-11-27.\n * They differ at some time for: Asia/Late.\n", text)
         self.assertIn('{"Asia/Late", "AAA0"},', text)
 
     def test_rule_that_the_firmware_does_not_read_stops_the_generator(self):
@@ -117,6 +117,25 @@ class GenerateTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("is not what", result.stderr)
         self.assertEqual(self.output.read_text(), written)
+
+    def test_check_without_a_day_compares_from_the_day_of_the_header(self):
+        # The rule differs from the zone file until June 2027: a comparison
+        # from a day after that would not name the zone.
+        self.write("Asia/Late", tzif("AAA0", types=((3600, False), (0, False)), changes=((utc(2027, 6, 1), 1),)))
+        self.assertEqual(self.generate().returncode, 0)
+        self.assertIn("differ at some time for: Asia/Late.", self.output.read_text())
+        result = self.generate("--check", since=None)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # A day that is given is used.
+        self.assertNotEqual(self.generate("--check", since="2027-07-01").returncode, 0)
+        self.assertEqual(self.generate("--check", since="2026-11-27").returncode, 0)
+        # Without --check, the day is today, also over a header of another day.
+        self.assertEqual(self.generate(since="2027-07-01").returncode, 0)
+        self.assertIn("years from 2027-07-01.\n * They agree.", self.output.read_text())
+        today = lambda: f"years from {datetime.now(timezone.utc):%Y-%m-%d}."
+        before = today()
+        self.assertEqual(self.generate(since=None).returncode, 0)
+        self.assertTrue(any(day in self.output.read_text() for day in (before, today())))
 
 
 if __name__ == "__main__":
