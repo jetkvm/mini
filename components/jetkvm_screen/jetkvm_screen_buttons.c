@@ -14,6 +14,7 @@
 #include "jetkvm_screen_home_address.h"
 #include "jetkvm_screen_orientation.h"
 #include "jetkvm_screen_regulatory.h"
+#include "jetkvm_screen_tailscale_only.h"
 #include "local_display_settings.h"
 #include "ui/actions.h"
 #include "ui/fonts.h"
@@ -139,6 +140,8 @@ static int pressed = -1;
 static unsigned pressed_button;
 static bool press_used;
 static bool s_wifi_setup, s_wifi_setup_stoppable;
+/* Advanced > Tailscale Only is on the page. */
+static bool s_tailscale_only;
 
 /* The no-network screen while Wi-Fi setup from the menu runs. */
 static bool wifi_setup_page(void)
@@ -329,6 +332,9 @@ static void changed(lv_event_t *event)
         items[item_count++] = objects.menu_btn_status;
         items[item_count++] = objects.menu_btn_about;
     } else if (screen == objects.menu_advanced_screen) {
+        if (s_tailscale_only) {
+            items[item_count++] = jetkvm_screen_tailscale_only_entry();
+        }
         items[item_count++] = objects.menu_btn_advanced_reboot;
         items[item_count++] = objects.menu_btn_advanced_reset_config;
         items[item_count++] = objects.menu_btn_advanced_usb_emulation; /* USB Debugging */
@@ -428,11 +434,12 @@ static void buttons_fit(void)
         jetkvm_screen_regulatory_entry(),
 #endif
         objects.menu_btn_network, objects.menu_btn_advanced, objects.menu_btn_about};
-    lv_obj_t *advanced_items[] = {objects.menu_btn_advanced_reboot,
+    lv_obj_t *advanced_items[] = {jetkvm_screen_tailscale_only_entry(),
+                                  objects.menu_btn_advanced_reboot,
                                   objects.menu_btn_advanced_reset_config,
                                   objects.menu_btn_advanced_usb_emulation};
     menu_style(main_items, sizeof(main_items) / sizeof(main_items[0]));
-    menu_style(advanced_items, 3);
+    menu_style(advanced_items, sizeof(advanced_items) / sizeof(advanced_items[0]));
     /* The Mini has one DHCP client, so the RV1106's client switch is hidden. */
     lv_obj_add_flag(objects.menu_btn_dhcp_client, LV_OBJ_FLAG_HIDDEN);
     /* The generated "Reset Configuration" does not fit beside a vertical
@@ -671,6 +678,24 @@ void jetkvm_screen_buttons_set_wifi_setup(bool active, bool stoppable)
     s_wifi_setup = active;
     s_wifi_setup_stoppable = stoppable;
     changed(NULL);
+}
+
+void jetkvm_screen_buttons_set_tailscale_only(bool shown)
+{
+    if (shown == s_tailscale_only) {
+        return;
+    }
+    s_tailscale_only = shown;
+    if (strip != NULL) {
+        /* The entries moved under a held button. That hold must not act on
+         * the entry that took its place, such as Reboot Device, and its
+         * release is not a tap. */
+        if (pressed >= 0) {
+            press_used = true;
+            lv_obj_add_flag(track, LV_OBJ_FLAG_HIDDEN);
+        }
+        changed(NULL);
+    }
 }
 
 bool jetkvm_screen_buttons_poll(bool preview)

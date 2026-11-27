@@ -1193,6 +1193,7 @@ int peer_on_data(esp_peer_data_frame_t *frame, void *arg)
     bool is_hidrpc_reliable = false;
     uint32_t rpc_access_epoch = 0;
     bool rpc_cloud_authority = false;
+    bool rpc_through_tailscale = false;
     bool local_session = false;
     uint32_t rpc_input_generation = 0;
     uint32_t hid_input_generation = 0;
@@ -1217,6 +1218,8 @@ int peer_on_data(esp_peer_data_frame_t *frame, void *arg)
         rpc_input_generation = ctx->active_peer_generation;
         rpc_access_epoch = ctx->local_access_epoch;
         rpc_cloud_authority = ctx->active_peer_role == WEBRTC_TRANSPORT_SESSION_CLOUD_CONTROLLED;
+        /* The peer of the current session, so the flag is that session's. */
+        rpc_through_tailscale = !rpc_cloud_authority && ctx->session_through_tailscale;
         input_session_id = ctx->active_peer_session;
     }
     if ((is_rpc || is_hidrpc) &&
@@ -1347,6 +1350,7 @@ int peer_on_data(esp_peer_data_frame_t *frame, void *arg)
         };
         jetkvm_control_context_t control_context = {
             .note_local_activity = rpc_cloud_authority ? NULL : jetkvm_access_note_activity,
+            .session_through_tailscale = rpc_through_tailscale,
             .app_version = app_version,
             .system_version = system_version,
             .sku = JETKVM_DEVICE_SKU,

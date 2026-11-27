@@ -19,6 +19,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/idf_additions.h"
 #include "freertos/task.h"
+#include "jetkvm_access.h"
 #include "jetkvm_board_config.h"
 #include "jetkvm_cloud_service.h"
 #include "jetkvm_device_state.h"
@@ -420,6 +421,7 @@ static void screen_update_dynamic_state(jetkvm_screen_state_t *state)
         usb_state.initialized && usb_state.mounted;
     state->usb_debugging_enabled = jetkvm_usb_debugging_enabled();
     state->usb_debugging_active = jetkvm_usb_debugging_active();
+    state->tailscale_only = jetkvm_access_get_tailscale_only();
     state->active_sessions = 0;
     state->cloud_state = JETKVM_SCREEN_CLOUD_NOT_CONFIGURED;
     state->cloud_domain[0] = '\0';

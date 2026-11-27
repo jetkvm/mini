@@ -3,7 +3,7 @@ idf_component_register(
     INCLUDE_DIRS "include"
     REQUIRES
         esp_app_format esp_eth esp_event esp_netif esp_system
-        espressif__ip101 freertos heap jetkvm_cloud_service
+        espressif__ip101 freertos heap jetkvm_access jetkvm_cloud_service
         jetkvm_device_state jetkvm_network_settings jetkvm_ethernet_stats jetkvm_screen
         jetkvm_usb_debugging jetkvm_usb_hid jetkvm_video lwip webrtc_transport
 )

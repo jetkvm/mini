@@ -21,6 +21,7 @@ const STORED = [
   ['getKeyboardLayout', 'setKeyboardLayout', layout => ({ layout })],
   ['getBacklightSettings', 'setBacklightSettings', params => ({ params })],
   ['getDisplayRotation', 'setDisplayRotation', params => ({ params })],
+  ['getDisplaySchedule', 'setDisplaySchedule', params => ({ params })],
   ['getVideoCodecPreference', 'setVideoCodecPreference', codec => ({ codec })],
   ['getEDID', 'setEDID', edid => ({ edid })],
   ['getVideoSleepMode', 'setVideoSleepMode', ({ duration }) => ({ duration })],

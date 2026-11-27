@@ -23,6 +23,7 @@ Each of these is behind a capability that the firmware reports, so the UI shows 
 | --- | --- | --- |
 | OS Services: settings page, guest clipboard, file drop, guest terminal, installer disc, status indicators | `os_services` | `devices.$id.settings.os-services.tsx`, `useGuestClipboard.ts`, `useGuestFileDrop.ts`, `useOsServicesInstaller.ts`, `Guest*StatusCard.tsx`, `InfoBar.tsx`, `Terminal.tsx`, `PasteModal.tsx` |
 | Tailscale on its own settings page | `tailscale` | `devices.$id.settings.tailscale.tsx`, `TailscaleCard.tsx` |
+| Web interface through Tailscale only, on the Tailscale page | `tailscale_only` | `TailscaleCard.tsx` |
 | Extra host names the KVM answers under while it has no password | `extra_hostnames` | `devices.$id.settings.access._index.tsx`, `e2e/extra-hostnames.spec.ts` |
 | The IPv6 mode Static and the mDNS mode IPv6 only in the network settings. The page offers a mode only to a device that reports its capability. Upstream's firmware takes both modes and reports neither capability, so it must report them before upstream takes this change | `ipv6_static`, `mdns_ipv6_only` | `devices.$id.settings.network.tsx`, `e2e/mini/network-modes.spec.ts` |
 | Display rotation in quarter turns, display buttons | `display_quarter_turns`, `display_buttons` | `devices.$id.settings.hardware.tsx` |

@@ -1069,11 +1069,33 @@ typedef struct {
 typedef struct {
     uint32_t max_brightness, dim_after, off_after;
 } jetkvm_backlight_settings_t;
+#define JETKVM_CONTROL_DISPLAY_SCHEDULE_TIMEZONE_CAPACITY 64U
+/* A time window of each day: from start to before end, minutes of the local
+ * day (0..1439), not equal. An end before the start is on the next day. */
+typedef struct {
+    bool enabled;
+    uint16_t start_minute, end_minute;
+} jetkvm_display_window_t;
+/* The local display by time of day: in the dim window it is at half its set
+ * brightness, and in the off window it is off. Both are in one time zone. A
+ * schedule whose windows were never turned on has no time zone (""); one with
+ * a window that is on has a zone. */
+typedef struct {
+    jetkvm_display_window_t dim, off;
+    char timezone[JETKVM_CONTROL_DISPLAY_SCHEDULE_TIMEZONE_CAPACITY];
+} jetkvm_display_schedule_t;
 typedef struct {
     bool (*get_backlight)(jetkvm_backlight_settings_t *settings, void *ctx);
     const char *(*set_backlight)(const jetkvm_backlight_settings_t *settings, void *ctx);
     bool (*get_rotation)(uint16_t *rotation, void *ctx);
     const char *(*set_rotation)(uint16_t rotation, void *ctx);
+    /* The three schedule callbacks together add the "display_schedule"
+     * capability. set returns NULL, or the reason it stored nothing.
+     * timezone gives the names that set takes, in order: it sets *name to
+     * NULL from the count on, and returns false when it has no list. */
+    bool (*get_schedule)(jetkvm_display_schedule_t *schedule, void *ctx);
+    const char *(*set_schedule)(const jetkvm_display_schedule_t *schedule, void *ctx);
+    bool (*schedule_timezone)(size_t index, const char **name, void *ctx);
     /* Side buttons drive the local display and wake it. */
     bool buttons;
     void *ctx;
@@ -1153,6 +1175,23 @@ typedef struct {
     void *ctx;
 } jetkvm_tailscale_context_t;
 void jetkvm_control_set_default_tailscale_context(const jetkvm_tailscale_context_t *context);
+/* "Web interface through Tailscale only" (getTailscaleOnlyAccess,
+ * setTailscaleOnlyAccess): the web server answers only on the device's
+ * Tailscale address. set returns NULL, or why it did not store the value.
+ * The dispatcher turns the setting on only for a session whose signaling
+ * connection arrived through Tailscale
+ * (jetkvm_control_context_t.session_through_tailscale), and only while
+ * Tailscale is enabled and running with an address, so that a working
+ * Tailscale path exists at that moment; any session may turn it off. While
+ * it is on, the dispatcher refuses the Tailscale calls that can take the
+ * device out of its tailnet: disabling Tailscale, a new auth key, another
+ * control server and the logout. */
+typedef struct {
+    bool (*get)(void *ctx);
+    const char *(*set)(bool enabled, void *ctx);
+    void *ctx;
+} jetkvm_tailscale_only_context_t;
+void jetkvm_control_set_default_tailscale_only_context(const jetkvm_tailscale_only_context_t *context);
 bool jetkvm_control_render_network_notification(const jetkvm_network_state_t *state,
     char *output, size_t capacity, size_t *length);
 /** The localVersion and deviceCapabilities events, sent once each time the
@@ -1318,6 +1357,10 @@ typedef struct {
     /** Called for each known method that counts as activity
      *  (jetkvm_control_rpc_counts_as_activity); set for local sessions. */
     void (*note_local_activity)(void);
+    /** Per request: the signaling connection of the session arrived on the
+     *  device's Tailscale address. False for a cloud session, for a session
+     *  from the local network and for a call that has no session. */
+    bool session_through_tailscale;
 } jetkvm_control_context_t;
 
 /** `context` supplies the providers the capability list is derived from;
