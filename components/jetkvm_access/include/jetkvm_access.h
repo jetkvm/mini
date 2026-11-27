@@ -33,8 +33,9 @@ void jetkvm_access_set_host_names(size_t (*names)(char (*names)[JETKVM_ACCESS_HO
 size_t jetkvm_access_get_extra_host_names(char (*names)[JETKVM_ACCESS_HOST_NAME_CAPACITY], size_t capacity);
 const char *jetkvm_access_set_extra_host_names(const char *const *names, size_t count);
 /* Refuses with 421 a Host that is neither the connection's address nor one of
- * the device's names. Non-OK as for jetkvm_access_check_request(), which
- * includes this check. */
+ * the device's names. The answer says how to add a name: a help page for a
+ * browser that opens a page, JSON with a hint for every other request.
+ * Non-OK as for jetkvm_access_check_request(), which includes this check. */
 esp_err_t jetkvm_access_check_host(httpd_req_t *req);
 /* Non-OK means the rejection response was already sent; the handler must
  * then return jetkvm_access_rejection_result(). */

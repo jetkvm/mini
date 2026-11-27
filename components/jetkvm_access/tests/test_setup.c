@@ -56,6 +56,7 @@ typedef struct { const char *uri; int method; esp_err_t (*handler)(httpd_req_t *
 #define HTTP_GET 2
 #define HTTP_PUT 3
 #define HTTP_DELETE 4
+#define HTTP_HEAD 5
 #define PSA_SUCCESS 0
 static int psa_crypto_init(void) { return 0; }
 static unsigned tick = 1;
@@ -170,13 +171,13 @@ static void *heap_caps_malloc(size_t size, unsigned caps) { (void)caps; return m
 static void heap_caps_free(void *ptr) { free(ptr); }
 static httpd_uri_t routes[16];
 static unsigned route_count;
-static char response[1024], response_status[64], response_cookie[192];
+static char response[2048], response_status[64], response_cookie[192], response_type[64];
 static bool response_close; static esp_err_t last_result;
 static esp_err_t httpd_register_uri_handler(void *server, const httpd_uri_t *route) {
     (void)server; assert(route_count < 16); routes[route_count++] = *route; return 0;
 }
 static esp_err_t httpd_resp_set_status(httpd_req_t *req, const char *value) { (void)req; strcpy(response_status, value); return 0; }
-static esp_err_t httpd_resp_set_type(httpd_req_t *req, const char *value) { (void)req; (void)value; return 0; }
+static esp_err_t httpd_resp_set_type(httpd_req_t *req, const char *value) { (void)req; strcpy(response_type, value); return 0; }
 static esp_err_t httpd_resp_set_hdr(httpd_req_t *req, const char *name, const char *value) {
     (void)req; if (!strcmp(name, "Set-Cookie")) strcpy(response_cookie, value);
     if (!strcmp(name, "Connection") && !strcmp(value, "close")) response_close = true;
@@ -186,9 +187,10 @@ static esp_err_t httpd_resp_sendstr(httpd_req_t *req, const char *value) { (void
 static size_t httpd_req_get_hdr_value_len(httpd_req_t *req, const char *name) {
     return !strcmp(name, "Origin") && req->origin ? strlen(req->origin) : 0;
 }
-static const char *host_header = "mini.local";
+static const char *host_header = "mini.local", *accept_header;
 static esp_err_t httpd_req_get_hdr_value_str(httpd_req_t *req, const char *name, char *buffer, size_t capacity) {
-    const char *value = !strcmp(name, "Host") ? host_header : !strcmp(name, "Origin") ? req->origin : req->cookie;
+    const char *value = !strcmp(name, "Host") ? host_header : !strcmp(name, "Accept") ? accept_header :
+        !strcmp(name, "Origin") ? req->origin : req->cookie;
     if (!value || strlen(value) >= capacity) return ESP_FAIL;
     strcpy(buffer, value); return 0;
 }
@@ -257,7 +259,7 @@ static void start_access(void) {
     assert(jetkvm_access_attach((void *)1, false) == ESP_OK);
 }
 static int request(const char *uri, int method, const char *body, const char *origin, const char *cookie) {
-    strcpy(response_status, "200 OK"); response[0] = response_cookie[0] = 0; response_close = false;
+    strcpy(response_status, "200 OK"); response[0] = response_cookie[0] = response_type[0] = 0; response_close = false;
     for (unsigned i = 0; i < route_count; ++i) if (strlen(routes[i].uri) == strcspn(uri, "?") &&
         !strncmp(routes[i].uri, uri, strlen(routes[i].uri)) && routes[i].method == method) {
         httpd_req_t req = {.handle = (void *)1, .uri = uri, .method = method,
@@ -294,6 +296,53 @@ static void check_host(const char *host, bool answered) {
     assert((request("/auth/login-local", HTTP_POST, "{\"password\":\"12345678\"}", NULL, NULL) == 421) == !answered);
     assert((jetkvm_access_check_request(&socket, true) == ESP_OK) == answered);
     host_header = "mini.local";
+}
+/* What a refused name gets: a browser that opens a page gets the help page,
+ * every other request the JSON with its hint. A page under a foreign name can
+ * read both, so neither has the address, a name of the Mini or the sent name. */
+static void check_refusal_body(bool page) {
+    assert(atoi(response_status) == 421);
+    assert(!strcmp(response_type, page ? "text/html; charset=utf-8" : "application/json"));
+    assert(!strstr(response, "192.0.2.10") && !strstr(response, "evil") && !strstr(response, "mini"));
+    assert(strstr(response, "Other Names for This KVM") && strstr(response, "The screen of the KVM shows the IP address."));
+    if (page) {
+        assert(!strncmp(response, "<!doctype html>", 15) && !strstr(response, "<script") &&
+               !strstr(response, "href") && !strstr(response, "src="));
+        return;
+    }
+    cJSON *json = cJSON_Parse(response); assert(json);
+    assert(!strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(json, "error")), "Unknown host"));
+    assert(cJSON_IsString(cJSON_GetObjectItem(json, "hint")));
+    cJSON_Delete(json);
+}
+static void check_refusal(void) {
+    static const struct { const char *accept; bool page; } gets[] = {
+        {NULL, false}, {"*/*", false}, {"application/json, text/plain, */*", false},
+        {"text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8", true},
+        {"application/xhtml+xml, TEXT/HTML;q=0.9", true}};
+    host_header = "evil.example";
+    for (size_t i = 0; i < sizeof(gets) / sizeof(gets[0]); ++i) {
+        accept_header = gets[i].accept;
+        assert(request("/device", HTTP_GET, "", NULL, NULL) == 421 && !response_close);
+        check_refusal_body(gets[i].page);
+    }
+    /* A request with a body, and one that asks for no page, gets the JSON
+     * although its Accept names text/html. The body makes the answer close. */
+    accept_header = "text/html";
+    assert(request("/auth/login-local", HTTP_POST, "{\"password\":\"12345678\"}", NULL, NULL) == 421 && response_close);
+    check_refusal_body(false);
+    httpd_req_t head = {.handle = (void *)1, .uri = "/", .method = HTTP_HEAD};
+    response_type[0] = 0;
+    assert(jetkvm_access_check_host(&head) != ESP_OK);
+    check_refusal_body(true);
+    /* An Accept that does not fit the buffer counts as no page request. */
+    static char long_accept[400];
+    memset(long_accept, 'a', sizeof(long_accept) - 1);
+    memcpy(long_accept, "text/html,", 10);
+    accept_header = long_accept;
+    assert(request("/device", HTTP_GET, "", NULL, NULL) == 421);
+    check_refusal_body(false);
+    accept_header = NULL; host_header = "mini.local";
 }
 static void complete_reset(void) {
     reboot_runtime();
@@ -572,6 +621,7 @@ int main(void) {
     check_host("[2001:db8::10]", true); check_host("[2001:db8::10]:80", true);
     check_host("2001:db8::10", false); check_host("[2001:db8::11]", false);
     check_host("[2001:db8::10", false); check_host("192.0.2.10", false);
+    server_ip = "192.0.2.10"; check_refusal();
     /* With a password after setup the Host is not checked: a page under
      * another name has no login cookie. A Mini without a password, and one
      * that is not set up, answer their own names only. */
