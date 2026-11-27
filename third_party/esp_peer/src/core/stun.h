@@ -112,7 +112,7 @@ _Static_assert(offsetof(stun_msg_t, size) == 1492, "vendor STUN size offset");
 void stun_msg_create(stun_msg_t *msg, uint16_t type, bool random_id);
 void stun_set_mapped_address(char *value, uint8_t *mask, esp_peer_addr_t *addr);
 void stun_get_mapped_address(char *value, uint8_t *mask, esp_peer_addr_t *addr);
-void stun_parse_msg_buf(stun_msg_t *msg);
+int stun_parse_msg_buf(stun_msg_t *msg);
 void stun_calculate_fingerprint(char *buf, size_t len, uint32_t *fingerprint);
 int stun_msg_write_attr(stun_msg_t *msg, stun_attr_type_t type, uint16_t length, char *value);
 int stun_msg_finish(stun_msg_t *msg, stun_credential_t credential,
