@@ -375,6 +375,12 @@ export default function SettingsNetworkRoute() {
   const dhcpClient = watch("dhcp_client");
   const ipv4mode = watch("ipv4_mode");
   const ipv6mode = watch("ipv6_mode");
+  // The information card has nothing to show with IPv6 off or without an address.
+  const ipv6CardHidden =
+    ipv6mode === "disabled" ||
+    (ipv6mode !== "static" &&
+      !networkState?.ipv6_link_local &&
+      !networkState?.ipv6_addresses?.length);
   const domain = watch("domain");
   const timeSyncMode = watch("time_sync_mode");
 
@@ -650,7 +656,7 @@ export default function SettingsNetworkRoute() {
                     />
                   </SettingsItem>
 
-                  <div className="space-y-4">
+                  <div className="space-y-4" hidden={ipv6CardHidden}>
                     <AutoHeight>
                       {!networkState ? (
                         <GridCard>

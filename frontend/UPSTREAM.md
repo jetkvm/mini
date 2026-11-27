@@ -11,6 +11,7 @@ These have nothing Mini-specific in them:
 - **Connection retries** (`src/webrtc/signaling/useWebSocketSignaling.ts`, `tests/signaling-lifecycle.mjs`). A failed attempt (no answer within 10 s, no data channel, failed peer) is retried up to three times on a new signaling socket before the page shows the failure.
 - **Upload speed and time left** (`src/utils/uploadEta.ts`, `tests/upload-eta.mjs`, `src/routes/devices.$id.mount.tsx`). The rate is measured over the last 10 s, so it falls during a stall.
 - **Clickable settings rows** (`src/components/SettingsItem.tsx`). Clicking a row's text no longer presses the row's button.
+- **IPv6 information card** (`src/routes/devices.$id.settings.network.tsx`, `src/components/Ipv6NetworkCard.tsx`). The card is hidden while the IPv6 mode is Disabled or the device reports no IPv6 address, and the Gateway field is shown only with a value.
 - **Component options** used by the features below: `SplitButton` sizes, themes and item descriptions, an optional description in `SettingsSectionHeader`, and a `VideoPausedOverlay` that takes its title and text.
 - **Inter instead of Circular** (`src/assets/fonts/`, `src/index.css`, `index.html`, `MetricsChart.tsx`). Inter is under the OFL, so it can ship in an open-source build; Circular is a commercial font.
 
