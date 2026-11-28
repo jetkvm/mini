@@ -103,7 +103,7 @@
     { "while": { "osFiles": true, "osTerminal": true }, "measure": "fileBytesPerSecond", "min": 124000, "failAfterSeconds": 5 },
     // Over tailscale a floor replaces its LAN rule: 60 % of it for the
     // terminal, 70 % for the file transfer. The terminal's rate over the
-    // tailnet comes in steps of 16,384 bytes a second. In 1,585 measured
+    // tailnet comes in steps of 16,384 bytes a second. In 1,591 measured
     // seconds on a Wi-Fi Mini it was 13 steps (212,992) or more in 85 % of
     // them, 12 steps in 234 and 11 steps (180,224) in 5. The floor is
     // between 11 and 10 steps. The 5 seconds under it were stalls of 1 or 2
@@ -119,11 +119,13 @@
     { "andOneOf": ["tfMountCdrom", "tfMountDisk"], "measure": "mountReadBytesPerSecond", "min": 2800000, "failAfterSeconds": 3 },
     { "while": { "upload": true }, "measure": "uploadEnded", "max": 0 },
     // An upload goes to the TF card, and a card writes slowly for seconds
-    // at a time. The rate comes in steps of 65,536 bytes a second. In 356
-    // measured seconds of uploads on a Wi-Fi Mini, 102 were under
-    // 1,000,000, in rows of up to 4 seconds, and the least was 8 steps
-    // (524,288). The floor is under 7 steps (458,752).
-    { "while": { "upload": true }, "measure": "uploadBytesPerSecond", "min": 450000, "failAfterSeconds": 3 }
+    // at a time. The rate comes in steps of 65,536 bytes a second. In 397
+    // measured seconds of uploads on a Wi-Fi Mini, 116 were under
+    // 1,000,000, in rows of up to 4 seconds. The least were 7 steps
+    // (458,752) in one second and 8 steps in one. The floor is between 7
+    // and 6 steps: a row of slow seconds passes, and an upload that stops
+    // fails.
+    { "while": { "upload": true }, "measure": "uploadBytesPerSecond", "min": 400000, "failAfterSeconds": 3 }
   ],
 
   // "max": seconds from the switch call until every rule above holds for 2 s
