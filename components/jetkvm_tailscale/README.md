@@ -18,6 +18,7 @@ Settings and node identity are stored in NVS; keys never appear in RPC results. 
 - A packet for the tunnel's address is taken only when it arrived on the tunnel (`tunnel_input.c`, in front of lwIP's `ip4_input()`). lwIP alone takes such a packet on each interface, and while no peer has a WireGuard session it answers a host on the local network through the local interface. The packet filter and "Web interface through Tailscale only" depend on this rule.
 - IPv4 only, at most 64 peers (`CONFIG_ML_MAX_PEERS`), no exit nodes, subnet routes, Taildrop, or Tailscale SSH.
 - Client stacks and queues use PSRAM; the settings worker uses an internal stack because it writes NVS.
+- The tunnel's ChaCha20-Poly1305 code runs from internal RAM (`linker.lf`, 4.2 KiB), so that the tunnel's rate does not change with where the linker puts that code in flash.
 - The build requires `CONFIG_LWIP_ESP_NETIF_CLIENT_DATA`.
 - Raw lwIP calls go through `wireguardif_lwip_lock()`. It takes the lwIP core lock on Ethernet, which sets `CONFIG_LWIP_TCPIP_CORE_LOCKING`, and parks the TCP/IP thread on Wi-Fi.
 

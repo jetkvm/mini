@@ -7,6 +7,7 @@ endif()
 idf_component_register(
     SRCS "tailscale.c" "tailscale_config.c" "tunnel_input.c"
     INCLUDE_DIRS "include"
+    LDFRAGMENTS "linker.lf"
     REQUIRES control_protocol esp_common
     PRIV_REQUIRES microlink esp_netif esp_timer freertos nvs_flash
                   jetkvm_network_settings lwip

@@ -1,0 +1,18 @@
+# The tunnel encrypts and decrypts every packet of a session over the tailnet
+# with ChaCha20-Poly1305 in plain C, in the one lwIP task. That task is the
+# limit of what the tunnel carries: video takes its share first, and the
+# terminal, files and clipboard of OS Services get what is left. From flash
+# this code runs through the cache, and its speed then depends on where the
+# linker puts it. A firmware image that grew by 14 KiB in other libraries
+# moved it and made the terminal over the tailnet 8 % slower.
+#
+# In internal RAM the code runs at one speed, whatever else the image has.
+# It is 4.2 KiB: the cipher, the authenticator and the function that joins
+# them. The key exchange (x25519, blake2s) runs once per handshake and stays
+# in flash.
+[mapping:wireguard_tunnel_crypto]
+archive: libwireguard_lwip.a
+entries:
+    chacha20 (noflash_text)
+    poly1305-donna (noflash_text)
+    chacha20poly1305 (noflash_text)
