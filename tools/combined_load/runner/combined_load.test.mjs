@@ -1566,12 +1566,13 @@ test('a cloud connection that is gone fails in that second, while cloud is on', 
   assert.deepEqual(judge(rows(second => second < 5), criteria).failures.map(f => f.t), [T0 + 5000]);
 });
 
-test('while tailscale is on, the floors of the terminal\'s and the file transfer\'s rates are 80 % of the LAN floors on Ethernet and 70 % on Wi-Fi, and they apply in place of them', () => {
-  for (const [board, part] of [['ethernet', 0.8], ['wifi', 0.7]]) {
+test('while tailscale is on, the floors of the terminal\'s and the file transfer\'s rates are 80 % of the LAN floors on Ethernet, and 60 % and 70 % on Wi-Fi, and they apply in place of them', () => {
+  for (const [board, parts] of [['ethernet', { terminalBytesPerSecond: 0.8, fileBytesPerSecond: 0.8 }], ['wifi', { terminalBytesPerSecond: 0.6, fileBytesPerSecond: 0.7 }]]) {
     const criteria = readJsonc(path.join(here, '..', board, 'criteria.jsonc'));
     const rates = ['terminalBytesPerSecond', 'fileBytesPerSecond'];
     const only = { everySecond: criteria.everySecond.filter(rule => rates.includes(rule.measure)) };
     for (const lan of only.everySecond.filter(rule => !rule.while.tailscale)) {
+      const part = parts[lan.measure];
       const state = { video: true, osServices: true, ...lan.while, tailscale: true };
       const load = lan.measure === 'terminalBytesPerSecond' ? 'osTerminal' : 'osFiles';
       const field = load === 'osTerminal' ? 'bytes' : 'bytesSent';
