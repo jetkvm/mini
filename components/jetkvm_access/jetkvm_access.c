@@ -68,6 +68,9 @@ static void (*s_revoke_local)(void);
 static size_t (*s_host_names)(char (*names)[JETKVM_ACCESS_HOST_NAME_CAPACITY], size_t capacity);
 static char s_extra_names[JETKVM_ACCESS_EXTRA_HOST_NAMES][JETKVM_ACCESS_HOST_NAME_CAPACITY];
 static size_t s_extra_count;
+/* "Web interface through Tailscale only" (jetkvm_access.h). */
+static atomic_bool s_tailscale_only;
+static bool (*s_tailscale_address)(uint8_t ipv4[4]);
 
 /* Use the socket peer, never a caller-supplied forwarding header. Keep active
  * lockouts when the bounded table fills; reclaim only idle entries. */
@@ -257,6 +260,79 @@ static bool is_local_address(httpd_req_t *req, int family, const uint8_t *addres
     }
     return own_family == family && memcmp(own, address, family == AF_INET ? 4 : 16) == 0;
 }
+void jetkvm_access_set_tailscale_address(bool (*address)(uint8_t ipv4[4]))
+{
+    s_tailscale_address = address;
+}
+bool jetkvm_access_socket_through_tailscale(int fd)
+{
+    struct sockaddr_storage local;
+    socklen_t size = sizeof(local);
+    if (getsockname(fd, (struct sockaddr *)&local, &size) != 0) return false;
+    const uint8_t *own = NULL;
+    if (local.ss_family == AF_INET) {
+        own = (const uint8_t *)&((struct sockaddr_in *)&local)->sin_addr;
+    } else if (local.ss_family == AF_INET6 &&
+               IN6_IS_ADDR_V4MAPPED(&((struct sockaddr_in6 *)&local)->sin6_addr)) {
+        own = (const uint8_t *)&((struct sockaddr_in6 *)&local)->sin6_addr + 12;
+    }
+    uint8_t tailscale[4];
+    bool known = s_tailscale_address && s_tailscale_address(tailscale);
+    return jetkvm_access_arrived_through_tailscale(own, known ? tailscale : NULL);
+}
+bool jetkvm_access_admits_socket(int fd)
+{
+    /* The setting first: while it is off, no connection asks for the
+     * Tailscale address. */
+    return !atomic_load(&s_tailscale_only) || jetkvm_access_socket_through_tailscale(fd);
+}
+bool jetkvm_access_get_tailscale_only(void) { return atomic_load(&s_tailscale_only); }
+/* HTTPD's open sockets per listener (configure_http() in webrtc_http.c sets
+ * 8); a listener with more is left to the Host check. */
+#define OPEN_SOCKETS_PER_SERVER 16
+/* Runs on the listener's HTTPD task, so no connection opens or closes
+ * meanwhile and each number names the connection that was read. shutdown()
+ * and not httpd_sess_trigger_close(): that one queues a session slot, which
+ * another connection can take before the queued close runs. HTTPD then
+ * reads the end of the connection and frees its session. */
+static void close_unadmitted(void *arg)
+{
+    httpd_handle_t server = arg;
+    int sockets[OPEN_SOCKETS_PER_SERVER];
+    size_t count = OPEN_SOCKETS_PER_SERVER;
+    if (httpd_get_client_list(server, &count, sockets) != ESP_OK) return;
+    for (size_t i = 0; i < count; ++i) {
+        if (!jetkvm_access_admits_socket(sockets[i])) (void)shutdown(sockets[i], SHUT_RDWR);
+    }
+}
+const char *jetkvm_access_set_tailscale_only(bool enabled)
+{
+    if (!s_mutex) return "Access control unavailable";
+    /* Without a Tailscale address the rule admits no connection at all. */
+    uint8_t tailscale[4];
+    if (enabled && !(s_tailscale_address && s_tailscale_address(tailscale)))
+        return "This KVM has no Tailscale address";
+    xSemaphoreTakeRecursive(s_mutex, portMAX_DELAY);
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open("jk_access", NVS_READWRITE, &handle);
+    if (err == ESP_OK) {
+        err = nvs_set_u8(handle, "ts_only", enabled ? 1 : 0);
+        if (err == ESP_OK) err = nvs_commit(handle);
+        nvs_close(handle);
+    }
+    if (err == ESP_OK) atomic_store(&s_tailscale_only, enabled);
+    jetkvm_access_unlock();
+    if (err != ESP_OK) return "The setting could not be stored";
+    /* The connections that were open from the local network end now. This
+     * is the quick way only: a connection that stays open for any reason
+     * gets no answer from the Host check, and the signaling socket checks
+     * its own connection again with each frame and each poll. */
+    for (size_t i = 0; enabled && i < 2; ++i) {
+        httpd_handle_t server = s_listeners[i].server;
+        if (server) (void)httpd_queue_work(server, close_unadmitted, server);
+    }
+    return NULL;
+}
 /* A DNS-rebinding page reaches the device under the attacker's name, which
  * the browser sends as Host and as Origin. Answer only the address the client
  * connected to and the device's own names, with or without an Origin. */
@@ -436,6 +512,16 @@ static void host_refusal(httpd_req_t *req)
 }
 esp_err_t jetkvm_access_check_host(httpd_req_t *req)
 {
+    /* A connection that "Web interface through Tailscale only" does not
+     * admit gets no answer and is closed. The web server refuses such a
+     * connection when it opens; this covers one that was open before the
+     * setting turned on, and a listener whose open hook cannot refuse.
+     * Already on the HTTPD task: shut the socket down now, and HTTPD reads
+     * the end of the connection and frees its session. */
+    if (!jetkvm_access_admits_socket(httpd_req_to_sockfd(req))) {
+        (void)shutdown(httpd_req_to_sockfd(req), SHUT_RDWR);
+        return ESP_ERR_INVALID_STATE;
+    }
     /* With a password after setup, a page under another name has no login
      * cookie and gets 401, so only the setup and a Mini without a password
      * need the Host check. */
@@ -830,6 +916,7 @@ esp_err_t jetkvm_access_init(void (*revoke_local)(void))
     if (psa_crypto_init() != PSA_SUCCESS) return ESP_FAIL;
     jetkvm_password_defaults(&s_password);
     atomic_store(&s_idle_minutes, 0);
+    atomic_store(&s_tailscale_only, false);
     bool setup = false;
     nvs_handle_t handle;
     esp_err_t err = nvs_open("jk_access", NVS_READONLY, &handle);
@@ -846,6 +933,9 @@ esp_err_t jetkvm_access_init(void (*revoke_local)(void))
             uint16_t minutes = 0;
             if (nvs_get_u16(names, "idle_minutes", &minutes) == ESP_OK &&
                 minutes <= JETKVM_ACCESS_MAX_IDLE_MINUTES) atomic_store(&s_idle_minutes, minutes);
+            uint8_t tailscale_only = 0;
+            if (nvs_get_u8(names, "ts_only", &tailscale_only) == ESP_OK)
+                atomic_store(&s_tailscale_only, tailscale_only == 1);
             nvs_close(names);
         }
     } else if (err == ESP_ERR_NVS_NOT_FOUND) err = ESP_OK;

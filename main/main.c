@@ -24,6 +24,7 @@
 #include "esp_timer.h"
 #include "esp_private/startup_internal.h"
 #include "nvs_flash.h"
+#include "lwip/sockets.h"
 #include "soc/lp_clkrst_reg.h"
 #include "soc/soc.h"
 #include "jetkvm_console.h"
@@ -103,6 +104,28 @@ static size_t access_host_names(char (*names)[JETKVM_ACCESS_HOST_NAME_CAPACITY],
     }
     free(tailnet);
     return count;
+}
+
+/* "Web interface through Tailscale only": the access gate admits a
+ * connection on this address only, and the RPC stores the setting there. */
+static bool tailscale_address(uint8_t ipv4[4])
+{
+    jetkvm_tailscale_status_t *tailnet = s_tailscale_context.get_status ?
+        malloc(sizeof(*tailnet)) : NULL;
+    bool known = tailnet && s_tailscale_context.get_status(tailnet, s_tailscale_context.ctx) &&
+        inet_pton(AF_INET, tailnet->ipv4, ipv4) == 1;
+    free(tailnet);
+    return known;
+}
+static bool tailscale_only_get(void *ctx)
+{
+    (void)ctx;
+    return jetkvm_access_get_tailscale_only();
+}
+static const char *tailscale_only_set(bool enabled, void *ctx)
+{
+    (void)ctx;
+    return jetkvm_access_set_tailscale_only(enabled);
 }
 
 _Static_assert(JETKVM_EXTRA_HOSTNAME_CAPACITY == JETKVM_ACCESS_HOST_NAME_CAPACITY &&
@@ -1309,6 +1332,13 @@ void app_main(void)
     } else {
         ESP_LOGW(TAG, "Tailscale unavailable: %s", esp_err_to_name(ret));
     }
+    /* Also when Tailscale did not start: a stored "Web interface through
+     * Tailscale only" must stay readable, and the screen's entry must be
+     * able to turn it off. Without Tailscale there is no address, so the
+     * setting cannot be turned on. */
+    jetkvm_access_set_tailscale_address(tailscale_address);
+    jetkvm_control_set_default_tailscale_only_context(&(jetkvm_tailscale_only_context_t){
+        .get = tailscale_only_get, .set = tailscale_only_set});
     webrtc_transport_set_video_encode_source(jetkvm_video_get_encode_stats);
     webrtc_transport_set_hdmi_receiver_source(
         jetkvm_video_get_hdmi_receiver_stats);

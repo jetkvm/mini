@@ -63,3 +63,24 @@ void jetkvm_access_note_activity(void);
 bool jetkvm_access_expire_idle(void);
 /* True for the epoch that the last idle expiry ended. */
 bool jetkvm_access_epoch_expired(uint32_t epoch);
+/* "Web interface through Tailscale only", stored in NVS and off by default.
+ * While it is on, the web server admits a connection only when it arrived on
+ * the device's Tailscale address (jetkvm_access_tailscale_only_admits()), so
+ * the device does not answer on its local network addresses. A factory reset
+ * turns it off, as it erases every setting. */
+bool jetkvm_access_get_tailscale_only(void);
+/* Returns NULL, or why the value was not stored. It is not turned on while
+ * the device has no Tailscale address. Turning it on also closes the open
+ * connections that the rule does not admit. The caller decides who may turn
+ * it on. */
+const char *jetkvm_access_set_tailscale_only(bool enabled);
+/* `address` fills the 4 bytes of the device's Tailscale IPv4 address and
+ * returns true, or returns false while the device has none. Without a
+ * provider the device has no Tailscale address. */
+void jetkvm_access_set_tailscale_address(bool (*address)(uint8_t ipv4[4]));
+/* True when the connection of `fd` arrived on the device's Tailscale address. */
+bool jetkvm_access_socket_through_tailscale(int fd);
+/* False for a connection that the Tailscale-only setting does not admit. The
+ * web server closes such a connection when it opens; the Host check closes
+ * one that was open before the setting turned on. */
+bool jetkvm_access_admits_socket(int fd);

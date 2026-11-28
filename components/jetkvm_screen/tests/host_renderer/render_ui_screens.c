@@ -13,6 +13,7 @@
 #include "jetkvm_screen_fit.h"
 #include "jetkvm_screen_home_address.h"
 #include "jetkvm_screen_regulatory.h"
+#include "jetkvm_screen_tailscale_only.h"
 #include "jetkvm_screen_usb_debugging.h"
 #include "fonts.h"
 #include "screens.h"
@@ -194,6 +195,18 @@ int main(int argc, char **argv)
             return 1;
         }
     }
+
+    /* Advanced > Tailscale Only: the first entry while the setting is on. */
+    (void)jetkvm_screen_tailscale_only_apply(true);
+    jetkvm_screen_buttons_set_tailscale_only(true);
+    loadScreen(SCREEN_ID_MENU_SCREEN);
+    loadScreen(SCREEN_ID_MENU_ADVANCED_SCREEN);
+    if (!lv_obj_has_state(jetkvm_screen_tailscale_only_entry(), LV_STATE_FOCUSED) ||
+        render_active(argv[1], SCREEN_ID_MENU_ADVANCED_SCREEN, "advanced-tailscale-only") != 0) {
+        return 1;
+    }
+    (void)jetkvm_screen_tailscale_only_apply(false);
+    jetkvm_screen_buttons_set_tailscale_only(false);
 
 #if JETKVM_BOARD_WIFI
     /* Menu with Regulatory highlighted (the second entry, one tap down),

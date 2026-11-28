@@ -29,6 +29,15 @@ cc -std=c11 -g -fsanitize=address,undefined -DWIREGUARD_CRYPTO_REFC=1 \
   "$cjson/cJSON.c" -lm -o "$binary"
 "$binary"
 done
+# The production input rule in front of lwIP's own IPv4 input, with the
+# tunnel interface of the WireGuard library.
+cc -std=c11 -g -fsanitize=address,undefined -DWIREGUARD_CRYPTO_REFC=1 \
+  -I"$tests/lwip_host" -I"$lwip/include" -I"$wg" -I"$wg/crypto/refc" \
+  "$tests/test_tunnel_input.c" "$tests/../tunnel_input.c" \
+  "$wg/wireguard.c" "$wg/wireguardif.c" "$wg/crypto.c" \
+  "$wg"/crypto/refc/{blake2s,chacha20,chacha20poly1305,poly1305-donna,x25519}.c \
+  "$lwip"/core/*.c "$lwip"/core/ipv4/*.c "$lwip"/core/ipv6/*.c -lm -Wl,--wrap=ip4_input -o "$binary"
+"$binary"
 cc -std=c11 -g -fsanitize=address,undefined -DWIREGUARD_CRYPTO_REFC=1 \
   -I"$tests/lwip_host" -I"$lwip/include" -I"$wg" -I"$wg/crypto/refc" \
   "$tests/test_wireguard_initiation.c" "$wg/wireguard.c" "$wg/crypto.c" \

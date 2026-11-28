@@ -38,6 +38,11 @@ esp_err_t webrtc_transport_session_create(uint32_t access_epoch, bool sender_pla
                                           uint32_t *generation);
 esp_err_t webrtc_transport_websocket_session_create(uint32_t access_epoch, uint32_t *session_id,
                                                     uint32_t *generation);
+/* Records for a local session that its signaling connection arrived on the
+ * device's Tailscale address. A new session starts without it, so a cloud
+ * session and a session from the local network never have it. Only such a
+ * session may turn on "Web interface through Tailscale only". */
+void webrtc_transport_session_set_through_tailscale(uint32_t session_id, bool through_tailscale);
 esp_err_t webrtc_transport_session_poll(uint32_t session_id, webrtc_signal_event_t *event,
                                         uint32_t *current_generation);
 esp_err_t webrtc_transport_websocket_session_poll(uint32_t session_id,

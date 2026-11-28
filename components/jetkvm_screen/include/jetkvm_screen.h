@@ -108,6 +108,10 @@ typedef struct {
     bool usb_debugging_enabled;
     bool usb_debugging_active;
 
+    /* "Web interface through Tailscale only" is on: the Advanced menu shows
+     * the entry that turns it off. */
+    bool tailscale_only;
+
     char app_version[JETKVM_SCREEN_VERSION_CAPACITY];
     char system_version[JETKVM_SCREEN_VERSION_CAPACITY];
     char device_id[JETKVM_SCREEN_DEVICE_ID_CAPACITY];

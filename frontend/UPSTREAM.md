@@ -22,6 +22,7 @@ Each of these is behind a capability that the firmware reports, so the UI shows 
 | --- | --- | --- |
 | OS Services: settings page, guest clipboard, file drop, guest terminal, installer disc, status indicators | `os_services` | `devices.$id.settings.os-services.tsx`, `useGuestClipboard.ts`, `useGuestFileDrop.ts`, `useOsServicesInstaller.ts`, `Guest*StatusCard.tsx`, `InfoBar.tsx`, `Terminal.tsx`, `PasteModal.tsx` |
 | Tailscale on its own settings page | `tailscale` | `devices.$id.settings.tailscale.tsx`, `TailscaleCard.tsx` |
+| Web interface through Tailscale only, on the Tailscale page | `tailscale_only` | `TailscaleCard.tsx` |
 | Extra host names the KVM answers under while it has no password | `extra_hostnames` | `devices.$id.settings.access._index.tsx`, `e2e/extra-hostnames.spec.ts` |
 | Display rotation in quarter turns, display buttons | `display_quarter_turns`, `display_buttons` | `devices.$id.settings.hardware.tsx` |
 | TF card space, image count and exFAT format | `removable_storage` | `devices.$id.mount.tsx` |

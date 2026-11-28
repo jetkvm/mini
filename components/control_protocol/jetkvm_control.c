@@ -90,6 +90,11 @@ void jetkvm_control_set_default_tailscale_context(const jetkvm_tailscale_context
 {
     s_default_tailscale = context ? *context : (jetkvm_tailscale_context_t){0};
 }
+jetkvm_tailscale_only_context_t s_default_tailscale_only;
+void jetkvm_control_set_default_tailscale_only_context(const jetkvm_tailscale_only_context_t *context)
+{
+    s_default_tailscale_only = context ? *context : (jetkvm_tailscale_only_context_t){0};
+}
 void jetkvm_control_set_default_extra_hostnames_context(const jetkvm_extra_hostnames_context_t *context)
 {
     s_default_extra_hostnames = context ? *context : (jetkvm_extra_hostnames_context_t){0};
@@ -257,6 +262,8 @@ static const rpc_method_t s_rpc_methods[] = {
     { "getTailscaleConfig", rpc_get_tailscale_config },
     { "setTailscaleConfig", rpc_set_tailscale_config },
     { "logoutTailscale", rpc_logout_tailscale },
+    { "getTailscaleOnlyAccess", rpc_get_tailscale_only_access },
+    { "setTailscaleOnlyAccess", rpc_set_tailscale_only_access },
     { "setNetworkSettings", rpc_set_network_settings },
     { "renewDHCPLease", rpc_renew_dhcp_lease },
     { "getMacAddressSettings", rpc_get_mac_address_settings },

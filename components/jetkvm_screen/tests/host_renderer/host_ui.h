@@ -27,6 +27,14 @@ void host_ui_start_buttons(void);
  * 0 is SW3 and 1 is SW2. */
 void host_ui_tap(unsigned button);
 
+/* One press of a button that is held for `milliseconds` and then released. */
+void host_ui_hold(unsigned button, uint32_t milliseconds);
+
+/* The parts of such a press, for a state that changes while it is held. */
+void host_ui_press(unsigned button);
+void host_ui_keep(uint32_t milliseconds);
+void host_ui_release(unsigned button);
+
 /* Writes the IPv4 address that is widest in `font`, with its kerning, among
  * all 2^32 addresses. */
 void host_ui_widest_address(const lv_font_t *font, char address[16]);

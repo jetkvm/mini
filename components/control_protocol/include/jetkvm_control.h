@@ -1155,6 +1155,23 @@ typedef struct {
     void *ctx;
 } jetkvm_tailscale_context_t;
 void jetkvm_control_set_default_tailscale_context(const jetkvm_tailscale_context_t *context);
+/* "Web interface through Tailscale only" (getTailscaleOnlyAccess,
+ * setTailscaleOnlyAccess): the web server answers only on the device's
+ * Tailscale address. set returns NULL, or why it did not store the value.
+ * The dispatcher turns the setting on only for a session whose signaling
+ * connection arrived through Tailscale
+ * (jetkvm_control_context_t.session_through_tailscale), and only while
+ * Tailscale is enabled and running with an address, so that a working
+ * Tailscale path exists at that moment; any session may turn it off. While
+ * it is on, the dispatcher refuses the Tailscale calls that can take the
+ * device out of its tailnet: disabling Tailscale, a new auth key, another
+ * control server and the logout. */
+typedef struct {
+    bool (*get)(void *ctx);
+    const char *(*set)(bool enabled, void *ctx);
+    void *ctx;
+} jetkvm_tailscale_only_context_t;
+void jetkvm_control_set_default_tailscale_only_context(const jetkvm_tailscale_only_context_t *context);
 bool jetkvm_control_render_network_notification(const jetkvm_network_state_t *state,
     char *output, size_t capacity, size_t *length);
 /** The localVersion and deviceCapabilities events, sent once each time the
@@ -1317,6 +1334,10 @@ typedef struct {
     /** Called for each known method that counts as activity
      *  (jetkvm_control_rpc_counts_as_activity); set for local sessions. */
     void (*note_local_activity)(void);
+    /** Per request: the signaling connection of the session arrived on the
+     *  device's Tailscale address. False for a cloud session, for a session
+     *  from the local network and for a call that has no session. */
+    bool session_through_tailscale;
 } jetkvm_control_context_t;
 
 /** `context` supplies the providers the capability list is derived from;

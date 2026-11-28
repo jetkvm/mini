@@ -107,6 +107,10 @@ static lv_obj_t *top_icon = &icon_top, *bottom_icon = &icon_bottom, *top_dot = &
     *bottom_dot = &dot_bottom, *track = &track_obj, *fill = &fill_obj;
 static lv_obj_t *items[5];
 static lv_obj_t *jetkvm_screen_regulatory_screen(void) { return NULL; }
+/* Advanced > Tailscale Only, which is on the page while its setting is on. */
+static bool s_tailscale_only;
+static lv_obj_t tailscale_btn;
+static lv_obj_t *jetkvm_screen_tailscale_only_entry(void) { return &tailscale_btn; }
 static lv_obj_t *jetkvm_screen_regulatory_list(void) { return NULL; }
 static lv_obj_t *hold_accept;
 static unsigned selection, item_count;
@@ -176,6 +180,16 @@ int main(void)
     list_items(&advanced_screen);
     assert(item_count == 3 && items[0] == &reboot_btn && items[1] == &reset_btn &&
            items[2] == &usb_btn);
+
+    /* While Tailscale Only is on the page, it comes first and the entry
+     * stays last. */
+    s_tailscale_only = true;
+    list_items(&advanced_screen);
+    assert(item_count == 4 && items[0] == &tailscale_btn && items[1] == &reboot_btn &&
+           items[2] == &reset_btn && items[3] == &usb_btn);
+    s_tailscale_only = false;
+    list_items(&advanced_screen);
+    assert(item_count == 3 && items[2] == &usb_btn);
 
     /* Stored off, port off. A tap steps on; a hold shorter than Reboot's
      * does not act; the Reboot hold asks for the other value. */

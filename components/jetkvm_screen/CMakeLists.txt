@@ -9,6 +9,7 @@ idf_component_register(
         "jetkvm_screen_buttons.c"
         "jetkvm_screen_home_address.c"
         "jetkvm_screen_usb_debugging.c"
+        "jetkvm_screen_tailscale_only.c"
         "jetkvm_screen_regulatory.c"
         "regulatory.c"
         "ui/actions.c"

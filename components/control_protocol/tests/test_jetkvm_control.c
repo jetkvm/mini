@@ -1332,6 +1332,195 @@ static void test_session_timeout_contract(void)
     puts("Session timeout RPCs and local activity: OK");
 }
 
+static bool stored_tailscale_only, tailscale_only_storage_fails;
+static bool tailscale_only_get(void *ctx) { assert(ctx == &stored_tailscale_only); return stored_tailscale_only; }
+static const char *tailscale_only_set(bool enabled, void *ctx)
+{
+    assert(ctx == &stored_tailscale_only);
+    if (tailscale_only_storage_fails) return "The setting could not be stored";
+    stored_tailscale_only = enabled;
+    return NULL;
+}
+/* A device that is in its tailnet. Each settings call and the logout count. */
+static jetkvm_tailscale_config_t tailscale_config = {.enabled = true,
+    .control_url = "https://controlplane.tailscale.com"};
+static unsigned tailscale_config_calls, tailscale_logouts;
+static bool tailscale_running = true, tailscale_status_fails;
+static const char *tailscale_ipv4 = "100.101.102.103";
+static bool tailscale_status(jetkvm_tailscale_status_t *status, void *ctx)
+{
+    (void)ctx;
+    if (tailscale_status_fails) return false;
+    memset(status, 0, sizeof(*status));
+    status->enabled = tailscale_config.enabled;
+    status->running = tailscale_running;
+    snprintf(status->ipv4, sizeof(status->ipv4), "%s", tailscale_ipv4);
+    return true;
+}
+static bool tailscale_get_config(jetkvm_tailscale_config_t *config, void *ctx)
+{
+    (void)ctx;
+    *config = tailscale_config;
+    return true;
+}
+static const char *tailscale_set_config(const jetkvm_tailscale_config_t *config, void *ctx)
+{
+    (void)ctx;
+    tailscale_config = *config;
+    ++tailscale_config_calls;
+    return NULL;
+}
+static const char *tailscale_logout(void *ctx)
+{
+    (void)ctx;
+    ++tailscale_logouts;
+    return NULL;
+}
+/* "Web interface through Tailscale only": only a session that came through
+ * Tailscale turns it on, any caller turns it off, and while it is on the
+ * calls that can take the device out of its tailnet are refused. */
+static void test_tailscale_only_contract(void)
+{
+    const char *const get = "{\"jsonrpc\":\"2.0\",\"method\":\"getTailscaleOnlyAccess\",\"id\":1}";
+    const char *const on = "{\"jsonrpc\":\"2.0\",\"method\":\"setTailscaleOnlyAccess\",\"params\":{\"enabled\":true},\"id\":2}";
+    const char *const off = "{\"jsonrpc\":\"2.0\",\"method\":\"setTailscaleOnlyAccess\",\"params\":{\"enabled\":false},\"id\":3}";
+    const char *const refused_on =
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"error\":{\"code\":-32602,\"message\":\"Invalid params\","
+        "\"data\":\"Open the web interface through Tailscale to turn this on\"}}";
+    /* The three kinds of session: from the local network, from JetKVM Cloud
+     * (no local activity hook), and through Tailscale. */
+    jetkvm_control_context_t local = {.note_local_activity = note_timeout_activity};
+    jetkvm_control_context_t cloud = {0};
+    jetkvm_control_context_t tailnet = {.note_local_activity = note_timeout_activity,
+                                        .session_through_tailscale = true};
+
+    /* Without a provider the methods do not exist and no capability shows
+     * the setting. */
+    expect_rpc_context(&tailnet, get,
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32601,\"message\":\"Method not found\"}}");
+    expect_rpc_context(&tailnet, on,
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"error\":{\"code\":-32601,\"message\":\"Method not found\"}}");
+    jetkvm_control_set_default_tailscale_only_context(&(jetkvm_tailscale_only_context_t){
+        .get = tailscale_only_get, .set = tailscale_only_set, .ctx = &stored_tailscale_only});
+    expect_rpc_context(&cloud, "{\"jsonrpc\":\"2.0\",\"method\":\"getDeviceCapabilities\",\"id\":4}",
+        "{\"jsonrpc\":\"2.0\",\"id\":4,\"result\":[\"tailscale_only\"]}");
+
+    /* A session that came through Tailscale does not turn it on while
+     * Tailscale is not connected: no Tailscale on the device, a status that
+     * cannot be read, Tailscale disabled since the session opened, a tunnel
+     * that is down, and no address. */
+    const char *const not_connected =
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"error\":{\"code\":-32602,\"message\":\"Invalid params\","
+        "\"data\":\"Tailscale is not connected\"}}";
+    expect_rpc_context(&tailnet, on, not_connected);
+    jetkvm_control_set_default_tailscale_context(&(jetkvm_tailscale_context_t){
+        .get_status = tailscale_status, .get_config = tailscale_get_config,
+        .set_config = tailscale_set_config, .logout = tailscale_logout});
+    tailscale_status_fails = true;
+    expect_rpc_context(&tailnet, on, not_connected);
+    tailscale_status_fails = false;
+    tailscale_config.enabled = false;
+    expect_rpc_context(&tailnet, on, not_connected);
+    tailscale_config.enabled = true;
+    tailscale_running = false;
+    expect_rpc_context(&tailnet, on, not_connected);
+    tailscale_running = true;
+    tailscale_ipv4 = "";
+    expect_rpc_context(&tailnet, on, not_connected);
+    tailscale_ipv4 = "100.101.102.103";
+    assert(!stored_tailscale_only);
+
+    /* Each session reads the setting, and whether it may turn it on. */
+    expect_rpc_context(&local, get,
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"enabled\":false,\"throughTailscale\":false}}");
+    expect_rpc_context(&cloud, get,
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"enabled\":false,\"throughTailscale\":false}}");
+    expect_rpc_context(&tailnet, get,
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"enabled\":false,\"throughTailscale\":true}}");
+
+    /* A session from the local network and a cloud session do not turn it on. */
+    expect_rpc_context(&local, on, refused_on);
+    expect_rpc_context(&cloud, on, refused_on);
+    assert(!stored_tailscale_only);
+    const char *malformed[] = {"{}", "{\"enabled\":1}", "{\"enabled\":\"true\"}",
+        "{\"enabled\":true,\"force\":true}", "[true]"};
+    for (size_t i = 0; i < sizeof(malformed) / sizeof(malformed[0]); ++i) {
+        char request[256];
+        snprintf(request, sizeof(request),
+            "{\"jsonrpc\":\"2.0\",\"method\":\"setTailscaleOnlyAccess\",\"params\":%s,\"id\":5}", malformed[i]);
+        expect_rpc_context(&tailnet, request,
+            "{\"jsonrpc\":\"2.0\",\"id\":5,\"error\":{\"code\":-32602,\"message\":\"Invalid params\","
+            "\"data\":\"Expected enabled boolean\"}}");
+    }
+    assert(!stored_tailscale_only);
+    tailscale_only_storage_fails = true;
+    expect_rpc_context(&tailnet, on,
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"error\":{\"code\":-32603,\"message\":\"Internal error\","
+        "\"data\":\"The setting could not be stored\"}}");
+    tailscale_only_storage_fails = false;
+    assert(!stored_tailscale_only);
+
+    /* The session through Tailscale turns it on. */
+    expect_rpc_context(&tailnet, on,
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"enabled\":true,\"throughTailscale\":true}}");
+    assert(stored_tailscale_only);
+    expect_rpc_context(&cloud, get,
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"enabled\":true,\"throughTailscale\":false}}");
+
+    /* While it is on, Tailscale stays as it is: no disable, no new key, no
+     * other control server and no logout. A plain enable changes nothing
+     * and passes. */
+    const char *const first =
+        "\"error\":{\"code\":-32602,\"message\":\"Invalid params\","
+        "\"data\":\"Turn off \\\"Web interface through Tailscale only\\\" first\"}}";
+    const char *leaving[] = {
+        "\"setTailscaleConfig\",\"params\":{\"enabled\":false}",
+        "\"setTailscaleConfig\",\"params\":{\"enabled\":true,\"authKey\":\"tskey-auth-other\"}",
+        "\"setTailscaleConfig\",\"params\":{\"enabled\":true,\"authKey\":\"\"}",
+        "\"setTailscaleControlURL\",\"params\":{\"controlURL\":\"https://headscale.example.com\"}",
+        "\"logoutTailscale\""};
+    for (size_t i = 0; i < sizeof(leaving) / sizeof(leaving[0]); ++i) {
+        char request[256], response[256];
+        snprintf(request, sizeof(request), "{\"jsonrpc\":\"2.0\",\"method\":%s,\"id\":6}", leaving[i]);
+        snprintf(response, sizeof(response), "{\"jsonrpc\":\"2.0\",\"id\":6,%s", first);
+        expect_rpc_context(&tailnet, request, response);
+    }
+    assert(tailscale_config_calls == 0 && tailscale_logouts == 0 && tailscale_config.enabled);
+    expect_rpc_context(&tailnet, "{\"jsonrpc\":\"2.0\",\"method\":\"setTailscaleConfig\",\"params\":{\"enabled\":true},\"id\":7}",
+        "{\"jsonrpc\":\"2.0\",\"id\":7,\"result\":null}");
+    assert(tailscale_config_calls == 1);
+
+    /* Any caller turns it off: a cloud session, a session from the local
+     * network, and the display, which calls without a context. */
+    expect_rpc_context(&cloud, off,
+        "{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"enabled\":false,\"throughTailscale\":false}}");
+    assert(!stored_tailscale_only);
+    stored_tailscale_only = true;
+    expect_rpc_context(&local, off,
+        "{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"enabled\":false,\"throughTailscale\":false}}");
+    assert(!stored_tailscale_only);
+    stored_tailscale_only = true;
+    char display[160];
+    size_t display_length = 0;
+    assert(jetkvm_control_handle_rpc((const uint8_t *)off, strlen(off), display, sizeof(display),
+                                     &display_length) == JETKVM_CONTROL_RESPONSE_READY);
+    assert(!stored_tailscale_only);
+    /* The display does not turn it on. */
+    assert(jetkvm_control_handle_rpc((const uint8_t *)on, strlen(on), display, sizeof(display),
+                                     &display_length) == JETKVM_CONTROL_RESPONSE_READY);
+    assert(!stored_tailscale_only);
+
+    /* With the setting off, the Tailscale calls pass again. */
+    expect_rpc_context(&local, "{\"jsonrpc\":\"2.0\",\"method\":\"setTailscaleConfig\",\"params\":{\"enabled\":false},\"id\":8}",
+        "{\"jsonrpc\":\"2.0\",\"id\":8,\"result\":null}");
+    expect_rpc_context(&local, "{\"jsonrpc\":\"2.0\",\"method\":\"logoutTailscale\",\"id\":9}",
+        "{\"jsonrpc\":\"2.0\",\"id\":9,\"result\":null}");
+    assert(tailscale_config_calls == 2 && tailscale_logouts == 1 && !tailscale_config.enabled);
+    jetkvm_control_set_default_tailscale_context(NULL);
+    jetkvm_control_set_default_tailscale_only_context(NULL);
+    puts("Tailscale-only access RPCs: OK");
+}
+
 static unsigned deregister_calls;
 static const char *deregister_error;
 static const char *deregister_device(void *ctx)
@@ -2059,6 +2248,7 @@ int main(void)
     test_tls_contract();
     test_extra_hostnames_contract();
     test_session_timeout_contract();
+    test_tailscale_only_contract();
     test_board_capabilities();
     test_audio_contract();
     test_cloud_deregistration();
