@@ -15,6 +15,7 @@
 #define EXT_RAM_BSS_ATTR
 #define DISCO_TXID_LEN 12
 #define ML_DISCO_TRUST_DURATION_MS 15000
+#define ML_DISCO_PING_INTERVAL_MS 5000
 #define ESP_LOGI(...) ((void)0)
 #define ESP_LOGW(...) ((void)0)
 #define ESP_LOGD(...) ((void)0)
@@ -53,11 +54,15 @@ static bool disco_has_udp_path(microlink_t *ml) { (void)ml; return false; }
 static void microlink_ip_to_str(uint32_t ip, char *out) { (void)ip; strcpy(out, "100.64.0.1"); }
 static void disco_send_call_me_maybe(microlink_t *ml, int idx) { (void)ml; (void)idx; }
 static void disco_send_ping_to_peer(microlink_t *ml, int idx, bool force) { (void)ml; (void)idx; (void)force; }
-static void disco_build_ping(microlink_t *ml, int idx, uint8_t *data, size_t *len) {
-    (void)ml; (void)idx; (void)data; *len = 0;
+static void disco_build_ping(microlink_t *ml, int idx, uint32_t ip, uint16_t port,
+                             uint8_t *data, size_t *len) {
+    (void)ml; (void)idx; (void)ip; (void)port; (void)data; *len = 0;
 }
 static int disco_udp_sendto(microlink_t *ml, const uint8_t *data, size_t len, uint32_t ip, uint16_t port) {
     (void)ml; (void)data; (void)ip; (void)port; return (int)len;
+}
+static int ml_derp_queue_send(microlink_t *ml, const uint8_t *key, const uint8_t *data, size_t len) {
+    (void)ml; (void)key; (void)data; (void)len; return 0;
 }
 static int mbedtls_base64_encode(unsigned char *out, size_t cap, size_t *n,
                                  const unsigned char *key, size_t len) {

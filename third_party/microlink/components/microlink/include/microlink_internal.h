@@ -282,6 +282,17 @@ typedef struct {
     uint16_t best_port;
     bool has_direct_path;
 
+    /* The peer's latest direct source (authenticated ping or WireGuard
+     * datagram), and the last ping sent to a source that was not best. */
+    uint32_t src_ip;
+    uint16_t src_port;
+    uint32_t src_probe_ip;
+    uint16_t src_probe_port;
+    uint64_t src_probe_ms;
+    /* A WireGuard datagram from src_ip:src_port off the proven path waits
+     * for the manager task (set from the WireGuard receive path). */
+    volatile bool src_pending;
+
     /* WireGuard peer index in wireguard-lwip */
     int wg_peer_index;
 

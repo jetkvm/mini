@@ -153,6 +153,10 @@ bool wireguardif_peer_has_session(struct netif *netif, u8_t peer_index);
 // fn: callback function, ctx: user context passed to callback
 void wireguardif_set_derp_output(struct netif *netif, wireguard_derp_output_fn fn, void *ctx);
 
+// Register the callback for an authenticated datagram of a peer with a proven
+// endpoint that comes from another address (see wireguard_source_fn)
+void wireguardif_set_source_callback(struct netif *netif, wireguard_source_fn fn, void *ctx);
+
 // Force initiation of handshake to a DERP-only peer
 // Use this for peers where connect() would fail due to no direct endpoint
 // The handshake will be routed through the DERP callback if set

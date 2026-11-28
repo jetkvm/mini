@@ -62,6 +62,9 @@ static inline bool is_lan_ip(uint32_t ip) {
 }
 
 /* Pending DISCO probe tracking */
+/* Each ping has its own transaction and one destination (dest_ip 0 = DERP),
+ * as in tailscaled: a pong proves the path to the address the ping went to,
+ * whatever address the pong comes from. */
 typedef struct {
     uint8_t txid[DISCO_TXID_LEN];
     uint32_t dest_ip;
@@ -71,9 +74,15 @@ typedef struct {
     bool active;
 } disco_probe_t;
 
-#define MAX_PENDING_PROBES ML_MAX_PEERS
+/* A round pings the best path, each endpoint and DERP. A probe stays open
+ * for ML_DISCO_PING_TIMEOUT_MS, longer than the 3 s heartbeat, so two
+ * rounds per peer can be open at once. */
+#define MAX_PENDING_PROBES (ML_MAX_PEERS * 2 * (ML_MAX_ENDPOINTS + 2))
 /* DISCO handling runs in tasks, never in a cache-disabled ISR. */
 static EXT_RAM_BSS_ATTR disco_probe_t pending_probes[MAX_PENDING_PROBES];
+
+/* Set when wg_source_seen noted a source; the manager task pings it. */
+static volatile bool s_source_pending;
 
 static void discard_peer_probes(int peer_idx) {
     for (int i = 0; i < MAX_PENDING_PROBES; ++i) {
@@ -256,6 +265,23 @@ static void wg_shutdown_on_tcpip(void *arg)
     xSemaphoreGive(shutdown->done);
 }
 
+/* WireGuard receive path: an authenticated datagram of a peer with a proven
+ * endpoint came from another address. Only note it here, with the WireGuard
+ * core locked; disco_take_sources pings it from the manager task. */
+static void wg_source_seen(u8_t wg_index, const ip_addr_t *addr, u16_t port, void *ctx) {
+    microlink_t *ml = (microlink_t *)ctx;
+    if (!ml || !IP_IS_V4(addr)) return;
+    for (int i = 0; i < ml->peer_count; i++) {
+        ml_peer_t *p = &ml->peers[i];
+        if (!p->active || p->wg_peer_index != wg_index) continue;
+        p->src_ip = ntohl(ip4_addr_get_u32(ip_2_ip4(addr)));
+        p->src_port = port;
+        p->src_pending = true;
+        s_source_pending = true;
+        return;
+    }
+}
+
 static err_t wg_filtered_output(struct netif *netif, struct pbuf *packet, const ip4_addr_t *destination)
 {
     uint8_t header[80];
@@ -368,6 +394,7 @@ static esp_err_t wg_init_interface(microlink_t *ml) {
     /* Register output callbacks for magicsock mode */
     wireguardif_set_derp_output(netif, wg_derp_output_cb, ml);
     wireguardif_set_udp_output(netif, wg_udp_output_cb, ml);
+    wireguardif_set_source_callback(netif, wg_source_seen, ml);
 
     /* On cellular AT socket bridge, force all WG output through DERP relay.
      * AT sockets are TCP-only, so direct UDP is impossible.
@@ -566,6 +593,12 @@ static int add_peer(microlink_t *ml, const ml_peer_update_t *update) {
     p->has_direct_path = false;
     p->best_ip = 0;
     p->best_port = 0;
+    p->src_ip = 0;
+    p->src_port = 0;
+    p->src_probe_ip = 0;
+    p->src_probe_port = 0;
+    p->src_probe_ms = 0;
+    p->src_pending = false;
     p->wg_peer_index = -1;
 
     char ip_str[16];
@@ -872,6 +905,7 @@ static void process_peer_updates(microlink_t *ml) {
  * ========================================================================== */
 
 static void disco_build_ping(microlink_t *ml, int peer_idx,
+                               uint32_t dest_ip, uint16_t dest_port,
                                uint8_t *out, size_t *out_len) {
     ml_peer_t *p = &ml->peers[peer_idx];
 
@@ -908,6 +942,8 @@ static void disco_build_ping(microlink_t *ml, int peer_idx,
     for (int i = 0; i < MAX_PENDING_PROBES; i++) {
         if (!pending_probes[i].active) {
             memcpy(pending_probes[i].txid, txid, DISCO_TXID_LEN);
+            pending_probes[i].dest_ip = dest_ip;
+            pending_probes[i].dest_port = dest_port;
             pending_probes[i].peer_index = peer_idx;
             pending_probes[i].sent_ms = ml_get_time_ms();
             pending_probes[i].active = true;
@@ -965,6 +1001,54 @@ static void disco_build_pong(microlink_t *ml, int peer_idx,
     *out_len = pos;
 }
 
+/* One ping with its own transaction to one path: UDP to ip:port, or DERP
+ * when ip is 0. Returns the UDP send result, or 0 for DERP. */
+static int disco_ping_path(microlink_t *ml, int peer_idx, uint32_t ip, uint16_t port) {
+    uint8_t pkt[256];
+    size_t pkt_len = 0;
+    disco_build_ping(ml, peer_idx, ip, port, pkt, &pkt_len);
+    if (pkt_len == 0) return -1;
+    if (ip == 0) {
+        ml_derp_queue_send(ml, ml->peers[peer_idx].public_key, pkt, pkt_len);
+        return 0;
+    }
+    return disco_udp_sendto(ml, pkt, pkt_len, ip, port);
+}
+
+/* An authenticated ping or WireGuard datagram of the peer came directly from
+ * ip:port. When that is not the proven path, the peer may have moved: ping
+ * that address now, and its pong moves the path there (process_disco_pong).
+ * At most one such ping per peer per second, and one per source per
+ * ML_DISCO_PING_INTERVAL_MS, however many datagrams arrive. */
+static void disco_note_source(microlink_t *ml, int peer_idx, uint32_t ip, uint16_t port) {
+    ml_peer_t *p = &ml->peers[peer_idx];
+    if (ip == 0 || port == 0) return;
+    p->src_ip = ip;
+    p->src_port = port;
+    if (p->has_direct_path && ip == p->best_ip && port == p->best_port) return;
+    if (!ml_config_peer_is_allowed(ml->config_httpd, p->vpn_ip)) return;
+    uint64_t now = ml_get_time_ms();
+    if (p->src_probe_ms && now - p->src_probe_ms < 1000) return;
+    if (ip == p->src_probe_ip && port == p->src_probe_port &&
+        now - p->src_probe_ms < ML_DISCO_PING_INTERVAL_MS) return;
+    p->src_probe_ip = ip;
+    p->src_probe_port = port;
+    p->src_probe_ms = now;
+    disco_ping_path(ml, peer_idx, ip, port);
+}
+
+/* Ping the sources that wg_source_seen noted. */
+static void disco_take_sources(microlink_t *ml) {
+    if (!s_source_pending) return;
+    s_source_pending = false;
+    for (int i = 0; i < ml->peer_count; i++) {
+        ml_peer_t *p = &ml->peers[i];
+        if (!p->src_pending) continue;
+        p->src_pending = false;
+        if (p->active) disco_note_source(ml, i, p->src_ip, p->src_port);
+    }
+}
+
 static void disco_send_ping_to_peer(microlink_t *ml, int peer_idx, bool force) {
     ml_peer_t *p = &ml->peers[peer_idx];
     uint64_t now = ml_get_time_ms();
@@ -974,19 +1058,13 @@ static void disco_send_ping_to_peer(microlink_t *ml, int peer_idx, bool force) {
         return;
     }
 
-    uint8_t pkt[256];
-    size_t pkt_len = 0;
-    disco_build_ping(ml, peer_idx, pkt, &pkt_len);
-
-    if (pkt_len == 0) return;
-
     bool direct_sent = false;
 
     /* If we have a known working direct path, send there FIRST.
      * This is critical for heartbeat pings to renew trust_until_ms.
      * A DERP pong would arrive with via_derp=true and NOT renew trust. */
     if (p->has_direct_path && p->best_ip != 0 && p->best_port != 0) {
-        disco_udp_sendto(ml, pkt, pkt_len, p->best_ip, p->best_port);
+        disco_ping_path(ml, peer_idx, p->best_ip, p->best_port);
         direct_sent = true;
     }
 
@@ -999,7 +1077,7 @@ static void disco_send_ping_to_peer(microlink_t *ml, int peer_idx, bool force) {
                     /* Skip if same as best_ip (already sent) */
                     if (p->endpoints[i].ip == p->best_ip &&
                         p->endpoints[i].port == p->best_port) continue;
-                    int ret = disco_udp_sendto(ml, pkt, pkt_len, p->endpoints[i].ip, p->endpoints[i].port);
+                    int ret = disco_ping_path(ml, peer_idx, p->endpoints[i].ip, p->endpoints[i].port);
                     if (!direct_sent) {  /* Log only first direct send per peer */
                         ESP_LOGD(TAG, "  direct probe -> %d.%d.%d.%d:%d (%d eps, ret=%d)",
                                  (int)((p->endpoints[i].ip >> 24) & 0xFF),
@@ -1024,7 +1102,7 @@ static void disco_send_ping_to_peer(microlink_t *ml, int peer_idx, bool force) {
      * Skip DERP for heartbeat pings when direct path is active to avoid
      * DERP pong stealing the probe match from the direct pong. */
     if (!p->has_direct_path || !direct_sent) {
-        ml_derp_queue_send(ml, p->public_key, pkt, pkt_len);
+        disco_ping_path(ml, peer_idx, 0, 0);
         ESP_LOGD(TAG, "DISCO PING -> %s via DERP", p->hostname);
     } else {
         ESP_LOGD(TAG, "DISCO PING -> %s via direct %d.%d.%d.%d:%d",
@@ -1109,6 +1187,16 @@ static void process_disco_ping(microlink_t *ml, const ml_rx_packet_t *pkt,
 
     ESP_LOGD(TAG, "PONG sent to %s (direct=%s, DERP=yes)",
              p->hostname, direct_sent ? "yes" : "no");
+
+    /* A peer that pings over UDP while it has no proven path is pinged back
+     * now. The periodic round reaches it only after the peers before it,
+     * 2 per second, and until then WireGuard answers go to the address the
+     * peer's datagrams come from, which need not lead back to it. */
+    if (!pkt->via_derp) disco_note_source(ml, peer_idx, pkt->src_ip, pkt->src_port);
+    if (!pkt->via_derp && !p->has_direct_path &&
+        ml_config_peer_is_allowed(ml->config_httpd, p->vpn_ip)) {
+        disco_send_ping_to_peer(ml, peer_idx, false);
+    }
 }
 
 static void process_disco_pong(microlink_t *ml, const ml_rx_packet_t *pkt,
@@ -1144,10 +1232,21 @@ static void process_disco_pong(microlink_t *ml, const ml_rx_packet_t *pkt,
 
         p->last_pong_recv_ms = now;
 
-        /* If direct reply, update best path */
-        if (!pkt->via_derp && pkt->src_ip != 0) {
-            p->best_ip = pkt->src_ip;
-            p->best_port = pkt->src_port;
+        /* A direct pong proves the path the ping went out on. The pong can
+         * come from another address of the peer (a host with two LAN
+         * addresses answers from the one its route picks), and that address
+         * proves nothing about the way back to it.
+         * A proven path stays while it is trusted. Another path that answers
+         * replaces it only when the peer's own datagrams come from there (the
+         * peer moved), so that two working paths do not take turns. */
+        uint32_t dest_ip = pending_probes[i].dest_ip;
+        uint16_t dest_port = pending_probes[i].dest_port;
+        bool keeps_best = p->has_direct_path && now <= p->trust_until_ms &&
+            !(dest_ip == p->best_ip && dest_port == p->best_port) &&
+            !(dest_ip == p->src_ip && dest_port == p->src_port);
+        if (!pkt->via_derp && dest_ip != 0 && !keeps_best) {
+            p->best_ip = dest_ip;
+            p->best_port = dest_port;
             p->has_direct_path = true;
             p->trust_until_ms = now + ML_DISCO_TRUST_DURATION_MS;
 
@@ -1158,16 +1257,16 @@ static void process_disco_pong(microlink_t *ml, const ml_rx_packet_t *pkt,
                 struct netif *netif = (struct netif *)ml->wg_netif;
                 ip_addr_t ep_ip;
                 IP_SET_TYPE_VAL(ep_ip, IPADDR_TYPE_V4);
-                ip4_addr_set_u32(ip_2_ip4(&ep_ip), htonl(pkt->src_ip));
+                ip4_addr_set_u32(ip_2_ip4(&ep_ip), htonl(p->best_ip));
                 wireguardif_roam_endpoint(netif, (u8_t)p->wg_peer_index,
-                                           &ep_ip, pkt->src_port);
+                                           &ep_ip, p->best_port);
             }
 
         }
 
-        /* A probe goes out over UDP and DERP with one transaction, and each
-         * path answers. A relay pong does not prove a direct path, so the
-         * probe stays open for the direct pong until it times out. */
+        /* An embedded peer answers a UDP ping over DERP too. A relay pong
+         * does not prove a direct path, so the probe stays open for the
+         * direct pong until it times out. */
         if (!pkt->via_derp) pending_probes[i].active = false;
         matched = true;
         break;
@@ -1242,7 +1341,7 @@ static void process_disco_call_me_maybe(microlink_t *ml, const ml_rx_packet_t *p
         if (disco_has_udp_path(ml)) {
             uint8_t ping_pkt[256];
             size_t ping_len = 0;
-            disco_build_ping(ml, peer_idx, ping_pkt, &ping_len);
+            disco_build_ping(ml, peer_idx, ip, port, ping_pkt, &ping_len);
 
             if (ping_len > 0) {
                 int ret = disco_udp_sendto(ml, ping_pkt, ping_len, ip, port);
@@ -1524,14 +1623,15 @@ esp_err_t ml_wg_mgr_trigger_handshake(microlink_t *ml, uint32_t dest_vpn_ip) {
 
     /* Path 2: Direct UDP (if DISCO has a known endpoint).
      * This wakes the peer's magicsock via receiveIPv4 → noteRecvActivity.
-     * Set connect_ip first, then call wireguardif_connect which copies
-     * connect_ip → ip and starts a second handshake to the direct endpoint. */
+     * best_ip is a path that a pong proved, so it is set as a proven
+     * endpoint, which wireguardif_connect_derp above has cleared; then
+     * wireguardif_connect starts a second handshake to it. */
     if (p->best_ip != 0 && p->best_port != 0) {
         ip_addr_t ep_ip;
         IP_SET_TYPE_VAL(ep_ip, IPADDR_TYPE_V4);
         ip4_addr_set_u32(ip_2_ip4(&ep_ip), htonl(p->best_ip));
-        wireguardif_update_endpoint(netif, (u8_t)p->wg_peer_index,
-                                     &ep_ip, p->best_port);
+        wireguardif_roam_endpoint(netif, (u8_t)p->wg_peer_index,
+                                   &ep_ip, p->best_port);
         { bool _wl = ml_lwip_lock(); wireguardif_connect(netif, (u8_t)p->wg_peer_index); ml_lwip_unlock(_wl); }
         ESP_LOGI(TAG, "WG handshake triggered (direct) to %s at %d.%d.%d.%d:%d",
                  p->hostname,
@@ -1795,6 +1895,7 @@ void ml_wg_mgr_task(void *arg) {
                 process_wg_packet(ml, &wg_pkt);
             }
         }
+        disco_take_sources(ml);
 
         /* Run WireGuard periodic processing (handshakes, keepalives, rekeys)
          * on the manager's 8KB stack. The raw API takes lwIP's state
