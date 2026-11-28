@@ -15,6 +15,7 @@
 #define EXT_RAM_BSS_ATTR
 #define DISCO_TXID_LEN 12
 #define ML_DISCO_TRUST_DURATION_MS 15000
+#define ML_DISCO_PING_INTERVAL_MS 5000
 #define ESP_LOGI(...) ((void)0)
 #define ESP_LOGW(...) ((void)0)
 #define ESP_LOGD(...) ((void)0)
@@ -59,6 +60,9 @@ static void disco_build_ping(microlink_t *ml, int idx, uint32_t ip, uint16_t por
 }
 static int disco_udp_sendto(microlink_t *ml, const uint8_t *data, size_t len, uint32_t ip, uint16_t port) {
     (void)ml; (void)data; (void)ip; (void)port; return (int)len;
+}
+static int ml_derp_queue_send(microlink_t *ml, const uint8_t *key, const uint8_t *data, size_t len) {
+    (void)ml; (void)key; (void)data; (void)len; return 0;
 }
 static int mbedtls_base64_encode(unsigned char *out, size_t cap, size_t *n,
                                  const unsigned char *key, size_t len) {

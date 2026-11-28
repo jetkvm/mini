@@ -154,7 +154,8 @@ bool wireguardif_is_wireguard_packet(const uint8_t *data, size_t len) {
 }
 
 
-static void update_peer_addr(struct wireguard_peer *peer, const ip_addr_t *addr, u16_t port) {
+static void update_peer_addr(struct wireguard_device *device, struct wireguard_peer *peer,
+		const ip_addr_t *addr, u16_t port) {
 	// Don't overwrite a valid endpoint with 0.0.0.0 (DERP-injected packets have no real source)
 	// This bug was causing DERP routing to break after receiving the first packet
 	if (ip_addr_isany(addr)) {
@@ -163,8 +164,14 @@ static void update_peer_addr(struct wireguard_peer *peer, const ip_addr_t *addr,
 	}
 	// A datagram's source address proves only the way from the peer. Where
 	// discovery proved a path to the peer, answers keep going there: the way
-	// back to the source can be lost while the peer still reaches us.
-	if (peer->endpoint_proven) return;
+	// back to the source can be lost while the peer still reaches us. The
+	// owner of the proven path hears of the other address, so that it can
+	// prove that address and move there when the peer has moved.
+	if (peer->endpoint_proven) {
+		if (device->source_fn && (port != peer->port || !ip_addr_cmp(addr, &peer->ip)))
+			device->source_fn(wireguard_peer_index(device, peer), addr, port, device->source_ctx);
+		return;
+	}
 	WG_DEBUG("[WG] update_peer_addr: %s:%u\n", ipaddr_ntoa(addr), port);
 	peer->ip = *addr;
 	peer->port = port;
@@ -460,7 +467,7 @@ static void wireguardif_process_response_message(struct wireguard_device *device
 		       peer->public_key[2], peer->public_key[3],
 		       ip_addr_isany(addr) ? "DERP" : ipaddr_ntoa(addr), port);
 		// Update the peer location
-		update_peer_addr(peer, addr, port);
+		update_peer_addr(device, peer, addr, port);
 
 		wireguard_start_session(peer, true);
 		WG_DEBUG("[WG] Session started, sending keepalive to %s:%u\n",
@@ -545,7 +552,7 @@ static void wireguardif_process_data_message(struct wireguard_device *device, st
 
 					// 3. Since the packet has authenticated correctly, the source IP of the outer UDP/IP packet is used to update the endpoint for peer TrMv...WXX0.
 					// Update the peer location
-					update_peer_addr(peer, addr, port);
+					update_peer_addr(device, peer, addr, port);
 
 					now = wireguard_sys_now();
 					keypair->last_rx = now;
@@ -856,7 +863,7 @@ static void wireguardif_network_rx_locked(void *arg, struct udp_pcb *pcb, struct
 				if (peer) {
 					WG_DEBUG("[WG_RX] Initiation processed OK, sending response\n");
 					// Update the peer location
-					update_peer_addr(peer, addr, port);
+					update_peer_addr(device, peer, addr, port);
 
 					// If initiation arrived via DERP (addr=0.0.0.0), send response
 					// via DERP too by temporarily clearing the peer endpoint.
@@ -916,7 +923,7 @@ static void wireguardif_network_rx_locked(void *arg, struct udp_pcb *pcb, struct
 			if (peer) {
 				if (wireguard_process_cookie_message(device, peer, msg_cookie)) {
 					// Update the peer location
-					update_peer_addr(peer, addr, port);
+					update_peer_addr(device, peer, addr, port);
 
 					// Don't send anything out - we stay quiet until the next initiation message
 				}
@@ -1663,6 +1670,16 @@ err_t wireguardif_init(struct netif *netif) {
 void wireguardif_set_derp_output(struct netif *netif, wireguard_derp_output_fn fn, void *ctx) {
     bool acquired = wireguardif_core_lock();
     wireguardif_set_derp_output_locked(netif, fn, ctx);
+    wireguardif_core_unlock(acquired);
+}
+
+void wireguardif_set_source_callback(struct netif *netif, wireguard_source_fn fn, void *ctx) {
+    bool acquired = wireguardif_core_lock();
+    struct wireguard_device *device = (struct wireguard_device *)netif->state;
+    if (device && device->valid) {
+        device->source_fn = fn;
+        device->source_ctx = ctx;
+    }
     wireguardif_core_unlock(acquired);
 }
 

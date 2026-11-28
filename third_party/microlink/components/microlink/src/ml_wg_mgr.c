@@ -81,6 +81,9 @@ typedef struct {
 /* DISCO handling runs in tasks, never in a cache-disabled ISR. */
 static EXT_RAM_BSS_ATTR disco_probe_t pending_probes[MAX_PENDING_PROBES];
 
+/* Set when wg_source_seen noted a source; the manager task pings it. */
+static volatile bool s_source_pending;
+
 static void discard_peer_probes(int peer_idx) {
     for (int i = 0; i < MAX_PENDING_PROBES; ++i) {
         if (pending_probes[i].peer_index == peer_idx)
@@ -262,6 +265,23 @@ static void wg_shutdown_on_tcpip(void *arg)
     xSemaphoreGive(shutdown->done);
 }
 
+/* WireGuard receive path: an authenticated datagram of a peer with a proven
+ * endpoint came from another address. Only note it here, with the WireGuard
+ * core locked; disco_take_sources pings it from the manager task. */
+static void wg_source_seen(u8_t wg_index, const ip_addr_t *addr, u16_t port, void *ctx) {
+    microlink_t *ml = (microlink_t *)ctx;
+    if (!ml || !IP_IS_V4(addr)) return;
+    for (int i = 0; i < ml->peer_count; i++) {
+        ml_peer_t *p = &ml->peers[i];
+        if (!p->active || p->wg_peer_index != wg_index) continue;
+        p->src_ip = ntohl(ip4_addr_get_u32(ip_2_ip4(addr)));
+        p->src_port = port;
+        p->src_pending = true;
+        s_source_pending = true;
+        return;
+    }
+}
+
 static err_t wg_filtered_output(struct netif *netif, struct pbuf *packet, const ip4_addr_t *destination)
 {
     uint8_t header[80];
@@ -374,6 +394,7 @@ static esp_err_t wg_init_interface(microlink_t *ml) {
     /* Register output callbacks for magicsock mode */
     wireguardif_set_derp_output(netif, wg_derp_output_cb, ml);
     wireguardif_set_udp_output(netif, wg_udp_output_cb, ml);
+    wireguardif_set_source_callback(netif, wg_source_seen, ml);
 
     /* On cellular AT socket bridge, force all WG output through DERP relay.
      * AT sockets are TCP-only, so direct UDP is impossible.
@@ -572,6 +593,12 @@ static int add_peer(microlink_t *ml, const ml_peer_update_t *update) {
     p->has_direct_path = false;
     p->best_ip = 0;
     p->best_port = 0;
+    p->src_ip = 0;
+    p->src_port = 0;
+    p->src_probe_ip = 0;
+    p->src_probe_port = 0;
+    p->src_probe_ms = 0;
+    p->src_pending = false;
     p->wg_peer_index = -1;
 
     char ip_str[16];
@@ -988,6 +1015,40 @@ static int disco_ping_path(microlink_t *ml, int peer_idx, uint32_t ip, uint16_t 
     return disco_udp_sendto(ml, pkt, pkt_len, ip, port);
 }
 
+/* An authenticated ping or WireGuard datagram of the peer came directly from
+ * ip:port. When that is not the proven path, the peer may have moved: ping
+ * that address now, and its pong moves the path there (process_disco_pong).
+ * At most one such ping per peer per second, and one per source per
+ * ML_DISCO_PING_INTERVAL_MS, however many datagrams arrive. */
+static void disco_note_source(microlink_t *ml, int peer_idx, uint32_t ip, uint16_t port) {
+    ml_peer_t *p = &ml->peers[peer_idx];
+    if (ip == 0 || port == 0) return;
+    p->src_ip = ip;
+    p->src_port = port;
+    if (p->has_direct_path && ip == p->best_ip && port == p->best_port) return;
+    if (!ml_config_peer_is_allowed(ml->config_httpd, p->vpn_ip)) return;
+    uint64_t now = ml_get_time_ms();
+    if (p->src_probe_ms && now - p->src_probe_ms < 1000) return;
+    if (ip == p->src_probe_ip && port == p->src_probe_port &&
+        now - p->src_probe_ms < ML_DISCO_PING_INTERVAL_MS) return;
+    p->src_probe_ip = ip;
+    p->src_probe_port = port;
+    p->src_probe_ms = now;
+    disco_ping_path(ml, peer_idx, ip, port);
+}
+
+/* Ping the sources that wg_source_seen noted. */
+static void disco_take_sources(microlink_t *ml) {
+    if (!s_source_pending) return;
+    s_source_pending = false;
+    for (int i = 0; i < ml->peer_count; i++) {
+        ml_peer_t *p = &ml->peers[i];
+        if (!p->src_pending) continue;
+        p->src_pending = false;
+        if (p->active) disco_note_source(ml, i, p->src_ip, p->src_port);
+    }
+}
+
 static void disco_send_ping_to_peer(microlink_t *ml, int peer_idx, bool force) {
     ml_peer_t *p = &ml->peers[peer_idx];
     uint64_t now = ml_get_time_ms();
@@ -1131,6 +1192,7 @@ static void process_disco_ping(microlink_t *ml, const ml_rx_packet_t *pkt,
      * now. The periodic round reaches it only after the peers before it,
      * 2 per second, and until then WireGuard answers go to the address the
      * peer's datagrams come from, which need not lead back to it. */
+    if (!pkt->via_derp) disco_note_source(ml, peer_idx, pkt->src_ip, pkt->src_port);
     if (!pkt->via_derp && !p->has_direct_path &&
         ml_config_peer_is_allowed(ml->config_httpd, p->vpn_ip)) {
         disco_send_ping_to_peer(ml, peer_idx, false);
@@ -1173,10 +1235,18 @@ static void process_disco_pong(microlink_t *ml, const ml_rx_packet_t *pkt,
         /* A direct pong proves the path the ping went out on. The pong can
          * come from another address of the peer (a host with two LAN
          * addresses answers from the one its route picks), and that address
-         * proves nothing about the way back to it. */
-        if (!pkt->via_derp && pending_probes[i].dest_ip != 0) {
-            p->best_ip = pending_probes[i].dest_ip;
-            p->best_port = pending_probes[i].dest_port;
+         * proves nothing about the way back to it.
+         * A proven path stays while it is trusted. Another path that answers
+         * replaces it only when the peer's own datagrams come from there (the
+         * peer moved), so that two working paths do not take turns. */
+        uint32_t dest_ip = pending_probes[i].dest_ip;
+        uint16_t dest_port = pending_probes[i].dest_port;
+        bool keeps_best = p->has_direct_path && now <= p->trust_until_ms &&
+            !(dest_ip == p->best_ip && dest_port == p->best_port) &&
+            !(dest_ip == p->src_ip && dest_port == p->src_port);
+        if (!pkt->via_derp && dest_ip != 0 && !keeps_best) {
+            p->best_ip = dest_ip;
+            p->best_port = dest_port;
             p->has_direct_path = true;
             p->trust_until_ms = now + ML_DISCO_TRUST_DURATION_MS;
 
@@ -1825,6 +1895,7 @@ void ml_wg_mgr_task(void *arg) {
                 process_wg_packet(ml, &wg_pkt);
             }
         }
+        disco_take_sources(ml);
 
         /* Run WireGuard periodic processing (handshakes, keepalives, rekeys)
          * on the manager's 8KB stack. The raw API takes lwIP's state

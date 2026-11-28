@@ -11,6 +11,7 @@
 #define EXT_RAM_BSS_ATTR
 #define DISCO_TXID_LEN 12
 #define ML_DISCO_TRUST_DURATION_MS 15000
+#define ML_DISCO_PING_INTERVAL_MS 5000
 #define ESP_LOGI(...) ((void)0)
 #define ESP_LOGW(...) ((void)0)
 #define ESP_LOGD(...) ((void)0)
@@ -27,7 +28,8 @@ typedef struct microlink {
 } microlink_t;
 typedef struct { bool via_derp; uint32_t src_ip; uint16_t src_port; } ml_rx_packet_t;
 
-uint32_t sys_now(void) { return 1000; }
+static uint32_t now_ms = 1000;
+uint32_t sys_now(void) { return now_ms; }
 uint32_t wireguard_sys_now(void) { return sys_now(); }
 void wireguard_random_bytes(void *data, size_t n) { memset(data, 0x42, n); }
 void wireguard_tai64n_now(uint8_t *data) { memset(data, 0, 12); }
@@ -58,6 +60,9 @@ static int disco_udp_sendto(microlink_t *ml, const uint8_t *data, size_t len,
     probed_ports[endpoint_probes % 2] = port;
     ++endpoint_probes;
     return (int)len;
+}
+static int ml_derp_queue_send(microlink_t *ml, const uint8_t *key, const uint8_t *data, size_t len) {
+    (void)ml; (void)key; (void)data; (void)len; return 0;
 }
 static int mbedtls_base64_encode(unsigned char *out, size_t cap, size_t *n,
                                  const unsigned char *key, size_t len) {
@@ -126,6 +131,7 @@ int main(void) {
     wireguardif_set_udp_output(&netif, direct_output, NULL);
     wireguardif_set_derp_output(&netif, relay_output, NULL);
     microlink_t ml = {.wg_netif = &netif};
+    wireguardif_set_source_callback(&netif, wg_source_seen, &ml); /* As wg_init_interface. */
     ml_peer_update_t update = {.node_id = 7, .vpn_ip = 0x647ff004, .endpoint_count = 1};
     strcpy(update.hostname, "roaming-peer");
     memset(update.public_key, 0x19, 32);
@@ -247,6 +253,7 @@ int main(void) {
      * address is lost. The pong proves the second address. WireGuard keeps
      * sending there when the peer's datagrams come from the first address. */
     const uint32_t first = 0xc0000231, second = 0xc6336432; /* 192.0.2.49, 198.51.100.50 */
+    ml.peers[0].has_direct_path = false; /* As after a restart: no path proven yet. */
     pending_probes[0] = (disco_probe_t){.active = true, .peer_index = 0, .sent_ms = 900,
                                         .dest_ip = second, .dest_port = 55058};
     memset(pending_probes[0].txid, 0x42, DISCO_TXID_LEN);
@@ -270,6 +277,55 @@ int main(void) {
     send_packet(&netif);
     assert(direct_packets == sent + 2);
     puts("Proven path: a pong from another address and datagrams from it keep the proven endpoint: PASS");
+    /* That datagram from the first address got one ping to it. Without a
+     * pong the endpoint stays, and more datagrams from there within the
+     * rate limit get no more pings. */
+    unsigned probes = endpoint_probes;
+    disco_take_sources(&ml);
+    assert(endpoint_probes == probes + 1 && probed_ips[probes % 2] == first);
+    for (uint64_t counter = 1; counter <= 5; ++counter) {
+        from_peer.sending_counter = counter;
+        for (unsigned i = 0; i < 8; ++i) header->counter[i] = counter >> (8 * i);
+        wireguard_encrypt_packet(header->enc_packet, NULL, 0, &from_peer);
+        assert(wireguardif_inject_packet(&netif, lwip_htonl(first), 55058,
+                                         keepalive, sizeof(keepalive)) == ERR_OK);
+        disco_take_sources(&ml);
+    }
+    assert(endpoint_probes == probes + 1);
+    send_packet(&netif);
+    assert(direct_packets == sent + 3);
+    /* The peer moves to a third address while the second is still trusted.
+     * Its first authenticated datagram from there gets a ping, the pong moves
+     * the endpoint, and a later pong from the second address, which still
+     * works, does not move it back. */
+    const uint32_t third = 0xc0000232; /* 192.0.2.50 */
+    now_ms += 1000;
+    from_peer.sending_counter = 6;
+    for (unsigned i = 0; i < 8; ++i) header->counter[i] = from_peer.sending_counter >> (8 * i);
+    wireguard_encrypt_packet(header->enc_packet, NULL, 0, &from_peer);
+    assert(wireguardif_inject_packet(&netif, lwip_htonl(third), 55058,
+                                     keepalive, sizeof(keepalive)) == ERR_OK);
+    send_packet(&netif); /* Still the second address until a pong proves the third. */
+    assert(direct_packets == sent + 4);
+    disco_take_sources(&ml);
+    assert(endpoint_probes == probes + 2 && probed_ips[(probes + 1) % 2] == third);
+    pending_probes[0] = (disco_probe_t){.active = true, .peer_index = 0, .sent_ms = now_ms,
+                                        .dest_ip = third, .dest_port = 55058};
+    memset(pending_probes[0].txid, 0x42, DISCO_TXID_LEN);
+    ml_rx_packet_t from_third = {.src_ip = third, .src_port = 55058};
+    process_disco_pong(&ml, &from_third, update.disco_key, pong, sizeof(pong));
+    expected_endpoint = lwip_htonl(third);
+    send_packet(&netif);
+    assert(direct_packets == sent + 5);
+    pending_probes[0] = (disco_probe_t){.active = true, .peer_index = 0, .sent_ms = now_ms,
+                                        .dest_ip = second, .dest_port = 55058};
+    memset(pending_probes[0].txid, 0x42, DISCO_TXID_LEN);
+    ml_rx_packet_t from_second = {.src_ip = second, .src_port = 55058};
+    process_disco_pong(&ml, &from_second, update.disco_key, pong, sizeof(pong));
+    assert(ml.peers[0].best_ip == third);
+    send_packet(&netif);
+    assert(direct_packets == sent + 6);
+    puts("Roaming: a datagram from a new address gets a ping, its pong moves the endpoint, another working path does not take it back: PASS");
     pending_probes[0].active = true;
     remove_peer(&ml, &update);
     assert(!pending_probes[0].active);

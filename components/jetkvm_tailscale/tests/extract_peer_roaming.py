@@ -38,7 +38,8 @@ probe_start = mgr.index("typedef struct {", mgr.index("/* Pending DISCO probe tr
 probe_end = mgr.index("/* ============================================================================", probe_start)
 functions = ["key_to_base64", "find_peer_by_key", "find_peer_by_disco_key",
              "find_peer_by_id", "find_updated_peer", "add_peer", "remove_peer",
-             "process_disco_pong", "process_disco_call_me_maybe"]
+             "process_disco_pong", "process_disco_call_me_maybe",
+             "wg_source_seen", "disco_ping_path", "disco_note_source", "disco_take_sources"]
 body = mgr[probe_start:probe_end]
 body += "\nstatic void remove_peer(microlink_t *, const ml_peer_update_t *);\n"
 body += "\n".join(function(name) for name in functions)
