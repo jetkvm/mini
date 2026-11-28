@@ -135,6 +135,9 @@ struct wireguard_peer {
 	// This is the latest received IP/port
 	ip_addr_t ip;
 	u16_t port;
+	// ip/port is a path that discovery proved (wireguardif_roam_endpoint):
+	// received datagrams do not move it until wireguardif_reset_endpoint.
+	bool endpoint_proven;
 	// keep-alive interval in seconds, 0 is disable
 	uint16_t keepalive_interval;
 

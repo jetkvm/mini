@@ -53,8 +53,9 @@ static bool disco_has_udp_path(microlink_t *ml) { (void)ml; return false; }
 static void microlink_ip_to_str(uint32_t ip, char *out) { (void)ip; strcpy(out, "100.64.0.1"); }
 static void disco_send_call_me_maybe(microlink_t *ml, int idx) { (void)ml; (void)idx; }
 static void disco_send_ping_to_peer(microlink_t *ml, int idx, bool force) { (void)ml; (void)idx; (void)force; }
-static void disco_build_ping(microlink_t *ml, int idx, uint8_t *data, size_t *len) {
-    (void)ml; (void)idx; (void)data; *len = 0;
+static void disco_build_ping(microlink_t *ml, int idx, uint32_t ip, uint16_t port,
+                             uint8_t *data, size_t *len) {
+    (void)ml; (void)idx; (void)ip; (void)port; (void)data; *len = 0;
 }
 static int disco_udp_sendto(microlink_t *ml, const uint8_t *data, size_t len, uint32_t ip, uint16_t port) {
     (void)ml; (void)data; (void)ip; (void)port; return (int)len;

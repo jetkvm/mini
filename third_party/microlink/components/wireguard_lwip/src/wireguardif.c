@@ -161,6 +161,10 @@ static void update_peer_addr(struct wireguard_peer *peer, const ip_addr_t *addr,
 		WG_DEBUG("[WG] update_peer_addr: skipping DERP (0.0.0.0)\n");
 		return;  // Skip updating endpoint for DERP packets
 	}
+	// A datagram's source address proves only the way from the peer. Where
+	// discovery proved a path to the peer, answers keep going there: the way
+	// back to the source can be lost while the peer still reaches us.
+	if (peer->endpoint_proven) return;
 	WG_DEBUG("[WG] update_peer_addr: %s:%u\n", ipaddr_ntoa(addr), port);
 	peer->ip = *addr;
 	peer->port = port;
@@ -1092,6 +1096,7 @@ static err_t wireguardif_reset_endpoint_locked(struct netif *netif, u8_t peer_in
 		peer->port = 0;
 		ip_addr_set_any(false, &peer->connect_ip);
 		peer->connect_port = 0;
+		peer->endpoint_proven = false;
 	}
 	return result;
 }
@@ -1103,6 +1108,7 @@ static err_t wireguardif_roam_endpoint_locked(struct netif *netif, u8_t peer_ind
 	if (result == ERR_OK) {
 		peer->ip = peer->connect_ip = *ip;
 		peer->port = peer->connect_port = port;
+		peer->endpoint_proven = true;
 	}
 	return result;
 }
@@ -1513,6 +1519,7 @@ static err_t wireguardif_connect_derp_locked(struct netif *netif, u8_t peer_inde
 		// connect_ip back to ip; only a new validated DISCO path may restore it.
 		ip_addr_set_any(false, &peer->connect_ip);
 		peer->connect_port = 0;
+		peer->endpoint_proven = false;
 		// Force immediate handshake - clear last_initiation_tx to bypass REKEY_TIMEOUT
 		// This is safe because DISCO has confirmed the path works
 		peer->last_initiation_tx = 0;

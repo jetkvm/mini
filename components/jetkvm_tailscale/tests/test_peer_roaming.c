@@ -47,8 +47,9 @@ static void disco_send_call_me_maybe(microlink_t *ml, int idx) { (void)ml; (void
 static void disco_send_ping_to_peer(microlink_t *ml, int idx, bool force) {
     (void)ml; (void)idx; (void)force; ++mapped_probes;
 }
-static void disco_build_ping(microlink_t *ml, int idx, uint8_t *data, size_t *len) {
-    (void)ml; assert(idx == 0); memset(data, 0x5a, 32); *len = 32;
+static void disco_build_ping(microlink_t *ml, int idx, uint32_t ip, uint16_t port,
+                             uint8_t *data, size_t *len) {
+    (void)ml; (void)ip; (void)port; assert(idx == 0); memset(data, 0x5a, 32); *len = 32;
 }
 static int disco_udp_sendto(microlink_t *ml, const uint8_t *data, size_t len,
                             uint32_t ip, uint16_t port) {
@@ -137,7 +138,8 @@ int main(void) {
     struct wireguard_peer *peer = &device->peers[ml.peers[0].wg_peer_index];
     /* Discovery of an idle peer must not create a WireGuard session or start
      * retrying handshakes across the entire visible tailnet. */
-    pending_probes[0] = (disco_probe_t){.active = true, .peer_index = 0, .sent_ms = 900};
+    pending_probes[0] = (disco_probe_t){.active = true, .peer_index = 0, .sent_ms = 900,
+                                        .dest_ip = 0xc0a80184, .dest_port = 55058};
     memset(pending_probes[0].txid, 0x42, DISCO_TXID_LEN);
     uint8_t pong[14] = {2, 0};
     memcpy(pong + 2, pending_probes[0].txid, DISCO_TXID_LEN);
@@ -168,7 +170,8 @@ int main(void) {
     send_packet(&netif);
     assert(direct_packets == 1 && relay_packets == 0);
     struct wireguard_keypair session = peer->curr_keypair;
-    pending_probes[0] = (disco_probe_t){.active = true, .peer_index = 0, .sent_ms = 900};
+    pending_probes[0] = (disco_probe_t){.active = true, .peer_index = 0, .sent_ms = 900,
+                                        .dest_ip = 0xc0a80184, .dest_port = 55058};
     memset(pending_probes[0].txid, 0x42, DISCO_TXID_LEN);
     memcpy(pong + 2, pending_probes[0].txid, DISCO_TXID_LEN);
     update.endpoints[0].ip = 0x5001575c; /* New mobile network. */
@@ -187,6 +190,7 @@ int main(void) {
     assert(direct_packets == 1 && relay_packets == 3);
     /* A new, correctly authenticated probe restores direct encrypted output. */
     pending_probes[0].active = true;
+    pending_probes[0].dest_ip = update.endpoints[0].ip;
     ml_rx_packet_t new_path = {.src_ip = update.endpoints[0].ip, .src_port = 55058};
     expected_endpoint = lwip_htonl(new_path.src_ip);
     session = peer->curr_keypair;
@@ -226,16 +230,46 @@ int main(void) {
     process_disco_call_me_maybe(&ml, &relay_path, update.disco_key, invitation, sizeof(invitation));
     assert(endpoint_probes == 1 && probed_ips[0] == 0x5001575c);
     puts("Endpoint invitations: UDP probes, no recursive relay replies, invalid sources rejected: PASS");
-    /* The relay pong of a probe that also went over UDP comes first: the
-     * direct pong of the same transaction still sets the direct path. */
+    /* An embedded peer answers a UDP ping over DERP too, and that pong can
+     * come first: the direct pong of the same transaction still sets the
+     * direct path. */
     ml.peers[0].has_direct_path = false;
-    pending_probes[0] = (disco_probe_t){.active = true, .peer_index = 0, .sent_ms = 900};
+    pending_probes[0] = (disco_probe_t){.active = true, .peer_index = 0, .sent_ms = 900,
+                                        .dest_ip = update.endpoints[0].ip, .dest_port = 55058};
     memset(pending_probes[0].txid, 0x42, DISCO_TXID_LEN);
     process_disco_pong(&ml, &relay_path, update.disco_key, pong, sizeof(pong));
     assert(pending_probes[0].active && !ml.peers[0].has_direct_path);
     process_disco_pong(&ml, &new_path, update.disco_key, pong, sizeof(pong));
     assert(!pending_probes[0].active && ml.peers[0].has_direct_path);
     puts("Relay pong first: the direct pong of the same probe sets the direct path: PASS");
+    /* A peer with addresses on two networks answers a ping sent to its
+     * second address from its first one, and the way back to the first
+     * address is lost. The pong proves the second address. WireGuard keeps
+     * sending there when the peer's datagrams come from the first address. */
+    const uint32_t first = 0xc0000231, second = 0xc6336432; /* 192.0.2.49, 198.51.100.50 */
+    pending_probes[0] = (disco_probe_t){.active = true, .peer_index = 0, .sent_ms = 900,
+                                        .dest_ip = second, .dest_port = 55058};
+    memset(pending_probes[0].txid, 0x42, DISCO_TXID_LEN);
+    ml_rx_packet_t from_first = {.src_ip = first, .src_port = 55058};
+    process_disco_pong(&ml, &from_first, update.disco_key, pong, sizeof(pong));
+    assert(ml.peers[0].best_ip == second && ml.peers[0].has_direct_path);
+    expected_endpoint = lwip_htonl(second);
+    unsigned sent = direct_packets;
+    send_packet(&netif);
+    assert(direct_packets == sent + 1);
+    struct wireguard_keypair from_peer = {.sending_valid = true};
+    memcpy(from_peer.sending_key, peer->curr_keypair.receiving_key, 32);
+    uint8_t keepalive[16 + WIREGUARD_AUTHTAG_LEN] = {MESSAGE_TRANSPORT_DATA};
+    struct message_transport_data *header = (void *)keepalive;
+    header->receiver = peer->curr_keypair.local_index;
+    wireguard_encrypt_packet(header->enc_packet, NULL, 0, &from_peer);
+    peer->last_rx = 0;
+    assert(wireguardif_inject_packet(&netif, lwip_htonl(first), 55058,
+                                     keepalive, sizeof(keepalive)) == ERR_OK);
+    assert(peer->last_rx != 0); /* The keepalive was authenticated. */
+    send_packet(&netif);
+    assert(direct_packets == sent + 2);
+    puts("Proven path: a pong from another address and datagrams from it keep the proven endpoint: PASS");
     pending_probes[0].active = true;
     remove_peer(&ml, &update);
     assert(!pending_probes[0].active);
