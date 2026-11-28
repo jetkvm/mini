@@ -1553,14 +1553,15 @@ esp_err_t ml_wg_mgr_trigger_handshake(microlink_t *ml, uint32_t dest_vpn_ip) {
 
     /* Path 2: Direct UDP (if DISCO has a known endpoint).
      * This wakes the peer's magicsock via receiveIPv4 → noteRecvActivity.
-     * Set connect_ip first, then call wireguardif_connect which copies
-     * connect_ip → ip and starts a second handshake to the direct endpoint. */
+     * best_ip is a path that a pong proved, so it is set as a proven
+     * endpoint, which wireguardif_connect_derp above has cleared; then
+     * wireguardif_connect starts a second handshake to it. */
     if (p->best_ip != 0 && p->best_port != 0) {
         ip_addr_t ep_ip;
         IP_SET_TYPE_VAL(ep_ip, IPADDR_TYPE_V4);
         ip4_addr_set_u32(ip_2_ip4(&ep_ip), htonl(p->best_ip));
-        wireguardif_update_endpoint(netif, (u8_t)p->wg_peer_index,
-                                     &ep_ip, p->best_port);
+        wireguardif_roam_endpoint(netif, (u8_t)p->wg_peer_index,
+                                   &ep_ip, p->best_port);
         { bool _wl = ml_lwip_lock(); wireguardif_connect(netif, (u8_t)p->wg_peer_index); ml_lwip_unlock(_wl); }
         ESP_LOGI(TAG, "WG handshake triggered (direct) to %s at %d.%d.%d.%d:%d",
                  p->hostname,
